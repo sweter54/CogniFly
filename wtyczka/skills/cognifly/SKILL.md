@@ -30,6 +30,8 @@ node "${CLAUDE_PLUGIN_ROOT}/cli/cognifly.mjs" <polecenie> [opcje]
 | skrzynka (moje zadania) | `skrzynka` |
 | szczegóły zadania i jego zdarzenia | `zadanie zad_<id>` |
 | biorę zadanie | `biore zad_<id>` (tylko po zgodzie) |
+| przekazanie zadania autorowi PR | `przekaz zad_<id> --do-loginu <login GitHub>` (zwykle robi to wysłanie CR) |
+| czy PR można dostarczyć | `ocena-dostarczenia --repo <repo> --pr <nr>` |
 | zmiana stanu zadania | `stan zad_<id> <w_trakcie\|do_akceptacji\|zrobione> [--postep <tekst>]` (tylko po zgodzie) |
 | logowanie | `zaloguj --email <adres>`, potem `kod --kod <kod>` |
 | konfiguracja (jednorazowo) | `konfiguruj --adres-api <AdresApi> --klient <KlientCognito> [--region eu-central-1] [--firma <id>]` — zapisuje `~/.cognifly/konfiguracja.json` (bez sekretów); wartości bierz z wyjść stosu |
@@ -53,8 +55,11 @@ Takie polecenie zwykle przychodzi z przycisku „Pracuj w Claude” w aplikacji 
    - `github.pr.review` z `podmiot.repo`, `podmiot.pr`, `podmiot.recenzent` → użyj skilla **github**: uruchom jego
      skrypt z tymi polami (`--repo <repo> --pr <pr> --recenzent <recenzent>`; skrypt tylko czyta) i oceń uwagi
      recenzenta według zasad skilla github. Nic nie publikuj w PR bez zgody.
-   - `github.pr.commit_po_review` / `github.pr.prosba_o_review` → opisz, co jest do zrobienia, i zapytaj, czy
-     sprawdzić uwagi recenzenta (skill github; recenzenta podaje użytkownik, jeśli nie ma go w `podmiot`).
+   - `github.pr.prosba_o_review` / `github.pr.commit_po_review` z `podmiot.repo/pr` → zaproponuj **prowadzone CR**
+     (skill **github**, sekcja „Prowadzone CR”, `kontekst --zadanie <id zadania>`). Przy `commit_po_review` najpierw
+     sprawdź, czy poprzednie uwagi zostały uwzględnione (skrypt `review-dane` skilla github; recenzenta podaje
+     użytkownik, jeśli nie ma go w `podmiot`).
+   - `github.pr.gotowy_do_dostarczenia` → skill **github**, sekcja „Dostarczenie”.
    - inne typy lub `zdarzenie: null` → pokaż, co wiadomo, i zapytaj, jak pomóc.
 5. Na koniec zaproponuj zmianę stanu (`w_trakcie`, `do_akceptacji`, `zrobione`) — tylko po zgodzie. Po udanej
    zmianie aplikacja CogniFly sama otworzy się na tym zadaniu z podświetlonym nowym stanem; wystarczy o tym wspomnieć.

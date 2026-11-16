@@ -391,6 +391,29 @@ describe('polecenia', () => {
     await cli(['stan', id, 'zrobione'], { COGNIFLY_OTWIERACZ: otwieracz });
     expect(readFileSync(zapis, 'utf8').trim().split('\n')).toEqual([`cognifly://zadanie/${id}`, `cognifly://zadanie/${id}`]);
   });
+  it('przekaz: wysyła login autora; 409 BRAK_OSOBY; zły login lokalnie', async () => {
+    const id = 'zad_0123456789ab';
+    apiHandler = () => ({ status: 200, body: { zadanie: { id, stan: 'nowe' } } });
+    expect((await cli(['przekaz', id, '--do-loginu', 'ania-gh'])).json).toEqual({ stan: 'PRZEKAZANE', zadanie: { id, stan: 'nowe' } });
+    expect(api.log[0]).toMatchObject({ method: 'POST', url: `/zadania/${id}/przekaz`, body: { doLoginu: 'ania-gh' } });
+    apiHandler = () => ({ status: 409, body: { kod: 'BRAK_OSOBY' } });
+    expect((await cli(['przekaz', id, '--do-loginu', 'obcy'])).json).toEqual({ stan: 'BRAK_OSOBY' });
+    api.log.length = 0;
+    expect((await cli(['przekaz', id, '--do-loginu', 'zly login'])).json.stan).toBe('ZLY_LOGIN');
+    expect(api.log.length).toBe(0);
+  });
+  it('ocena-dostarczenia i dostarczenie: przekazują repo/PR/sha i zwracają ocenę', async () => {
+    const ocena = { ready: false, reasons: ['CI_W_TOKU'], order: [] };
+    apiHandler = () => ({ status: 200, body: { ocena } });
+    expect((await cli(['ocena-dostarczenia', '--repo', 'o/r', '--pr', '7'])).json).toEqual({ stan: 'OK', ocena });
+    expect(api.log[0]).toMatchObject({ method: 'GET', url: '/dostarczenia/ocena?repo=o%2Fr&pr=7' });
+    const sha = 'c'.repeat(40);
+    expect((await cli(['dostarczenie', '--repo', 'o/r', '--pr', '7', '--zadanie', 'zad_0123456789ab', '--sha', sha])).json).toEqual({ stan: 'NASLUCH', ocena });
+    expect(api.log[1]).toMatchObject({ method: 'POST', url: '/dostarczenia', body: { repo: 'o/r', pr: 7, zadanieId: 'zad_0123456789ab', sha } });
+    api.log.length = 0;
+    expect((await cli(['ocena-dostarczenia', '--repo', '../x', '--pr', '7'])).json.stan).toBe('ZLE_PARAMETRY');
+    expect(api.log.length).toBe(0);
+  });
   it('stan: OK, ZLY_STAN lokalnie, postep przekazany', async () => {
     const id = 'zad_0123456789abcdef01234567';
     apiHandler = () => ({ status: 200, body: { zadanie: { id } } });
