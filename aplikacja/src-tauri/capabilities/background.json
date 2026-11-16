@@ -43,6 +43,7 @@
         }
       ]
     },
-    "dialog:allow-open"
+    "dialog:allow-open",
+    "deep-link:default"
   ]
 }

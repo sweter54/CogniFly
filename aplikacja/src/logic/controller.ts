@@ -26,8 +26,9 @@ export interface Ports {
   notify(title: string, body: string): Promise<void>;
   /** Updates tray and inbox window with the latest view. */
   render(view: InboxView): void;
-  /** Brings the main window to the front on the given screen. */
-  showScreen(screen: Screen): Promise<void>;
+  /** Brings the main window to the front on a screen; optionally
+   *  highlights one task there. */
+  showScreen(screen: Screen, highlightTask?: string): Promise<void>;
   /** Shows the OS folder picker; resolves `null` when cancelled. */
   pickFolder(startAt: string): Promise<string | null>;
   /** Opens a URL with the OS (only `claude://` is allowed by scope). */
@@ -112,6 +113,24 @@ export class Controller {
     this.pending = null;
     this.companies = null;
     this.update({ loggedIn: false, offline: false, email: null, osoba: null, tasks: [], updatedAt: null });
+  }
+
+  /**
+   * Shows a task after it changed elsewhere (e.g. state set in Claude).
+   *
+   * Call: `await controller.focusTask(id)` for a `cognifly://` link.
+   * Expects: an id already checked by `taskFromAppLink`.
+   * Output: none; the inbox is fetched first, then the main window
+   * opens on it with the task highlighted. Before setup is finished
+   * the setup screen is shown instead.
+   */
+  async focusTask(id: string): Promise<void> {
+    if (!this.view.loggedIn || !this.config.workFolder) {
+      await this.ports.showScreen('login');
+      return;
+    }
+    await this.poll();
+    await this.ports.showScreen('inbox', id);
   }
 
   /**

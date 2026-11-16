@@ -56,12 +56,13 @@ Takie polecenie zwykle przychodzi z przycisku „Pracuj w Claude” w aplikacji 
    - `github.pr.commit_po_review` / `github.pr.prosba_o_review` → opisz, co jest do zrobienia, i zapytaj, czy
      sprawdzić uwagi recenzenta (skill github; recenzenta podaje użytkownik, jeśli nie ma go w `podmiot`).
    - inne typy lub `zdarzenie: null` → pokaż, co wiadomo, i zapytaj, jak pomóc.
-5. Na koniec zaproponuj zmianę stanu (`w_trakcie`, `do_akceptacji`, `zrobione`) — tylko po zgodzie.
+5. Na koniec zaproponuj zmianę stanu (`w_trakcie`, `do_akceptacji`, `zrobione`) — tylko po zgodzie. Po udanej
+   zmianie aplikacja CogniFly sama otworzy się na tym zadaniu z podświetlonym nowym stanem; wystarczy o tym wspomnieć.
 
 ## Stany odpowiedzi
 
 - `OK` — dane w polach `zdarzenia`, `zadania`, `zadanie` lub `linia`. Podsumuj zwięźle po polsku.
-- `WZIETE` — zadanie przejęte (`zadanie`). Potwierdź krótko.
+- `WZIETE` — zadanie przejęte (`zadanie`). Potwierdź krótko. Aplikacja CogniFly (jeśli jest zainstalowana) sama pokaże to zadanie.
 - `ZAJETE` — ktoś już je ma (`wlasciciel`). Poinformuj, nie ponawiaj.
 - `WYMAGA_LOGOWANIA` — brak lub wygasła sesja. Zaproponuj logowanie (poniżej).
 - `BRAK_DOSTEPU` — brak uprawnień. Poinformuj, nie obchodź.

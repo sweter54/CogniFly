@@ -35,7 +35,7 @@ function cli(args, extraEnv = {}) {
   return new Promise((ok) => {
     const p = spawn(process.execPath, [CLI, ...args], {
       env: { PATH: process.env.PATH, COGNIFLY_KATALOG: kat, COGNIFLY_KONFIGURACJA: konf,
-        COGNIFLY_ADRES_API: api.url, COGNIFLY_COGNITO_ENDPOINT: cog.url, ...extraEnv },
+        COGNIFLY_ADRES_API: api.url, COGNIFLY_COGNITO_ENDPOINT: cog.url, COGNIFLY_OTWIERACZ: '', ...extraEnv },
     });
     let out = '', err = '';
     p.stdout.on('data', (c) => (out += c));
@@ -378,6 +378,18 @@ describe('polecenia', () => {
     api.log.length = 0;
     expect((await cli(['zadanie', '../skrzynka'])).json.stan).toBe('NIE_ZNALEZIONO');
     expect(api.log.length).toBe(0);
+  });
+  it('po zmianie stanu i „biorę” otwiera cognifly://zadanie/<id>; przy błędzie nie', async () => {
+    const id = 'zad_0123456789ab';
+    const zapis = join(kat, 'otwarte.txt');
+    const otwieracz = join(kat, 'otwieracz.sh');
+    writeFileSync(otwieracz, `#!/bin/sh\necho "$@" >> "${zapis}"\n`, { mode: 0o700 });
+    apiHandler = () => ({ status: 200, body: { zadanie: { id } } });
+    await cli(['stan', id, 'zrobione'], { COGNIFLY_OTWIERACZ: otwieracz });
+    await cli(['biore', id], { COGNIFLY_OTWIERACZ: otwieracz });
+    apiHandler = () => ({ status: 403, body: {} });
+    await cli(['stan', id, 'zrobione'], { COGNIFLY_OTWIERACZ: otwieracz });
+    expect(readFileSync(zapis, 'utf8').trim().split('\n')).toEqual([`cognifly://zadanie/${id}`, `cognifly://zadanie/${id}`]);
   });
   it('stan: OK, ZLY_STAN lokalnie, postep przekazany', async () => {
     const id = 'zad_0123456789abcdef01234567';

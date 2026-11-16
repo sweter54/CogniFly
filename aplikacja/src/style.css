@@ -60,3 +60,6 @@ h2 { font-size: 14px; margin: 18px 0 6px; }
 .task .progress { margin: 0 0 6px; font-size: 13px; font-style: italic; overflow-wrap: anywhere; }
 .task .progress:empty { display: none; }
 #done-title { color: var(--muted); }
+@keyframes cognifly-flash { 0%, 100% { box-shadow: 0 0 0 0 transparent; } 30% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 45%, transparent); } }
+.task.flash { animation: cognifly-flash 1.3s ease-in-out 3; border-color: var(--accent); }
+.task.flash .badge { outline: 2px solid var(--accent); }

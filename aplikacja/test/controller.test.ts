@@ -227,4 +227,21 @@ describe('Controller', () => {
     await new Controller(ports).start();
     expect(ports.showScreen).not.toHaveBeenCalled();
   });
+
+  it('focusTask: fetches the inbox, then shows it with the task highlighted', async () => {
+    const { ports } = setup({ inbox: [task(1, 'zrobione')] });
+    ports.store.setItem('cognifly.config', JSON.stringify({ ...DEFAULT_CONFIG, workFolder: '/Users/m' }));
+    const c = new Controller(ports);
+    await c.start();
+    await c.focusTask(id(1));
+    expect(c.current().tasks[0]!.stan).toBe('zrobione');
+    expect(ports.showScreen).toHaveBeenLastCalledWith('inbox', id(1));
+  });
+
+  it('focusTask before setup shows the setup instead', async () => {
+    const { c, ports } = setup({ session: null });
+    await c.start();
+    await c.focusTask(id(1));
+    expect(ports.showScreen).toHaveBeenLastCalledWith('login');
+  });
 });

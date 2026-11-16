@@ -3,7 +3,7 @@
 import { Controller, POLL_INTERVAL_MS } from '../logic/controller.js';
 import { errorCode } from '../logic/errors.js';
 import { rpcServer } from '../logic/rpc.js';
-import { keychainVault, notify, openUrl, pickFolder, pluginFetch, pushView, setupNotifications, showScreen } from './background/platform.js';
+import { keychainVault, listenAppLinks, notify, openUrl, pickFolder, pluginFetch, pushView, setupNotifications, showScreen } from './background/platform.js';
 import { createTray, type Tray } from './background/tray.js';
 import type { InboxView } from './protocol.js';
 import { installErrorLog, reportError, reportInfo } from './diagnostics.js';
@@ -59,6 +59,7 @@ async function main(): Promise<void> {
   reportInfo(`notifications allowed: ${allowed}`);
   setInterval(() => void controller.poll(), POLL_INTERVAL_MS); // before start: polling survives start errors
   await controller.start();
+  await listenAppLinks((id) => void controller.focusTask(id)).catch((e) => reportError('appLinks', e));
 }
 
 installErrorLog('background');

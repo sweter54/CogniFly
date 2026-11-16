@@ -100,7 +100,11 @@ async function main(): Promise<void> {
 
   const bus = tauriBus();
   await bus.listen(INBOX_EVENT, (p) => apply(p as InboxView));
-  await bus.listen(SCREEN_EVENT, (p) => go((p as { screen: Screen }).screen));
+  await bus.listen(SCREEN_EVENT, (p) => {
+    const { screen, highlight } = p as { screen: Screen; highlight?: string | null };
+    go(screen);
+    if (highlight && current === 'inbox') inbox.highlight(highlight);
+  });
   for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-go]'))) {
     el.addEventListener('click', () => go(el.dataset.go as Screen));
   }

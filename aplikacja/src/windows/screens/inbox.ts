@@ -25,6 +25,8 @@ export interface InboxScreen {
   render(view: InboxView): void;
   /** Fetches the inbox now (e.g. when the user comes back). */
   refresh(): void;
+  /** Scrolls to a task and makes its state badge flash. */
+  highlight(taskId: string): void;
 }
 
 /**
@@ -143,6 +145,7 @@ export function mountInbox(call: Call): InboxScreen {
     const tpl = byId<HTMLTemplateElement>('task-template');
     const li = (tpl.content.firstElementChild as HTMLLIElement).cloneNode(true) as HTMLLIElement;
     li.dataset.state = task.stan;
+    li.dataset.id = task.id;
     li.dataset.finished = String(isFinished(task));
     const badge = li.querySelector('.badge') as HTMLElement;
     badge.dataset.state = task.stan;
@@ -193,6 +196,22 @@ export function mountInbox(call: Call): InboxScreen {
     call('inbox.refresh', {}).then(render).catch((e) => setStatus(messageFor(e), 'error'));
   }
 
+  /**
+   * Draws attention to one task.
+   * Call: `highlight(id)` after the list was rendered.
+   * Expects: a task id (a missing task is ignored).
+   * Output: none; the task scrolls into view and flashes for ~4 s.
+   */
+  function highlight(taskId: string): void {
+    const li = Array.from(document.querySelectorAll<HTMLElement>('.task')).find((el) => el.dataset.id === taskId);
+    if (!li) return;
+    li.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    li.classList.remove('flash');
+    void li.offsetWidth; // restart the animation
+    li.classList.add('flash');
+    setTimeout(() => li.classList.remove('flash'), 4_000);
+  }
+
   byId('refresh').addEventListener('click', refresh);
-  return { render, refresh };
+  return { render, refresh, highlight };
 }

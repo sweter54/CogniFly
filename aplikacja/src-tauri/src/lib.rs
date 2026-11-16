@@ -1,7 +1,8 @@
 //! Thin native layer of the CogniFly desktop app.
 //!
 //! Only wiring lives here: official plugins (HTTP, notifications, log,
-//! opener for `claude://` links only, dialog for the folder picker),
+//! opener for `claude://` links only, dialog for the folder picker,
+//! deep link `cognifly://` to show a task),
 //! the keychain commands and window behaviour. All business logic is in
 //! the TypeScript UI (`aplikacja/src`).
 
@@ -119,6 +120,7 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
+        .plugin(tauri_plugin_deep_link::init())
         .plugin(log_plugin())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())

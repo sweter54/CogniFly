@@ -2,10 +2,12 @@
 import { invoke } from '@tauri-apps/api/core';
 import { emitTo } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { fetch as httpFetch } from '@tauri-apps/plugin-http';
 import { openUrl as openWithOs } from '@tauri-apps/plugin-opener';
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
+import { taskFromAppLink } from '../../logic/app-link.js';
 import type { FetchFn } from '../../logic/http.js';
 import { reportError } from '../diagnostics.js';
 import type { Vault } from '../../logic/session.js';
@@ -34,16 +36,16 @@ export const pluginFetch: FetchFn = (url, init) => httpFetch(url, init).catch((e
 /**
  * Brings the main window to the front on a screen.
  *
- * Call: `await showScreen('login')` from the tray, notification click
- * or the controller.
+ * Call: `await showScreen('login')` or `showScreen('inbox', taskId)`
+ * from the tray, notification click, controller or an app link.
  * Expects: the `main` window declared in tauri.conf.json.
  * Output: none; never throws, so menu actions and startup keep
  * working; failures go to the app log. The screen request is sent
  * first, so no stale screen flashes.
  */
-export async function showScreen(screen: Screen): Promise<void> {
+export async function showScreen(screen: Screen, highlightTask?: string): Promise<void> {
   try {
-    await emitTo(WINDOWS.main, SCREEN_EVENT, { screen });
+    await emitTo(WINDOWS.main, SCREEN_EVENT, { screen, highlight: highlightTask ?? null });
     const w = await WebviewWindow.getByLabel(WINDOWS.main);
     if (!w) throw new Error('main window missing');
     await w.show();
@@ -115,4 +117,24 @@ export async function pickFolder(startAt: string): Promise<string | null> {
     ...(startAt ? { defaultPath: startAt } : {}),
   });
   return typeof chosen === 'string' ? chosen : null;
+}
+
+/**
+ * Routes `cognifly://` links to a handler.
+ *
+ * Call: `await listenAppLinks(onTask)` once at start.
+ * Expects: `deep-link:default`; the scheme registered in the bundle.
+ * Output: none; links that start the app and links arriving later
+ * both reach `onTask` with a validated task id; others are ignored.
+ */
+export async function listenAppLinks(onTask: (id: string) => void): Promise<void> {
+  const handle = (urls: string[] | null) => {
+    for (const url of urls ?? []) {
+      const id = taskFromAppLink(url);
+      if (id) onTask(id);
+      else reportError('appLink', 'ignored link');
+    }
+  };
+  await onOpenUrl(handle);
+  handle(await getCurrent());
 }
