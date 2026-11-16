@@ -3,9 +3,9 @@
 // as ports, so the whole flow is unit-tested without Tauri.
 import type { Task, UserSettableState } from '@cognifly/wspolne/api';
 import type { InboxView, Methods, Screen } from '../windows/protocol.js';
-import { ApiClient } from './api.js';
+import { ApiClient, type Membership } from './api.js';
 import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, type PendingLogin } from './cognito.js';
-import { DEFAULT_CONFIG, isSafeFolder, loadConfig, saveConfig, validateConfig, type AppConfig } from './config.js';
+import { isSafeFolder, loadConfig, saveChoices, type AppConfig, type UserChoices } from './config.js';
 import { claudeLink } from './claude-link.js';
 import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
 import type { FetchFn } from './http.js';
@@ -44,6 +44,8 @@ export class Controller {
   private pending: PendingLogin | null = null;
   private polling: Promise<InboxView> | null = null;
   private view: InboxView;
+  /** Companies of the logged-in person (from `GET /ja`); null = not loaded. */
+  private companies: Membership[] | null = null;
 
   /**
    * Call: `new Controller(ports)`.
@@ -52,7 +54,7 @@ export class Controller {
    */
   constructor(private readonly ports: Ports) {
     this.config = loadConfig(ports.store);
-    this.view = { loggedIn: false, offline: false, email: null, tasks: [], updatedAt: null, workFolder: this.config.workFolder };
+    this.view = { loggedIn: false, offline: false, email: null, osoba: null, tasks: [], updatedAt: null, workFolder: this.config.workFolder };
     this.session = new SessionManager(ports.vault, (rt) => refreshTokens(this.cognito(), rt), ports.now);
   }
 
@@ -108,7 +110,8 @@ export class Controller {
     await this.session.logout();
     clearSeen(this.ports.store);
     this.pending = null;
-    this.update({ loggedIn: false, offline: false, email: null, tasks: [], updatedAt: null });
+    this.companies = null;
+    this.update({ loggedIn: false, offline: false, email: null, osoba: null, tasks: [], updatedAt: null });
   }
 
   /**
@@ -132,8 +135,10 @@ export class Controller {
    */
   handlers(): Record<keyof Methods, Handler> {
     return {
-      'config.get': async () => ({ config: this.config, defaults: { ...DEFAULT_CONFIG } }),
-      'config.save': (p) => this.saveSettings(field(p, 'config')),
+      'account.get': async () => ({
+        email: this.view.email, osoba: this.view.osoba, company: this.config.company, companies: this.companies ?? [],
+      }),
+      'config.setCompany': (p) => this.setCompany(text(p, 'company')),
       'login.sendCode': (p) => this.sendCode(text(p, 'email')),
       'login.confirm': (p) => this.confirm(text(p, 'code')),
       'inbox.get': async () => this.view,
@@ -162,6 +167,7 @@ export class Controller {
     if (!this.view.loggedIn) return this.view;
     const epoch = this.session.epoch();
     try {
+      if (!this.companies) await this.loadIdentity();
       const tasks = await this.api().inbox();
       if (this.session.epoch() !== epoch || !this.view.loggedIn) return this.view; // logged out meanwhile
       const fresh = await this.announce(tasks);
@@ -212,23 +218,40 @@ export class Controller {
   }
 
   /**
-   * Validates and applies new settings.
+   * Loads who the user is and settles the company.
    *
-   * Call: rpc `config.save`.
-   * Expects: raw settings from the form.
-   * Output: `{ ok: true }` or the invalid field; the work folder is
-   * required. Changing the user pool (region/client id) logs out;
-   * changing API or company resets the notification memory so
-   * nothing old is announced as new.
+   * Call: `await this.loadIdentity()` before the first inbox fetch of
+   * a session (the inbox needs the company header).
+   * Expects: a session.
+   * Output: none; `companies` and `view.osoba` are set. A stored
+   * company the person does not belong to is replaced by their first
+   * company, so a single-company user never has to choose.
+   * Throws: errors of `ApiClient.me` (handled like a failed poll).
    */
-  private async saveSettings(input: unknown): Promise<Methods['config.save']['result']> {
-    const before = this.config;
-    const check = validateConfig(input);
-    if (!check.ok) return check;
-    if (!check.config.workFolder) return { ok: false, field: 'workFolder' };
-    this.applyConfig(check.config);
-    if (before.region !== check.config.region || before.clientId !== check.config.clientId) await this.logout();
-    else if (before.apiUrl !== check.config.apiUrl || before.company !== check.config.company) clearSeen(this.ports.store);
+  private async loadIdentity(): Promise<void> {
+    const list = await this.api().me();
+    this.companies = list;
+    const keep = list.some((m) => m.firma === this.config.company);
+    const first = list[0];
+    if (!keep && first) this.applyChoices({ company: first.firma });
+    this.update({ osoba: list.find((m) => m.firma === this.config.company)?.osoba ?? null });
+  }
+
+  /**
+   * Switches to another company of the user.
+   *
+   * Call: rpc `config.setCompany`.
+   * Expects: one of the companies from `GET /ja`.
+   * Output: `{ ok: true }`; tasks and notification memory reset and
+   * a poll for the new company starts.
+   * Throws: `AppError('BAD_COMPANY')` for any other value.
+   */
+  private async setCompany(company: string): Promise<{ ok: true }> {
+    const member = this.companies?.find((m) => m.firma === company);
+    if (!member) throw new AppError('BAD_COMPANY');
+    this.applyChoices({ company });
+    clearSeen(this.ports.store);
+    this.update({ osoba: member.osoba, tasks: [] });
     void this.poll();
     return { ok: true };
   }
@@ -307,21 +330,23 @@ export class Controller {
    */
   private async setWorkFolder(path: string): Promise<{ ok: true }> {
     if (!isSafeFolder(path)) throw new AppError('BAD_FOLDER');
-    this.applyConfig({ ...this.config, workFolder: path });
+    this.applyChoices({ workFolder: path });
     return { ok: true };
   }
 
   /**
-   * Saves a validated config and reflects the folder in the view.
+   * Stores changed user choices and reflects them in the view.
    *
-   * Call: `this.applyConfig(config)`.
-   * Expects: a config that passed `validateConfig`.
-   * Output: none; stored, kept in memory and rendered.
+   * Call: `this.applyChoices({ workFolder })` or `({ company })`.
+   * Expects: values already checked by the caller.
+   * Output: none; stored, kept in memory, folder rendered.
+   * Throws: `AppError('BAD_CHOICE')` if validation still fails.
    */
-  private applyConfig(config: AppConfig): void {
-    saveConfig(this.ports.store, config);
-    this.config = config;
-    this.update({ workFolder: config.workFolder });
+  private applyChoices(change: Partial<UserChoices>): void {
+    const check = saveChoices(this.ports.store, { company: this.config.company, workFolder: this.config.workFolder, ...change });
+    if (!check.ok) throw new AppError('BAD_CHOICE');
+    this.config = check.config;
+    this.update({ workFolder: check.config.workFolder });
   }
 
   /**

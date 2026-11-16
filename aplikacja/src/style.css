@@ -45,3 +45,9 @@ section h1 { margin-bottom: 10px; }
 label[for] { font-weight: 500; }
 .folder-choice { display: flex; gap: 12px; align-items: center; margin: 12px 0; }
 .folder-choice code { overflow-wrap: anywhere; }
+h2 { font-size: 14px; margin: 18px 0 6px; }
+.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; margin: 0; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.actions.start { justify-content: flex-start; margin-top: 10px; }
+.folder-row { margin-top: 0; }

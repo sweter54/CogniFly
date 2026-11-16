@@ -93,6 +93,7 @@ async function openInClaude(call: Call, id: string): Promise<Outcome> {
  * Output: a handle whose `render(view)` redraws the list.
  */
 export function mountInbox(call: Call): InboxScreen {
+  let me: string | null = null;
   /**
    * Runs an action and shows its outcome.
    * Call: `await report(action)`. Expects: an rpc action.
@@ -136,11 +137,12 @@ export function mountInbox(call: Call): InboxScreen {
     (li.querySelector('.meta') as HTMLElement).textContent = metaText(task);
     const take = li.querySelector('.take') as HTMLButtonElement;
     const state = li.querySelector('.state') as HTMLSelectElement;
+    const mine = me !== null && task.wlasciciel === me;
     take.hidden = task.stan !== 'nowe' && task.stan !== 'eskalowane';
-    state.hidden = !task.wlasciciel;
+    state.hidden = !mine;
     state.value = selectValue(task);
     const claude = li.querySelector('.claude') as HTMLButtonElement;
-    claude.hidden = !WORKING_STATES.includes(task.stan);
+    claude.hidden = !mine || !WORKING_STATES.includes(task.stan);
     claude.addEventListener('click', () => void report(() => openInClaude(call, task.id)));
     take.addEventListener('click', () => void act(() => takeTask(call, task.id)));
     state.addEventListener('change', () => {
@@ -155,6 +157,7 @@ export function mountInbox(call: Call): InboxScreen {
    * Output: none; finished tasks are listed last.
    */
   function render(view: InboxView): void {
+    me = view.osoba;
     byId('list').replaceChildren(...displayOrder(view.tasks).map(item));
     setStatus(statusText(view), view.offline ? 'error' : 'info');
   }

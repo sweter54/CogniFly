@@ -15,7 +15,7 @@ const goodSession = JSON.stringify({ accessToken: 'A', refreshToken: 'R', expire
 
 /** Fake backend: routes by URL; `inbox` is mutable between polls. */
 function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
-  const state = { inbox: opts.inbox ?? [], offline: false, cognito: [] as unknown[] };
+  const state = { inbox: opts.inbox ?? [], offline: false, cognito: [] as unknown[], firmy: [{ firma: 'pilot', osoba: 'michal' }] };
   const fetch: FetchFn = vi.fn(async (url: string, init: RequestInit) => {
     if (state.offline) throw new TypeError('offline');
     if (url.startsWith('https://cognito-idp')) {
@@ -26,6 +26,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
       if (code !== '123456') return json(400, { __type: 'CodeMismatchException' });
       return json(200, { AuthenticationResult: { AccessToken: 'A', RefreshToken: 'R', ExpiresIn: 3600 } });
     }
+    if (url.endsWith('/ja')) return json(200, { firmy: state.firmy });
     if (url.endsWith('/skrzynka')) return json(200, { zadania: state.inbox });
     if (url.endsWith('/biore')) return json(409, { kod: 'ZAJETE', wlasciciel: 'szymon' });
     return json(404, { kod: 'NIE_ZNALEZIONO' });
@@ -109,15 +110,28 @@ describe('Controller', () => {
     expect(await c.handlers()['inbox.take']!({ id: id(1) })).toEqual({ status: 'BUSY', owner: 'szymon' });
   });
 
-  it('changing the user pool logs out; invalid settings are rejected', async () => {
-    const { c, ports } = setup({ inbox: [] });
+  it('loads who I am; a single company is chosen automatically', async () => {
+    const { c, ports, state } = setup({ inbox: [] });
+    state.firmy = [{ firma: 'acme', osoba: 'm.roszkowski' }];
+    await c.start();
+    expect(c.current().osoba).toBe('m.roszkowski');
+    expect(JSON.parse(ports.store.getItem('cognifly.config')!).company).toBe('acme');
+    expect(await c.handlers()['account.get']!({})).toEqual({
+      email: 'm@x.pl', osoba: 'm.roszkowski', company: 'acme', companies: [{ firma: 'acme', osoba: 'm.roszkowski' }],
+    });
+  });
+
+  it('switches company only to one the person belongs to', async () => {
+    const { c, state, ports } = setup({ inbox: [] });
+    state.firmy = [{ firma: 'pilot', osoba: 'michal' }, { firma: 'acme', osoba: 'mr' }];
     await c.start();
     const h = c.handlers();
-    const { config } = (await h['config.get']!({})) as { config: Record<string, string> };
-    expect(await h['config.save']!({ config: { ...config, region: 'zly' } })).toEqual({ ok: false, field: 'region' });
-    expect(await h['config.save']!({ config: { ...config, workFolder: '/Users/m', clientId: 'innyklient' } })).toEqual({ ok: true });
-    expect(await ports.vault.read()).toBeNull();
-    expect(c.current().loggedIn).toBe(false);
+    await expect(h['config.setCompany']!({ company: 'obca' })).rejects.toMatchObject({ code: 'BAD_COMPANY' });
+    expect(await h['config.setCompany']!({ company: 'acme' })).toEqual({ ok: true });
+    expect(c.current().osoba).toBe('mr');
+    await c.poll();
+    const last = (ports.fetch as ReturnType<typeof vi.fn>).mock.calls.at(-1)!;
+    expect((last[1] as RequestInit & { headers: Record<string, string> }).headers['X-Cognifly-Firma']).toBe('acme');
   });
 
   it('logout (rpc) clears the vault and the view', async () => {
@@ -166,8 +180,7 @@ describe('Controller', () => {
     const { c, ports } = setup();
     await c.start();
     const h = c.handlers();
-    const { config } = (await h['config.get']!({})) as { config: Record<string, string> };
-    await h['config.save']!({ config: { ...config, workFolder: '/Users/m/repo' } });
+    await h['config.setWorkFolder']!({ path: '/Users/m/repo' });
     expect(await h['task.openInClaude']!({ id: id(1) })).toEqual({ ok: true });
     const url = new URL((ports.openUrl as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string);
     expect(url.searchParams.get('q')).toBe(`Pracuj nad zadaniem CogniFly ${id(1)}`);
@@ -194,13 +207,11 @@ describe('Controller', () => {
     await expect(unsafe.handlers()['config.pickFolder']!({ current: '' })).rejects.toMatchObject({ code: 'BAD_FOLDER' });
   });
 
-  it('work folder is required: setup opens after login, settings refuse empty, Claude waits', async () => {
+  it('work folder is required: setup opens after login, Claude waits', async () => {
     const { c, ports } = setup({ inbox: [] });
     await c.start();
     expect(ports.showScreen).toHaveBeenCalledWith('login');
     const h = c.handlers();
-    const { config } = (await h['config.get']!({})) as { config: Record<string, string> };
-    expect(await h['config.save']!({ config: { ...config, workFolder: '' } })).toEqual({ ok: false, field: 'workFolder' });
     await expect(h['task.openInClaude']!({ id: id(1) })).rejects.toMatchObject({ code: 'NO_WORK_FOLDER' });
     await expect(h['config.setWorkFolder']!({ path: 'wzgledny' })).rejects.toMatchObject({ code: 'BAD_FOLDER' });
     expect(await h['config.setWorkFolder']!({ path: '/Users/m/repo' })).toEqual({ ok: true });

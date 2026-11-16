@@ -1,67 +1,80 @@
-// Settings screen: API address, Cognito client, region, company.
-import type { AppConfig } from '../../logic/config.js';
-import { byId, formValues, messageFor, pickFolder, setBusy, setStatus, type Call } from '../ui.js';
+// Settings screen: who I am (from the server), my company (choice only
+// when I belong to several), the work folder and "change account".
+// Connection values are built into the app and not shown here.
+import type { Methods } from '../protocol.js';
+import { byId, messageFor, pickFolder, setStatus, type Call } from '../ui.js';
 
-/** Polish hints for invalid fields. */
-const FIELD_HINTS: Record<keyof AppConfig, string> = {
-  apiUrl: 'Adres API musi zaczynać się od https:// i nie może zawierać parametrów.',
-  clientId: 'Klient Cognito może zawierać tylko litery i cyfry.',
-  region: 'Region ma postać np. eu-central-1.',
-  company: 'Firma: małe litery, cyfry i myślniki.',
-  workFolder: 'Wybierz folder pracy przyciskiem „Wybierz…” — jest wymagany.',
-};
+/** Account data shown on the screen. */
+type Account = Methods['account.get']['result'];
 
 /** Handle returned by `mountSettings`. */
-export interface SettingsScreen { load(): Promise<void> }
+export interface SettingsScreen {
+  /** Refreshes account, company and folder (call when opening). */
+  load(): Promise<void>;
+  /** Shows the current folder (after it changed elsewhere). */
+  showFolder(path: string): void;
+}
 
 /**
- * Fills the form with a config.
+ * Renders the account line.
  *
- * Call: `fill(form, config)`.
- * Expects: inputs named like `AppConfig` keys.
+ * Call: `renderAccount(account)`.
+ * Expects: settings markup (`#account-email`, `#account-id`).
+ * Output: none; e-mail and id via `textContent`.
+ */
+function renderAccount(account: Account): void {
+  byId('account-email').textContent = account.email ?? '—';
+  byId('account-id').textContent = account.osoba ?? '…';
+}
+
+/**
+ * Renders the company: plain text for one, a select for several.
+ *
+ * Call: `renderCompany(account)`.
+ * Expects: `#company-name` and `#company-select` in the markup.
  * Output: none.
  */
-function fill(form: HTMLFormElement, config: AppConfig): void {
-  for (const [name, value] of Object.entries(config)) {
-    const input = form.elements.namedItem(name);
-    if (input instanceof HTMLInputElement) input.value = value;
-  }
+function renderCompany(account: Account): void {
+  const name = byId('company-name');
+  const select = byId<HTMLSelectElement>('company-select');
+  const many = account.companies.length > 1;
+  name.hidden = many;
+  select.hidden = !many;
+  name.textContent = account.company;
+  select.replaceChildren(...account.companies.map((m) => new Option(`${m.firma} (${m.osoba})`, m.firma)));
+  select.value = account.company;
 }
 
 /**
- * Saves the form through the background window.
+ * Picks a folder and saves it at once.
  *
- * Call: `await save(call, form)` on submit.
- * Expects: a connected `call`.
- * Output: none; shows success or the field-specific hint.
+ * Call: `await changeFolder(call, input)` on "Wybierz…".
+ * Expects: the read-only folder input.
+ * Output: none; cancel keeps the old folder; errors are shown.
  */
-async function save(call: Call, form: HTMLFormElement): Promise<void> {
-  const values = formValues(form); // before disabling: FormData skips disabled fields
-  setBusy(form, true);
+async function changeFolder(call: Call, input: HTMLInputElement): Promise<void> {
   try {
-    const r = await call('config.save', { config: values as unknown as AppConfig });
-    setStatus(r.ok ? 'Zapisano.' : FIELD_HINTS[r.field], r.ok ? 'ok' : 'error');
+    const path = await pickFolder(call, input.value);
+    if (path === null) return;
+    await call('config.setWorkFolder', { path });
+    input.value = path;
+    setStatus('Zapisano folder pracy.', 'ok');
   } catch (e) {
     setStatus(messageFor(e), 'error');
-  } finally {
-    setBusy(form, false);
   }
 }
 
 /**
- * Opens the folder picker and puts the choice into the form.
+ * Switches the company.
  *
- * Call: `await chooseFolder(call, input)` on "Wybierz…".
- * Expects: the work-folder input.
- * Output: none; the user still saves with "Zapisz". Cancel keeps
- * the old value; errors become Polish messages.
+ * Call: `await changeCompany(call, company)` on select change.
+ * Expects: a company from the list.
+ * Output: none; shows the outcome.
  */
-async function chooseFolder(call: Call, input: HTMLInputElement): Promise<void> {
+async function changeCompany(call: Call, company: string): Promise<void> {
   try {
-    const path = await pickFolder(call, input.value.trim());
-    if (path === null) return;
-    input.value = path;
-    setStatus('Wybrano folder — kliknij „Zapisz”.', 'info');
+    await call('config.setCompany', { company });
+    setStatus(`Przełączono na firmę ${company}.`, 'ok');
   } catch (e) {
     setStatus(messageFor(e), 'error');
   }
@@ -72,25 +85,26 @@ async function chooseFolder(call: Call, input: HTMLInputElement): Promise<void> 
  *
  * Call: `mountSettings(call, back)` once; `back` leaves the screen.
  * Expects: main.html settings markup.
- * Output: a handle whose `load()` refreshes the form from the
- * background window (call it each time the screen opens).
+ * Output: a handle to load the data and show the folder.
  */
 export function mountSettings(call: Call, back: () => void): SettingsScreen {
-  const form = byId<HTMLFormElement>('settings-form');
-  let defaults: AppConfig | null = null;
-  form.addEventListener('submit', (ev) => {
-    ev.preventDefault();
-    void save(call, form);
-  });
-  byId('defaults').addEventListener('click', () => defaults && fill(form, defaults));
-  byId('settings-back').addEventListener('click', back);
   const folder = byId<HTMLInputElement>('work-folder');
-  byId('pick-folder').addEventListener('click', () => void chooseFolder(call, folder));
+  byId('pick-folder').addEventListener('click', () => void changeFolder(call, folder));
+  byId<HTMLSelectElement>('company-select').addEventListener('change', (ev) => {
+    void changeCompany(call, (ev.target as HTMLSelectElement).value);
+  });
+  byId('change-account').addEventListener('click', () => {
+    call('session.logout', {}).catch((e) => setStatus(messageFor(e), 'error'));
+  });
+  byId('settings-back').addEventListener('click', back);
   return {
     async load() {
-      const r = await call('config.get', {});
-      defaults = r.defaults;
-      fill(form, r.config);
+      const account = await call('account.get', {});
+      renderAccount(account);
+      renderCompany(account);
+    },
+    showFolder(path) {
+      folder.value = path;
     },
   };
 }

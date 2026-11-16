@@ -37,7 +37,6 @@
             <label>Twój e-mail <input name="email" type="email" autocomplete="email" required /></label>
             <div class="actions"><button type="submit">Wyślij kod</button></div>
           </form>
-          <p class="hint">Łączysz się z innym serwerem? <button type="button" class="link" data-go="settings">Ustawienia połączenia</button></p>
         </div>
 
         <div data-pane="code" hidden>
@@ -102,25 +101,22 @@
       </section>
 
       <section id="screen-settings" hidden>
-        <h1>Ustawienia połączenia</h1>
-        <p class="hint">Zwykle nie trzeba nic zmieniać — wartości są wypełnione dla Twojej firmy.</p>
-        <form id="settings-form" novalidate>
-          <label>Adres API <input name="apiUrl" type="url" required /></label>
-          <label>Klient Cognito <input name="clientId" required /></label>
-          <label>Region <input name="region" required /></label>
-          <label>Firma <input name="company" /></label>
-          <label for="work-folder">Folder pracy (pliki zadań, sesje Claude)</label>
-          <div class="folder-row">
-            <input id="work-folder" name="workFolder" placeholder="Nie wybrano folderu" spellcheck="false" readonly />
-            <button type="button" id="pick-folder" class="secondary">Wybierz…</button>
-          </div>
-          <p class="hint">Folder zmieniasz przyciskiem „Wybierz…”. W nim „Pracuj w Claude” otwiera sesję Claude Code (Claude poprosi o potwierdzenie).</p>
-          <div class="actions">
-            <button type="button" id="defaults" class="secondary">Przywróć domyślne</button>
-            <button type="button" id="settings-back" class="secondary">Wróć</button>
-            <button type="submit">Zapisz</button>
-          </div>
-        </form>
+        <h1>Ustawienia</h1>
+        <h2>Konto</h2>
+        <dl class="facts">
+          <dt>E-mail</dt><dd id="account-email"></dd>
+          <dt>Identyfikator</dt><dd id="account-id"></dd>
+          <dt>Firma</dt>
+          <dd><span id="company-name"></span><select id="company-select" aria-label="Firma" hidden></select></dd>
+        </dl>
+        <div class="actions start"><button type="button" id="change-account" class="secondary">Zmień konto</button></div>
+        <h2>Folder pracy</h2>
+        <p class="hint">Tu CogniFly i Claude trzymają pliki zadań; tu otwiera się sesja „Pracuj w Claude”.</p>
+        <div class="folder-row">
+          <input id="work-folder" aria-label="Folder pracy" readonly />
+          <button type="button" id="pick-folder" class="secondary">Wybierz…</button>
+        </div>
+        <div class="actions"><button type="button" id="settings-back">Gotowe</button></div>
       </section>
     </main>
     <script type="module" src="/src/windows/main.ts"></script>

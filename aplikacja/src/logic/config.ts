@@ -1,5 +1,7 @@
-// Non-secret connection settings. Defaults point at the pilot stack;
-// only the public Cognito client id is embedded (no secrets).
+// Non-secret settings. Connection values (API, Cognito client, region)
+// are built into the app (today: the pilot stack; later one build per
+// company) and cannot be changed by users. Only the user's choices —
+// company and work folder — are stored.
 import { readJson, writeJson, type KeyValueStore } from './storage.js';
 
 /** Connection settings of the app. */
@@ -12,7 +14,7 @@ export interface AppConfig {
   workFolder: string;
 }
 
-/** Pilot deployment (test account, eu-central-1). */
+/** Built-in connection (pilot: test account, eu-central-1). */
 export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   apiUrl: 'https://td5k44easl.execute-api.eu-central-1.amazonaws.com',
   clientId: '67b7re8ou041svoosk3ukotqrq',
@@ -104,27 +106,38 @@ export function isSafeFolder(path: string): boolean {
   return !path.split('/').includes('..');
 }
 
+/** The user's own choices (the only stored part of the config). */
+export type UserChoices = Pick<AppConfig, 'company' | 'workFolder'>;
+
 /**
- * Loads saved settings.
+ * Loads the config: built-in connection + stored user choices.
  *
  * Call: `loadConfig(store)`.
- * Expects: any store; invalid saved data is ignored.
- * Output: the saved, valid config, otherwise a copy of the defaults.
+ * Expects: any store; invalid stored choices are ignored. Stored
+ * connection values from older versions are ignored too.
+ * Output: a valid config.
  */
 export function loadConfig(store: KeyValueStore): AppConfig {
-  const check = validateConfig(readJson(store, STORE_KEY));
+  const saved = readJson(store, STORE_KEY);
+  const merged = {
+    ...DEFAULT_CONFIG,
+    company: trimmedField(saved, 'company') || DEFAULT_CONFIG.company,
+    workFolder: trimmedField(saved, 'workFolder'),
+  };
+  const check = validateConfig(merged);
   return check.ok ? check.config : { ...DEFAULT_CONFIG };
 }
 
 /**
- * Validates and saves settings.
+ * Validates and stores the user's choices.
  *
- * Call: `saveConfig(store, input)` from the settings form.
- * Expects: raw form values.
- * Output: the validation result; the config is stored only when valid.
+ * Call: `saveChoices(store, { company, workFolder })`.
+ * Expects: values chosen in the app.
+ * Output: the full config (built-in connection + choices), or the
+ * first invalid field; only valid choices are stored.
  */
-export function saveConfig(store: KeyValueStore, input: unknown): ConfigCheck {
-  const check = validateConfig(input);
-  if (check.ok) writeJson(store, STORE_KEY, check.config);
+export function saveChoices(store: KeyValueStore, choices: UserChoices): ConfigCheck {
+  const check = validateConfig({ ...DEFAULT_CONFIG, ...choices });
+  if (check.ok) writeJson(store, STORE_KEY, { company: check.config.company, workFolder: check.config.workFolder });
   return check;
 }

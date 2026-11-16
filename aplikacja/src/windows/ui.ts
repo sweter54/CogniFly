@@ -41,6 +41,7 @@ const MESSAGES: Record<string, string> = {
   VAULT_UNAVAILABLE: 'Pęk kluczy jest niedostępny.',
   CLAUDE_NOT_FOUND: 'Nie znaleziono aplikacji Claude. Zainstaluj Claude na Maca i spróbuj ponownie.',
   BAD_TASK_ID: 'Nieprawidłowy identyfikator zadania.',
+  BAD_COMPANY: 'Nie należysz do tej firmy.',
   NO_WORK_FOLDER: 'Najpierw wybierz folder pracy.',
   BAD_FOLDER: 'Tego folderu nie można użyć. Wybierz folder na tym Macu (pełna ścieżka).',
 };

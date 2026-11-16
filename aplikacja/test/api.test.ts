@@ -68,4 +68,10 @@ describe('ApiClient', () => {
     await expect(api.inbox()).rejects.toEqual(new ApiError(403, 'BRAK_DOSTEPU'));
     await expect(api.inbox()).rejects.toEqual(new ApiError(500, 'HTTP_500'));
   });
+
+  it('me: lists memberships from GET /ja, dropping malformed ones', async () => {
+    const { api, calls } = setup([{ status: 200, body: { firmy: [{ firma: 'pilot', osoba: 'michal' }, { firma: '', osoba: 'x' }, 'zle'] } }]);
+    expect(await api.me()).toEqual([{ firma: 'pilot', osoba: 'michal' }]);
+    expect(calls[0]!.url).toBe(`${DEFAULT_CONFIG.apiUrl}/ja`);
+  });
 });

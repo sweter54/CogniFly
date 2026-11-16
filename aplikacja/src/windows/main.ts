@@ -68,15 +68,18 @@ async function main(): Promise<void> {
 
   /**
    * Navigates to a screen; until setup is finished (logged in and a
-   * work folder chosen) only the setup and settings are reachable.
+   * work folder chosen) only the setup is reachable.
    * Call: `go(screen)`. Expects: any screen.
    * Output: none.
    */
   function go(screen: Screen): void {
-    current = needsSetup(view) && screen !== 'settings' ? 'login' : screen;
+    current = needsSetup(view) ? 'login' : screen;
     showOnly(current);
     if (current === 'inbox') inbox.render(view);
-    if (current === 'settings') settings.load().catch((e) => setStatus(messageFor(e), 'error'));
+    if (current === 'settings') {
+      settings.showFolder(view.workFolder);
+      settings.load().catch((e) => setStatus(messageFor(e), 'error'));
+    }
     if (current === 'login' && !view.loggedIn) login.reset();
     else if (current === 'login' && !view.workFolder) login.showFolder();
   }
@@ -92,6 +95,7 @@ async function main(): Promise<void> {
     renderHeader(view);
     if (loggedOut) go('login');
     else if (current === 'inbox') inbox.render(view);
+    else if (current === 'settings') settings.showFolder(view.workFolder);
   }
 
   const bus = tauriBus();

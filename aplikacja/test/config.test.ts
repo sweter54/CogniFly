@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_CONFIG, loadConfig, saveConfig, validateConfig } from '../src/logic/config.js';
+import { DEFAULT_CONFIG, loadConfig, saveChoices, validateConfig } from '../src/logic/config.js';
 import { memoryStore } from '../src/logic/storage.js';
 
 describe('config', () => {
@@ -36,12 +36,19 @@ describe('config', () => {
     expect(validateConfig({ ...DEFAULT_CONFIG, [field]: value })).toEqual({ ok: false, field });
   });
 
-  it('saves only valid settings and loads them back', () => {
+  it('stores only the user choices; connection always comes from the build', () => {
     const store = memoryStore();
-    expect(saveConfig(store, { ...DEFAULT_CONFIG, region: 'zle' }).ok).toBe(false);
+    expect(saveChoices(store, { company: 'Zla!', workFolder: '' }).ok).toBe(false);
     expect(loadConfig(store)).toEqual(DEFAULT_CONFIG);
-    saveConfig(store, { ...DEFAULT_CONFIG, company: 'inna' });
-    expect(loadConfig(store).company).toBe('inna');
+    saveChoices(store, { company: 'inna', workFolder: '/Users/m/repo' });
+    expect(JSON.parse(store.getItem('cognifly.config')!)).toEqual({ company: 'inna', workFolder: '/Users/m/repo' });
+    expect(loadConfig(store)).toEqual({ ...DEFAULT_CONFIG, company: 'inna', workFolder: '/Users/m/repo' });
+  });
+
+  it('ignores connection values stored by older versions', () => {
+    const store = memoryStore();
+    store.setItem('cognifly.config', JSON.stringify({ apiUrl: 'https://evil.example.com', region: 'us-east-1', company: 'pilot', workFolder: '/Users/m' }));
+    expect(loadConfig(store)).toEqual({ ...DEFAULT_CONFIG, workFolder: '/Users/m' });
   });
 
   it('ignores corrupt stored data', () => {

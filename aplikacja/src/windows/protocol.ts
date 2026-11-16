@@ -1,7 +1,6 @@
 // Contract between UI windows and the background window: method names,
 // window labels and pushed events. Shared by both sides.
 import type { Task, UserSettableState } from '@cognifly/wspolne/api';
-import type { AppConfig } from '../logic/config.js';
 
 /** Window labels (must match tauri.conf.json and capabilities). */
 export const WINDOWS = { background: 'background', main: 'main' } as const;
@@ -19,6 +18,8 @@ export interface InboxView {
   loggedIn: boolean;
   offline: boolean;
   email: string | null;
+  /** The person's id in the current company (from `GET /ja`). */
+  osoba: string | null;
   tasks: Task[];
   /** ISO time of the last successful poll, or `null`. */
   updatedAt: string | null;
@@ -28,8 +29,11 @@ export interface InboxView {
 
 /** Methods served by the background window: params → result. */
 export interface Methods {
-  'config.get': { params: Record<string, never>; result: { config: AppConfig; defaults: AppConfig } };
-  'config.save': { params: { config: AppConfig }; result: { ok: true } | { ok: false; field: keyof AppConfig } };
+  'account.get': {
+    params: Record<string, never>;
+    result: { email: string | null; osoba: string | null; company: string; companies: { firma: string; osoba: string }[] };
+  };
+  'config.setCompany': { params: { company: string }; result: { ok: true } };
   'login.sendCode': { params: { email: string }; result: { email: string } };
   'login.confirm': { params: { code: string }; result: { email: string } };
   'inbox.get': { params: Record<string, never>; result: InboxView };

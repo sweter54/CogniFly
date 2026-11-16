@@ -1,11 +1,14 @@
 // Client of the CogniFly HTTP API (Cognito JWT + X-Cognifly-Firma).
 import {
-  TASK_ID_PATTERN, USER_SETTABLE_STATES, type Task, type UserSettableState,
+  TASK_ID_PATTERN, USER_SETTABLE_STATES, type MeResponse, type Task, type UserSettableState,
 } from '@cognifly/wspolne/api';
 import type { AppConfig } from './config.js';
 import { ApiError, LoginRequiredError } from './errors.js';
 import { requestJson, stringField, type FetchFn, type JsonResponse } from './http.js';
 import type { SessionManager } from './session.js';
+
+/** The person's id in one company (from `GET /ja`). */
+export type Membership = MeResponse['firmy'][number];
 
 /** Outcome of "biorę". */
 export type TakeResult =
@@ -24,6 +27,23 @@ export class ApiClient {
     private readonly session: SessionManager,
     private readonly fetchFn: FetchFn,
   ) {}
+
+  /**
+   * Who the logged-in person is.
+   *
+   * Call: `await api.me()` (`GET /ja`).
+   * Expects: a session; no company needs to be chosen yet.
+   * Output: the person's companies with their id in each (malformed
+   * entries dropped).
+   * Throws: `ApiError` (403 `BRAK_DOSTEPU` for unknown people),
+   * session errors.
+   */
+  async me(): Promise<Membership[]> {
+    const r = await this.call('GET', '/ja');
+    if (r.status !== 200) throw apiError(r);
+    const list = (r.json as { firmy?: unknown }).firmy;
+    return Array.isArray(list) ? list.filter(isMembership) : [];
+  }
 
   /**
    * Lists the user's tasks.
@@ -153,4 +173,17 @@ export function isTask(x: unknown): x is Task {
   const t = x as Record<string, unknown>;
   return typeof t.id === 'string' && TASK_ID_PATTERN.test(t.id)
     && typeof t.stan === 'string' && typeof t.opis === 'string';
+}
+
+/**
+ * Checks one `GET /ja` entry.
+ *
+ * Call: `isMembership(x)`.
+ * Expects: anything from the network.
+ * Output: `true` when `firma` and `osoba` are non-empty strings.
+ */
+function isMembership(x: unknown): x is Membership {
+  if (typeof x !== 'object' || x === null) return false;
+  const m = x as Record<string, unknown>;
+  return typeof m.firma === 'string' && m.firma !== '' && typeof m.osoba === 'string' && m.osoba !== '';
 }
