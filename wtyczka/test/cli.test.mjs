@@ -414,6 +414,23 @@ describe('polecenia', () => {
     expect((await cli(['ocena-dostarczenia', '--repo', '../x', '--pr', '7'])).json.stan).toBe('ZLE_PARAMETRY');
     expect(api.log.length).toBe(0);
   });
+  it('osoby i zglos-cr: lista osób, zgłoszenie z recenzentami; błędy serwera i walidacja lokalna', async () => {
+    const osoby = [{ osoba: 'ania', github: 'ania-gh' }, { osoba: 'michal' }];
+    apiHandler = () => ({ status: 200, body: { osoby } });
+    expect((await cli(['osoby'])).json).toEqual({ stan: 'OK', osoby });
+    expect(api.log[0]).toMatchObject({ method: 'GET', url: '/osoby' });
+    apiHandler = () => ({ status: 200, body: { zadanie: { id: 'zad_0123456789ab' } } });
+    expect((await cli(['zglos-cr', '--repo', 'o/r', '--pr', '4', '--recenzenci', 'ania, szymon'])).json)
+      .toEqual({ stan: 'ZGLOSZONO', zadanie: { id: 'zad_0123456789ab' } });
+    expect(api.log[1]).toMatchObject({ method: 'POST', url: '/recenzje', body: { repo: 'o/r', pr: 4, recenzenci: ['ania', 'szymon'] } });
+    apiHandler = () => ({ status: 400, body: { kod: 'ZLI_RECENZENCI' } });
+    expect((await cli(['zglos-cr', '--repo', 'o/r', '--pr', '4', '--recenzenci', 'obcy'])).json).toEqual({ stan: 'ZLI_RECENZENCI' });
+    apiHandler = () => ({ status: 409, body: { kod: 'PR_ZAMKNIETY' } });
+    expect((await cli(['zglos-cr', '--repo', 'o/r', '--pr', '4', '--recenzenci', 'ania'])).json).toEqual({ stan: 'PR_ZAMKNIETY' });
+    api.log.length = 0;
+    expect((await cli(['zglos-cr', '--repo', 'o/r', '--pr', '4', '--recenzenci', ''])).json.stan).toBe('ZLE_PARAMETRY');
+    expect(api.log.length).toBe(0);
+  });
   it('stan: OK, ZLY_STAN lokalnie, postep przekazany', async () => {
     const id = 'zad_0123456789abcdef01234567';
     apiHandler = () => ({ status: 200, body: { zadanie: { id } } });

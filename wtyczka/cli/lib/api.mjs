@@ -142,7 +142,7 @@ export async function wykonaj(argv, env = process.env) {
   try {
     if (polecenie === 'wyloguj') return wyloguj(kat);
     if (polecenie === 'konfiguruj') return konfiguruj(kat, opcje);
-    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'zadanie', 'biore', 'stan', 'przekaz', 'ocena-dostarczenia', 'dostarczenie', 'podsumowanie'];
+    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'zadanie', 'biore', 'stan', 'przekaz', 'ocena-dostarczenia', 'dostarczenie', 'osoby', 'zglos-cr', 'podsumowanie'];
     if (!komendy.includes(polecenie)) throw new Stan('BLAD', { kod: 'NIEZNANE_POLECENIE' });
 
     // walidacje lokalne przed siecią i konfiguracją
@@ -161,7 +161,12 @@ export async function wykonaj(argv, env = process.env) {
     if (polecenie === 'stan' && !STANY.includes(poz[2])) throw new Stan('ZLY_STAN');
     if (polecenie === 'przekaz' && !LOGIN_GITHUB.test(opcje['do-loginu'] ?? '')) throw new Stan('ZLY_LOGIN');
     let dostawa;
-    if (polecenie === 'ocena-dostarczenia' || polecenie === 'dostarczenie') {
+    let recenzenci;
+    if (polecenie === 'zglos-cr') {
+      recenzenci = String(opcje.recenzenci ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+      if (!recenzenci.length || !recenzenci.every((x) => /^[A-Za-z0-9._-]{1,64}$/.test(x))) throw new Stan('ZLE_PARAMETRY');
+    }
+    if (['ocena-dostarczenia', 'dostarczenie', 'zglos-cr'].includes(polecenie)) {
       dostawa = { repo: opcje.repo, pr: Number(opcje.pr) };
       const zle = typeof dostawa.repo !== 'string' || !REPO.test(dostawa.repo) || dostawa.repo.split('/').includes('..')
         || !Number.isInteger(dostawa.pr) || dostawa.pr < 1
@@ -244,6 +249,19 @@ export async function wykonaj(argv, env = process.env) {
         if (r.status === 200) return { stan: 'NASLUCH', ocena: r.json.ocena };
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
+        return blad(r);
+      }
+      case 'osoby': {
+        const r = await zSesja(ctx, 'GET', '/osoby');
+        if (r.status === 200) return { stan: 'OK', osoby: Array.isArray(r.json.osoby) ? r.json.osoby : [] };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        return blad(r);
+      }
+      case 'zglos-cr': {
+        const r = await zSesja(ctx, 'POST', '/recenzje', { ...dostawa, recenzenci });
+        if (r.status === 200) return { stan: 'ZGLOSZONO', zadanie: r.json.zadanie };
+        if (['ZLI_RECENZENCI', 'BRAK_PR', 'PR_ZAMKNIETY'].includes(r.json?.kod)) return { stan: r.json.kod };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         return blad(r);
       }
       case 'podsumowanie': {

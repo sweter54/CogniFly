@@ -1,6 +1,6 @@
 ---
 name: cognifly
-description: Zdarzenia i zadania z CogniFly. Używaj, gdy użytkownik pyta „co nowego w CogniFly”, „zdarzenia z ostatnich 24h”, „moja skrzynka”, „biorę zad_…”, „pracuj nad zadaniem zad_…” (także z przycisku „Pracuj w Claude” w aplikacji), „zmień stan zadania” albo „zaloguj do CogniFly”. Odpowiadaj po polsku.
+description: Zdarzenia i zadania z CogniFly. Używaj, gdy użytkownik pyta „co nowego w CogniFly”, „zdarzenia z ostatnich 24h”, „moja skrzynka”, „biorę zad_…”, „pracuj nad zadaniem zad_…” (także z przycisku „Pracuj w Claude” w aplikacji), „zgłoś PR do code review / poproś o review moich zmian”, „zmień stan zadania” albo „zaloguj do CogniFly”. Odpowiadaj po polsku.
 ---
 
 # CogniFly
@@ -32,6 +32,8 @@ node "${CLAUDE_PLUGIN_ROOT}/cli/cognifly.mjs" <polecenie> [opcje]
 | biorę zadanie | `biore zad_<id>` (tylko po zgodzie) |
 | przekazanie zadania autorowi PR | `przekaz zad_<id> --do-loginu <login GitHub>` (zwykle robi to wysłanie CR) |
 | czy PR można dostarczyć | `ocena-dostarczenia --repo <repo> --pr <nr>` |
+| osoby w firmie | `osoby` |
+| poproś o code review swojego PR | `zglos-cr --repo <repo> --pr <nr> --recenzenci <osoba1,osoba2>` (tylko po zgodzie) |
 | zmiana stanu zadania | `stan zad_<id> <w_trakcie\|do_akceptacji\|zrobione> [--postep <tekst>]` (tylko po zgodzie) |
 | logowanie | `zaloguj --email <adres>`, potem `kod --kod <kod>` |
 | konfiguracja (jednorazowo) | `konfiguruj --adres-api <AdresApi> --klient <KlientCognito> [--region eu-central-1] [--firma <id>]` — zapisuje `~/.cognifly/konfiguracja.json` (bez sekretów); wartości bierz z wyjść stosu |
@@ -63,6 +65,20 @@ Takie polecenie zwykle przychodzi z przycisku „Pracuj w Claude” w aplikacji 
    - inne typy lub `zdarzenie: null` → pokaż, co wiadomo, i zapytaj, jak pomóc.
 5. Na koniec zaproponuj zmianę stanu (`w_trakcie`, `do_akceptacji`, `zrobione`) — tylko po zgodzie. Po udanej
    zmianie aplikacja CogniFly sama otworzy się na tym zadaniu z podświetlonym nowym stanem; wystarczy o tym wspomnieć.
+
+## Zgłoszenie do code review („zgłoś PR 4 do CR dla Szymona”, „poproś o review moich zmian”)
+
+Autor prosi kolegów z firmy o recenzję swojego PR. CogniFly tworzy dla nich zadanie „Prośba o recenzję”.
+
+1. Ustal repozytorium i numer PR: z prośby albo dla bieżącej gałęzi (`gh pr view --json number,url,headRepositoryOwner,headRepository`).
+   Brak PR — zaproponuj jego utworzenie dopiero po zgodzie (to osobny krok).
+2. Pokaż osoby z firmy: `osoby` (`osoba`, opcjonalnie `github`). Zapytaj, kto ma zrecenzować (zwykle nie autor).
+3. Po wyraźnej zgodzie: `zglos-cr --repo <właściciel/repo> --pr <nr> --recenzenci <osoba1,osoba2>`.
+   Stany: `ZGLOSZONO` (zadanie utworzone — recenzenci dostaną powiadomienie w aplikacji CogniFly), `ZLI_RECENZENCI`
+   (ktoś spoza firmy), `BRAK_PR` (nie ma takiego PR), `PR_ZAMKNIETY`.
+4. Następnie zapytaj, czy dopisać recenzentów **także na GitHubie** — tylko tych z loginem `github`, i tylko gdy mają
+   dostęp do repo. Dopiero po „tak”: `gh pr edit <nr> --repo <właściciel/repo> --add-reviewer <login1,login2>`.
+   GitHub nie pozwala dopisać autora PR.
 
 ## Stany odpowiedzi
 
