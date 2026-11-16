@@ -598,6 +598,7 @@ version = "0.1.0"
 dependencies = [
  "keyring",
  "log",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-deep-link",
@@ -4683,6 +4684,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tauri",
+ "tauri-plugin-deep-link",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
