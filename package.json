@@ -1,0 +1,8 @@
+{
+  "name": "cognifly",
+  "private": true,
+  "type": "module",
+  "workspaces": ["wspolne", "serwer", "infra", "wtyczka"],
+  "scripts": { "test": "vitest run --passWithNoTests" },
+  "devDependencies": { "typescript": "^5.6.0", "vitest": "^2.1.0", "@types/node": "^20.14.0" }
+}

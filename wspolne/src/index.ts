@@ -1,0 +1,1 @@
+export * from './zdarzenie.js';
