@@ -82,9 +82,13 @@
           <button type="button" id="refresh" class="secondary">Odśwież</button>
         </div>
         <ul id="list" class="tasks"></ul>
+        <h2 id="done-title" hidden></h2>
+        <ul id="done-list" class="tasks"></ul>
         <template id="task-template">
           <li class="task">
+            <span class="badge"></span>
             <p class="desc"></p>
+            <p class="progress"></p>
             <p class="meta"></p>
             <div class="actions">
               <button type="button" class="take">Biorę</button>

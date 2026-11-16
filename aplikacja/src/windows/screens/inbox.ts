@@ -11,11 +11,21 @@ const STATE_NAMES: Record<string, string> = {
   do_akceptacji: 'do akceptacji', zrobione: 'zrobione',
 };
 
+/** Badge text per state (what the user sees first). */
+const BADGES: Record<string, string> = {
+  nowe: 'Nowe', eskalowane: 'Eskalacja', wziete: 'Wzięte', w_trakcie: 'W trakcie',
+  do_akceptacji: 'Do akceptacji', zrobione: 'Zrobione ✓',
+};
+
 /** Outcome message of a user action. */
 type Outcome = { text: string; kind: 'ok' | 'error' };
 
 /** Handle returned by `mountInbox`. */
-export interface InboxScreen { render(view: InboxView): void }
+export interface InboxScreen {
+  render(view: InboxView): void;
+  /** Fetches the inbox now (e.g. when the user comes back). */
+  refresh(): void;
+}
 
 /**
  * Status line for a view.
@@ -35,10 +45,11 @@ function statusText(view: InboxView): string {
  *
  * Call: `metaText(task)`.
  * Expects: a task.
- * Output: state, owner and creation time in Polish.
+ * Output: owner and creation time in Polish (the state is shown in
+ * the badge).
  */
 function metaText(task: Task): string {
-  const parts = [`Stan: ${STATE_NAMES[task.stan] ?? task.stan}`];
+  const parts: string[] = [];
   if (task.wlasciciel) parts.push(`osoba: ${task.wlasciciel}`);
   const created = new Date(task.utworzono);
   if (!Number.isNaN(created.getTime())) parts.push(created.toLocaleString('pl-PL'));
@@ -133,7 +144,11 @@ export function mountInbox(call: Call): InboxScreen {
     const li = (tpl.content.firstElementChild as HTMLLIElement).cloneNode(true) as HTMLLIElement;
     li.dataset.state = task.stan;
     li.dataset.finished = String(isFinished(task));
+    const badge = li.querySelector('.badge') as HTMLElement;
+    badge.dataset.state = task.stan;
+    badge.textContent = BADGES[task.stan] ?? task.stan;
     (li.querySelector('.desc') as HTMLElement).textContent = task.opis;
+    (li.querySelector('.progress') as HTMLElement).textContent = task.postep ? `Postęp: ${task.postep}` : '';
     (li.querySelector('.meta') as HTMLElement).textContent = metaText(task);
     const take = li.querySelector('.take') as HTMLButtonElement;
     const state = li.querySelector('.state') as HTMLSelectElement;
@@ -152,18 +167,32 @@ export function mountInbox(call: Call): InboxScreen {
   }
 
   /**
-   * Redraws list and status.
+   * Redraws both lists and the status line.
    * Call: `render(view)`. Expects: a logged-in view.
-   * Output: none; finished tasks are listed last.
+   * Output: none; open tasks on top, finished ones under
+   * "Zakończone (n)".
    */
   function render(view: InboxView): void {
     me = view.osoba;
-    byId('list').replaceChildren(...displayOrder(view.tasks).map(item));
+    const ordered = displayOrder(view.tasks);
+    const done = ordered.filter(isFinished);
+    byId('list').replaceChildren(...ordered.filter((t) => !isFinished(t)).map(item));
+    byId('done-list').replaceChildren(...done.map(item));
+    const title = byId('done-title');
+    title.hidden = done.length === 0;
+    title.textContent = `Zakończone (${done.length})`;
     setStatus(statusText(view), view.offline ? 'error' : 'info');
   }
 
-  byId('refresh').addEventListener('click', () => {
+  /**
+   * Fetches the inbox now and redraws it.
+   * Call: `refresh()` (button, window focus). Expects: nothing.
+   * Output: none; errors become Polish messages.
+   */
+  function refresh(): void {
     call('inbox.refresh', {}).then(render).catch((e) => setStatus(messageFor(e), 'error'));
-  });
-  return { render };
+  }
+
+  byId('refresh').addEventListener('click', refresh);
+  return { render, refresh };
 }

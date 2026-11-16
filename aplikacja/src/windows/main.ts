@@ -104,6 +104,10 @@ async function main(): Promise<void> {
   for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-go]'))) {
     el.addEventListener('click', () => go(el.dataset.go as Screen));
   }
+  // Coming back from Claude or the browser: show changes at once instead of waiting for the next poll.
+  window.addEventListener('focus', () => {
+    if (current === 'inbox') inbox.refresh();
+  });
   byId('logout').addEventListener('click', () => void call('session.logout', {}).catch((e) => setStatus(messageFor(e), 'error')));
   renderHeader(view);
   go(view.loggedIn ? 'inbox' : 'login');
