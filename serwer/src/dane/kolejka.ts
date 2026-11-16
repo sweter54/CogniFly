@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
 import { BatchGetCommand, GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
+import type { Kanal } from '@cognifly/wspolne';
 import { klient, nazwaTabeli, pauza, transakcja } from './tabela.js';
 
 export type StanZadania = 'nowe' | 'wziete' | 'w_trakcie' | 'do_akceptacji' | 'zrobione' | 'eskalowane';
-export type KanalEskalacji = 'email' | 'discord' | 'claude';
+export type KanalEskalacji = Kanal;
 export interface Eskalacja { osoba: string; kanaly: KanalEskalacji[] }
 
 export interface Zadanie {
