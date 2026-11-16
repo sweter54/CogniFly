@@ -2,6 +2,7 @@ import { kontekst, HttpBlad, type Odpowiedz, type ZdarzenieApi } from './konteks
 import { podsumowanie, skrzynkaOsoby } from './skrzynka.js';
 import { ocena, rozpocznij } from './dostarczenia.js';
 import { ja } from './ja.js';
+import { osoby, zglos } from './recenzje.js';
 import { biore, przekaz, stan, szczegoly } from './zadania.js';
 import { zdarzenia } from './zdarzenia.js';
 
@@ -23,6 +24,8 @@ export async function handler(event: ZdarzenieApi) {
       'POST /zadania/{id}/przekaz': (k) => przekaz(k, event.pathParameters?.id, tresc(event)),
       'GET /podsumowanie': (k) => podsumowanie(k),
       'POST /dostarczenia': (k) => rozpocznij(k, tresc(event)),
+      'GET /osoby': (k) => osoby(k),
+      'POST /recenzje': (k) => zglos(k, tresc(event)),
       'GET /dostarczenia/ocena': (k) => ocena(k, event.queryStringParameters),
     };
     if (event.routeKey === 'GET /ja') return odp(await ja(event)); // bez kontekstu firmy

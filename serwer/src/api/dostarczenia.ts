@@ -17,7 +17,7 @@ const SHA = /^[0-9a-f]{40}$/;
  * Output: a positive integer.
  * Throws: `HttpBlad(400, 'ZLY_PR')`.
  */
-function prNumber(value: unknown): number {
+export function prNumber(value: unknown): number {
   const n = typeof value === 'string' && /^\d{1,7}$/.test(value) ? Number(value) : value;
   if (typeof n !== 'number' || !Number.isInteger(n) || n < 1) throw new HttpBlad(400, 'ZLY_PR');
   return n;
@@ -31,7 +31,7 @@ function prNumber(value: unknown): number {
  * Output: the `owner/name` string.
  * Throws: `HttpBlad(400, 'ZLE_REPO')`.
  */
-function repoName(value: unknown): string {
+export function repoName(value: unknown): string {
   if (typeof value !== 'string' || !isRepo(value)) throw new HttpBlad(400, 'ZLE_REPO');
   return value;
 }
