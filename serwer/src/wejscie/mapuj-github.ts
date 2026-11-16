@@ -23,13 +23,13 @@ export function mapujGithub(nazwaZdarzenia: string, idDostawy: string, payload: 
 
   if (nazwaZdarzenia === 'push') {
     const galaz = String(payload.ref ?? '').replace(/^refs\/heads\//, '');
-    const pushujacy = String(payload.pusher?.name ?? payload.sender?.login ?? 'nieznany');
+    const pushujacy = String(payload.sender?.login ?? 'nieznany');
     typ = 'github.push';
     opis = `Nowy push w repo ${repo} od ${pushujacy}`;
     wymagaPracy = false;
     podmiot = { repo, autor: pushujacy };
     if (galaz) podmiot.galaz = galaz;
-    dane = { commit: payload.head_commit?.id, wiadomosc: payload.head_commit?.message, url: payload.head_commit?.url };
+    dane = { pushujacy: payload.pusher?.name, commit: payload.head_commit?.id, wiadomosc: payload.head_commit?.message, url: payload.head_commit?.url };
   } else if (nazwaZdarzenia === 'pull_request' && typeof numer === 'number') {
     const daneWspolne = { tytul: pr?.title, url: pr?.html_url };
     const galaz = pr?.head?.ref;

@@ -49,6 +49,15 @@ describe('mapujGithub', () => {
     expect(z.opis).toBe('Nowy commit w PR #12 (repo sweter54/x) po recenzji');
     expect(z.podmiot).toMatchObject({ pr: 12, autor: 'sweter54' });
   });
+  test('push: opis i autor z sender.login, nie z pusher.name', () => {
+    const p = fx('push');
+    expect(p.pusher.name).not.toBe(p.sender.login);
+    const z = mapujGithub('push', 'd', p, 'f1')!;
+    expect(z.opis).toContain(p.sender.login);
+    expect(z.opis).not.toContain(p.pusher.name);
+    expect(z.podmiot.autor).toBe(p.sender.login);
+    expect(JSON.stringify(z.dane)).toContain(p.pusher.name);
+  });
   test('review i prośba mają recenzenta', () => {
     expect(mapujGithub('pull_request_review', 'd', fx('pull_request_review.submitted'), 'f1')!.podmiot.recenzent).toBe('recenzent1');
     expect(mapujGithub('pull_request', 'd', fx('pull_request.review_requested'), 'f1')!.podmiot.recenzent).toBe('recenzent1');
