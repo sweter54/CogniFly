@@ -1,0 +1,20 @@
+{
+  "name": "@cognifly/serwer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1169.0",
+    "@aws-sdk/client-eventbridge": "^3.1169.0",
+    "@aws-sdk/client-scheduler": "^3.1169.0",
+    "@aws-sdk/client-secrets-manager": "^3.1169.0",
+    "@aws-sdk/client-sesv2": "^3.1169.0",
+    "@aws-sdk/lib-dynamodb": "^3.1169.0"
+  },
+  "devDependencies": {
+    "aws-sdk-client-mock": "^4.1.0"
+  }
+}

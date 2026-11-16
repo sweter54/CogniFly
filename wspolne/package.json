@@ -1,0 +1,10 @@
+{
+  "name": "@cognifly/wspolne",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "test": "vitest run --passWithNoTests" },
+  "dependencies": { "zod": "^3.23.8" }
+}

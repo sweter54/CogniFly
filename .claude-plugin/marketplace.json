@@ -1,0 +1,17 @@
+{
+  "name": "cognifly",
+  "owner": {
+    "name": "CogniFly"
+  },
+  "plugins": [
+    {
+      "name": "cognifly",
+      "source": "./wtyczka",
+      "description": "CogniFly: zdarzenia z GitHuba i skrzynka zadań w Claude Code, bez przerywania pracy.",
+      "version": "0.1.0"
+    }
+  ],
+  "metadata": {
+    "description": "Wtyczka CogniFly dla Claude Code: zdarzenia, skrzynka zadań i code review."
+  }
+}
