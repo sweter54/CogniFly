@@ -88,13 +88,14 @@ export async function startEmailLogin(ctx: CognitoContext, email: string): Promi
  * Call: `confirmEmailCode(ctx, pending, code)`.
  * Expects: the pending login from `startEmailLogin` (valid ~3 min).
  * Output: fresh tokens.
- * Throws: `CognitoError('WRONG_CODE')` for a wrong or expired code
- * (the user may retry), `CognitoError('SESSION_EXPIRED')` when the
- * login must be restarted, other `CognitoError`s, `NetworkError`.
+ * Throws: `CognitoError('WRONG_CODE')` for a wrong code (the user
+ * may retry), `CODE_EXPIRED` / `SESSION_EXPIRED` when a new code is
+ * needed, `UNEXPECTED_CHALLENGE` when Cognito asks for another step,
+ * other `CognitoError`s, `NetworkError`. Spaces/dashes are ignored.
  */
 export async function confirmEmailCode(ctx: CognitoContext, pending: PendingLogin, code: string): Promise<Tokens> {
-  const digits = code.trim();
-  if (!/^\d{4,10}$/.test(digits)) throw new CognitoError('WRONG_CODE');
+  const digits = code.replace(/[\s-]/g, '');
+  if (!/^\d{4,10}$/.test(digits)) throw new CognitoError('WRONG_CODE', 'FORMAT');
   let r: Record<string, unknown>;
   try {
     r = await callCognito(ctx, 'RespondToAuthChallenge', {
@@ -107,7 +108,7 @@ export async function confirmEmailCode(ctx: CognitoContext, pending: PendingLogi
     throw mapConfirmError(e);
   }
   const tokens = tokensFromResult(r.AuthenticationResult, now(ctx));
-  if (!tokens) throw new CognitoError('WRONG_CODE');
+  if (!tokens) throw new CognitoError('UNEXPECTED_CHALLENGE', String(r.ChallengeName ?? 'NO_TOKENS'));
   return tokens;
 }
 
@@ -116,13 +117,19 @@ export async function confirmEmailCode(ctx: CognitoContext, pending: PendingLogi
  *
  * Call: `mapConfirmError(e)` in the catch of `confirmEmailCode`.
  * Expects: any thrown value.
- * Output: `WRONG_CODE` for mismatch/expired code, `SESSION_EXPIRED`
- * for `NotAuthorizedException`; anything else is returned unchanged.
+ * Output: `WRONG_CODE` (mismatch), `CODE_EXPIRED` (expired code),
+ * `SESSION_EXPIRED` (`NotAuthorizedException`), each with the original
+ * type as detail; anything else is returned unchanged.
  */
 function mapConfirmError(e: unknown): unknown {
   if (!(e instanceof CognitoError)) return e;
-  if (e.code === 'CodeMismatchException' || e.code === 'ExpiredCodeException') return new CognitoError('WRONG_CODE');
-  if (e.code === 'NotAuthorizedException') return new CognitoError('SESSION_EXPIRED');
+  const mapped: Record<string, string> = {
+    CodeMismatchException: 'WRONG_CODE',
+    ExpiredCodeException: 'CODE_EXPIRED',
+    NotAuthorizedException: 'SESSION_EXPIRED',
+  };
+  const code = mapped[e.code];
+  if (code) return new CognitoError(code, e.code);
   return e;
 }
 

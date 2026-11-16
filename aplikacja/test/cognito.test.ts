@@ -44,20 +44,30 @@ describe('confirmEmailCode', () => {
     expect(calls[0]!.body).toMatchObject({ ChallengeName: 'EMAIL_OTP', Session: 'S1', ChallengeResponses: { USERNAME: 'a@b.pl', EMAIL_OTP_CODE: '12345678' } });
   });
 
-  it.each(['CodeMismatchException', 'ExpiredCodeException'])('maps %s to WRONG_CODE', async (type) => {
+  it.each([
+    ['CodeMismatchException', 'WRONG_CODE'],
+    ['ExpiredCodeException', 'CODE_EXPIRED'],
+    ['NotAuthorizedException', 'SESSION_EXPIRED'],
+  ])('maps %s to %s and keeps the original as detail', async (type, code) => {
     const { c } = ctx([cognitoError(type)]);
-    await expect(confirmEmailCode(c, pending, '123456')).rejects.toEqual(new CognitoError('WRONG_CODE'));
-  });
-
-  it('maps NotAuthorizedException to SESSION_EXPIRED', async () => {
-    const { c } = ctx([cognitoError('NotAuthorizedException')]);
-    await expect(confirmEmailCode(c, pending, '123456')).rejects.toEqual(new CognitoError('SESSION_EXPIRED'));
+    await expect(confirmEmailCode(c, pending, '123456')).rejects.toMatchObject({ code, detail: type });
   });
 
   it('rejects non-numeric codes locally', async () => {
     const { c, calls } = ctx([]);
-    await expect(confirmEmailCode(c, pending, 'abc')).rejects.toEqual(new CognitoError('WRONG_CODE'));
+    await expect(confirmEmailCode(c, pending, 'abc')).rejects.toMatchObject({ code: 'WRONG_CODE', detail: 'FORMAT' });
     expect(calls).toHaveLength(0);
+  });
+
+  it('ignores spaces and dashes inside a pasted code', async () => {
+    const { c, calls } = ctx([{ status: 200, body: { AuthenticationResult: { AccessToken: 'A', RefreshToken: 'R' } } }]);
+    await confirmEmailCode(c, pending, ' 1234 5678\n');
+    expect(calls[0]!.body).toMatchObject({ ChallengeResponses: { EMAIL_OTP_CODE: '12345678' } });
+  });
+
+  it('reports another challenge instead of a wrong code', async () => {
+    const { c } = ctx([{ status: 200, body: { ChallengeName: 'SELECT_CHALLENGE', Session: 'S2' } }]);
+    await expect(confirmEmailCode(c, pending, '123456')).rejects.toMatchObject({ code: 'UNEXPECTED_CHALLENGE', detail: 'SELECT_CHALLENGE' });
   });
 });
 

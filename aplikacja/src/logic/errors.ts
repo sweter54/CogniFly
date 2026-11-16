@@ -30,12 +30,14 @@ export class LoginRequiredError extends Error {
 /** Cognito answered with an error type (e.g. `CodeMismatchException`). */
 export class CognitoError extends Error {
   /**
-   * Call: `new CognitoError(type)` with the short Cognito error type.
-   * Expects: `type` without the `namespace#` prefix.
-   * Output: error whose `code` is `type`.
+   * Call: `new CognitoError(code, detail?)`.
+   * Expects: `code` = short Cognito error type (no `namespace#`) or an
+   * app code; `detail` = the original Cognito type behind an app code.
+   * Output: error whose `code` goes to the UI; the message adds the
+   * detail for the log (never a user code or token).
    */
-  constructor(readonly code: string) {
-    super(code);
+  constructor(readonly code: string, readonly detail?: string) {
+    super(detail ? `${code} (${detail})` : code);
     this.name = 'CognitoError';
   }
 }

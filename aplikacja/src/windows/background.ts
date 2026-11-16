@@ -10,16 +10,17 @@ import { installErrorLog, reportError, reportInfo } from './diagnostics.js';
 import { tauriBus } from './tauri-bus.js';
 
 /**
- * Maps an rpc failure to its code; unexpected ones are logged.
+ * Maps an rpc failure to its code and logs it.
  *
  * Call: as the `toCode` of `rpcServer`.
  * Expects: anything thrown by a handler.
- * Output: the stable code sent to the window.
+ * Output: the stable code sent to the window. Every failure is
+ * logged with its detail (e.g. the Cognito error type); messages
+ * never contain codes typed by the user or tokens.
  */
 function codeAndLog(e: unknown): string {
-  const code = errorCode(e);
-  if (code === 'UNEXPECTED') reportError('rpc', e);
-  return code;
+  reportError('rpc', e);
+  return errorCode(e);
 }
 
 /**
