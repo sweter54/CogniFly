@@ -61,7 +61,8 @@ fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
 
 /// Brings the main window to the front.
 ///
-/// Call: `show_main(&app)` when the Dock icon is clicked.
+/// Call: `show_main(&app)` when the Dock icon is clicked or the app
+/// is launched a second time (single instance).
 /// Expects: the `main` window from tauri.conf.json.
 /// Output: none; the window is shown, unminimised and focused.
 fn show_main<R: Runtime>(app: &AppHandle<R>) {
@@ -108,11 +109,15 @@ fn log_plugin<R: Runtime>() -> tauri::plugin::TauriPlugin<R> {
 /// Call: `run()` from `main`.
 /// Expects: `tauri.conf.json` and capabilities in `src-tauri`.
 /// Output: blocks until quit. Starts as a menu-bar app; the Dock icon
-/// appears only while the main window is open. Panics only if Tauri
-/// fails to start.
+/// appears only while the main window is open; only one instance runs.
+/// Panics only if Tauri fails to start.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Must be the first plugin: a second launch only focuses us.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            show_main(app);
+        }))
         .plugin(log_plugin())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())

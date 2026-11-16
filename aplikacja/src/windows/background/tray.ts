@@ -16,6 +16,9 @@ export interface TrayActions {
   logout(): void;
 }
 
+/** Id of the single tray icon of the app. */
+const TRAY_ID = 'cognifly';
+
 /** Handle to update the tray after each view change. */
 export interface Tray { render(view: InboxView): Promise<void> }
 
@@ -25,9 +28,12 @@ export interface Tray { render(view: InboxView): Promise<void> }
  * Call: `await createTray(actions)` once in the background window.
  * Expects: `core:tray`, `core:menu` and default-icon permissions.
  * Output: a `Tray`; its `render(view)` updates the count, tooltip,
- * the status line and the login/logout item.
+ * the status line and the login/logout item. A tray left over from a
+ * previous load of this window (page reload) is removed first, so
+ * there is always exactly one icon.
  */
 export async function createTray(actions: TrayActions): Promise<Tray> {
+  await TrayIcon.removeById(TRAY_ID).catch(() => undefined);
   let loggedIn = false;
   const status = await MenuItem.new({ id: 'status', text: 'Niezalogowano', enabled: false });
   const account = await MenuItem.new({ id: 'account', text: 'Zaloguj…', action: () => (loggedIn ? actions.logout() : actions.login()) });
@@ -43,7 +49,7 @@ export async function createTray(actions: TrayActions): Promise<Tray> {
       await PredefinedMenuItem.new({ item: 'Quit', text: 'Zakończ CogniFly' }),
     ],
   });
-  const icon = await TrayIcon.new({ id: 'cognifly', icon: (await defaultWindowIcon()) ?? undefined, menu, tooltip: 'CogniFly', menuOnLeftClick: true });
+  const icon = await TrayIcon.new({ id: TRAY_ID, icon: (await defaultWindowIcon()) ?? undefined, menu, tooltip: 'CogniFly', menuOnLeftClick: true });
   return {
     async render(view) {
       loggedIn = view.loggedIn;
