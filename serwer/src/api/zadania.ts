@@ -1,7 +1,7 @@
 import { pobierzZadanie, ustawStan, wez, type StanZadania } from '../dane/kolejka.js';
 import { HttpBlad, type Kontekst, type Odpowiedz } from './kontekst.js';
 
-const ID = /^zad_[0-9a-f]{12}$/; // utworzZadanie: zad_ + 6 bajtów hex
+const ID = /^zad_(?:[0-9a-f]{12}|[0-9a-f]{24})$/; // 12 hex: utworzZadanie bez id; 24 hex: id z zdarzenia (przetwarzanie)
 const DOZWOLONE = ['w_trakcie', 'do_akceptacji', 'zrobione'] as const;
 
 function sprawdzId(id: string | undefined): string {

@@ -109,6 +109,10 @@ describe('zadania', () => {
     expect((await wywolaj('POST /zadania/{id}/biore', { id: 'zad_' + 'f'.repeat(12) })).status).toBe(404);
     expect((await wywolaj('POST /zadania/{id}/biore', { id: 'zad_zly' })).status).toBe(404);
   });
+  test('biore działa na zadaniu z id 24-hex (ścieżka produkcyjna)', async () => {
+    const z = await utworzZadanie('f1', evt, ['michal'], { opis: 'p', id: 'zad_' + 'ab12'.repeat(6) });
+    expect(await wywolaj('POST /zadania/{id}/biore', { id: z.id })).toMatchObject({ status: 200, body: { zadanie: { wlasciciel: 'michal' } } });
+  });
   test('biore zadania innej firmy → 404 (wyciek niemożliwy)', async () => {
     const z = await utworzZadanie('f2', evt, ['dwie2'], { opis: 'obce' });
     expect((await wywolaj('POST /zadania/{id}/biore', { id: z.id })).status).toBe(404);
