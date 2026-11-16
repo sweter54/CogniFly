@@ -25,10 +25,12 @@ Wynik (jeden obiekt JSON):
 
 ```
 { "stan": "OK",
-  "komentarze": [ { "plik": "...", "linia": 3, "tresc": "..." } ],
+  "komentarze": [ { "plik": "...", "linia": 3, "tresc": "...", "idRecenzji": 123, "utworzono": "2026-01-03T09:59:00Z" } ],
   "diffPoRecenzji": "diff commitów od ostatniej recenzji tego recenzenta (ucięty do 200 KB)",
   "plikiZmienione": ["..."] }
 ```
+
+`komentarze` to tylko uwagi z **ostatniej** recenzji tego recenzenta; login porównywany bez rozróżniania wielkości liter (można podać też konto bota, np. `copilot[bot]`). Gdy commit sprzed recenzji zniknął (force-push), skrypt sam przechodzi na podział po datach commitów.
 
 Stany: `OK`; `ZLE_ARGUMENTY` (popraw repo/PR/login i zapytaj użytkownika); `BRAK_RECENZJI` (ten recenzent nie złożył recenzji w tym PR); `BLAD_GH` z `kod` (problem z `gh`: logowanie, uprawnienia, sieć; powiedz o tym, nie zgaduj).
 

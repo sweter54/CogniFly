@@ -16,7 +16,7 @@ beforeEach(() => {
 afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
 // Fałszywe gh: odpowiada po argv, loguje wywołania. Skrypt z shebangiem uruchamiany przez node.
-function fakeGh(odpowiedzi, { padnij = false } = {}) {
+function fakeGh(odpowiedzi, { padnij = false, kodBledu = '404 ' } = {}) {
   writeFileSync(gh, `#!${process.execPath}
 import { appendFileSync } from 'node:fs';
 const a = process.argv.slice(2);
@@ -25,7 +25,7 @@ if (${padnij}) { process.stderr.write('token ghp_SEKRET'); process.exit(4); }
 const odp = ${JSON.stringify(odpowiedzi)};
 const sciezka = a.find((x) => x.startsWith('repos/')) ?? '';
 const klucz = Object.keys(odp).find((k) => sciezka === k);
-if (!klucz) { process.stderr.write('404 ' + sciezka); process.exit(1); }
+if (!klucz) { process.stderr.write(${JSON.stringify(kodBledu)} + ' ' + sciezka); process.exit(1); }
 process.stdout.write(JSON.stringify(odp[klucz]));
 `, { mode: 0o755 });
 }
@@ -44,14 +44,15 @@ const wywolania = () => (existsSync(dziennik) ? readFileSync(dziennik, 'utf8').t
 const R = 'org/repo';
 const baza = () => ({
   [`repos/${R}/pulls/7/comments`]: [
-    { user: { login: 'anna' }, path: 'a.js', line: 3, body: 'popraw nazwę' },
-    { user: { login: 'bob' }, path: 'b.js', line: 9, body: 'cudzy komentarz' },
-    { user: { login: 'anna' }, path: 'c.js', line: null, original_line: 12, body: 'jeszcze to' },
+    { user: { login: 'anna' }, pull_request_review_id: 102, created_at: '2026-01-03T09:59:00Z', path: 'a.js', line: 3, body: 'popraw nazwę' },
+    { user: { login: 'bob' }, pull_request_review_id: 102, path: 'b.js', line: 9, body: 'cudzy komentarz' },
+    { user: { login: 'anna' }, pull_request_review_id: 102, created_at: '2026-01-03T09:59:30Z', path: 'c.js', line: null, original_line: 12, body: 'jeszcze to' },
+    { user: { login: 'anna' }, pull_request_review_id: 101, path: 'stary.js', line: 1, body: 'komentarz ze starej recenzji' },
   ],
   [`repos/${R}/pulls/7/reviews`]: [
-    { user: { login: 'anna' }, submitted_at: '2026-01-02T10:00:00Z', commit_id: 'aaa1111' },
-    { user: { login: 'bob' }, submitted_at: '2026-01-05T10:00:00Z', commit_id: 'aaa4444' },
-    { user: { login: 'anna' }, submitted_at: '2026-01-03T10:00:00Z', commit_id: 'aaa2222' },
+    { id: 101, user: { login: 'anna' }, submitted_at: '2026-01-02T10:00:00Z', commit_id: 'aaa1111' },
+    { id: 103, user: { login: 'bob' }, submitted_at: '2026-01-05T10:00:00Z', commit_id: 'aaa4444' },
+    { id: 102, user: { login: 'anna' }, submitted_at: '2026-01-03T10:00:00Z', commit_id: 'aaa2222' },
   ],
   [`repos/${R}/pulls/7`]: { head: { sha: 'aaa4444' } },
   [`repos/${R}/pulls/7/commits`]: [
@@ -70,9 +71,10 @@ describe('review-dane', () => {
     expect(r.code).toBe(0);
     expect(r.json.stan).toBe('OK');
     expect(r.json.komentarze).toEqual([
-      { plik: 'a.js', linia: 3, tresc: 'popraw nazwę' },
-      { plik: 'c.js', linia: 12, tresc: 'jeszcze to' },
+      { plik: 'a.js', linia: 3, tresc: 'popraw nazwę', idRecenzji: 102, utworzono: '2026-01-03T09:59:00Z' },
+      { plik: 'c.js', linia: 12, tresc: 'jeszcze to', idRecenzji: 102, utworzono: '2026-01-03T09:59:30Z' },
     ]);
+    expect(JSON.stringify(r.json)).not.toContain('starej recenzji');
     expect(JSON.stringify(r.json)).not.toContain('cudzy komentarz');
     expect(r.json.plikiZmienione).toEqual(['a.js', 'bin.png']);
     expect(r.json.diffPoRecenzji).toContain('a.js');
@@ -121,6 +123,43 @@ describe('review-dane', () => {
     expect(r.json.diffPoRecenzji).toContain('+y');
     const log = wywolania().map((l) => JSON.parse(l));
     expect(log.some((a) => a.includes(`repos/${R}/compare/aaa2222...aaa4444`))).toBe(true);
+  });
+
+  it('login recenzenta bez rozróżniania wielkości liter; dozwolony sufiks [bot]', async () => {
+    fakeGh(baza());
+    const r = await uruchom(['--repo', R, '--pr', '7', '--recenzent', 'ANNA']);
+    expect(r.json.stan).toBe('OK');
+    expect(r.json.komentarze).toHaveLength(2);
+    const o = baza();
+    o[`repos/${R}/pulls/7/reviews`] = [{ id: 9, user: { login: 'Copilot[bot]' }, submitted_at: '2026-01-03T10:00:00Z', commit_id: 'aaa4444' }];
+    o[`repos/${R}/pulls/7/comments`] = [{ user: { login: 'copilot[bot]' }, pull_request_review_id: 9, path: 'x.js', line: 1, body: 'bot' }];
+    fakeGh(o);
+    const b = await uruchom(['--repo', R, '--pr', '7', '--recenzent', 'copilot[bot]']);
+    expect(b.json.stan).toBe('OK');
+    expect(b.json.komentarze.map((k) => k.tresc)).toEqual(['bot']);
+  });
+
+  it('compare 404 (commit zniknął po force-push) -> awaryjny podział po datach, nie BLAD_GH', async () => {
+    const o = baza();
+    delete o[`repos/${R}/compare/aaa2222...aaa4444`];
+    // po datach: ostatni commit przed recenzją (2026-01-03T10:00) to aaa2222 -> ten sam; użyj zniknięcia innego commit_id
+    o[`repos/${R}/pulls/7/reviews`][2].commit_id = 'dead999';
+    o[`repos/${R}/compare/aaa2222...aaa4444`] = { files: [{ filename: 'a.js', patch: '+z' }] };
+    fakeGh(o);
+    const r = await uruchom(['--repo', R, '--pr', '7', '--recenzent', 'anna']);
+    expect(r.json.stan).toBe('OK');
+    expect(r.json.diffPoRecenzji).toContain('+z');
+    const log = wywolania().map((l) => JSON.parse(l));
+    expect(log.some((a) => a.includes(`repos/${R}/compare/dead999...aaa4444`))).toBe(true);
+    expect(log.some((a) => a.includes(`repos/${R}/compare/aaa2222...aaa4444`))).toBe(true);
+  });
+
+  it('inny błąd compare niż 404 nadal -> BLAD_GH', async () => {
+    const o = baza();
+    delete o[`repos/${R}/compare/aaa2222...aaa4444`];
+    fakeGh(o, { kodBledu: '500 serwer' });
+    const r = await uruchom(['--repo', R, '--pr', '7', '--recenzent', 'anna']);
+    expect(r.json.stan).toBe('BLAD_GH');
   });
 
   it('brak recenzji recenzenta -> BRAK_RECENZJI', async () => {

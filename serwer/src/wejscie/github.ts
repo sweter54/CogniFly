@@ -26,10 +26,16 @@ async function pobierzSekret(firma: string): Promise<string | undefined> {
     if (!r.SecretString) return undefined;
     sekrety.set(firma, r.SecretString);
     return r.SecretString;
-  } catch {
-    return undefined;
+  } catch (e) {
+    const nazwa = e instanceof Error ? e.name : 'NieznanyBlad';
+    console.warn(`github webhook: błąd Secrets Manager (${nazwa}) dla firmy ${firma}`);
+    if (nazwa === 'ResourceNotFoundException') return undefined;
+    throw new BladSekretu(nazwa);
   }
 }
+
+class BladSekretu extends Error {}
+class BladCiala extends Error {}
 
 interface Zadanie {
   pathParameters?: Record<string, string | undefined>;
@@ -48,17 +54,31 @@ export async function handler(z: Zadanie): Promise<{ statusCode: number; body: s
   const surowe = z.body ?? '';
   const cialo = z.isBase64Encoded ? Buffer.from(surowe, 'base64').toString('utf8') : surowe;
 
-  const sekret = await pobierzSekret(firma);
+  let sekret: string | undefined;
+  try {
+    sekret = await pobierzSekret(firma);
+  } catch (e) {
+    if (e instanceof BladSekretu) return odp(500); // GitHub ponowi dostawę; przyczyna jest w logach
+    throw e;
+  }
   if (!sekret || !zweryfikujPodpis(cialo, naglowki['x-hub-signature-256'], sekret)) return odp(401);
 
   const idDostawy = naglowki['x-github-delivery'];
   const nazwa = naglowki['x-github-event'];
-  if (!idDostawy || !nazwa) return odp(400);
+  if (!idDostawy || !nazwa) {
+    console.warn('github webhook: 400, brak nagłówka x-github-delivery lub x-github-event');
+    return odp(400);
+  }
 
+  // Podpis liczony jest z surowego ciała (wyżej); dopiero potem ciało jest interpretowane.
+  const typTresci = (naglowki['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
   let payload: unknown;
   try {
-    payload = JSON.parse(cialo);
-  } catch {
+    const json = typTresci === 'application/x-www-form-urlencoded' ? new URLSearchParams(cialo).get('payload') : cialo;
+    if (json === null) throw new BladCiala('brak pola payload w ciele formularza');
+    payload = JSON.parse(json);
+  } catch (e) {
+    console.warn(`github webhook: 400, nieczytelne ciało (${typTresci || 'brak content-type'}): ${e instanceof BladCiala ? e.message : 'niepoprawny JSON'}`);
     return odp(400);
   }
 

@@ -126,7 +126,9 @@ describe('stos CogniFly', () => {
     expect(JSON.stringify(ses[0].Resource)).toContain(':identity/*');
     expect(ses[0].Condition).toEqual({ StringEquals: { 'ses:FromAddress': 'nadawca@example.com' } });
     const sm = dla('secretsmanager:GetSecretValue');
-    expect(JSON.stringify(sm[0].Resource)).toContain('secret:cognifly-test/*');
+    expect(sm).toHaveLength(1);
+    expect(JSON.stringify(sm[0].Resource)).toContain('secret:cognifly-test/discord/*');
+    expect(JSON.stringify(sm[0].Resource)).not.toContain('github');
     // żadnych gwiazdek na zasobach
     for (const s of stm) expect(s.Resource).not.toBe('*');
   });
@@ -183,10 +185,49 @@ describe('stos CogniFly', () => {
 
   test('wyjścia stosu', () => {
     expect(Object.keys(json.Outputs).sort()).toEqual(
-      ['AdresApi', 'AdresWebhookGithub', 'KlientCognito', 'NazwaSzyny', 'PulaCognito'],
+      ['AdresApi', 'AdresWebhookGithub', 'KlientCognito', 'NazwaSzyny', 'PulaCognito', 'Region'],
     );
     expect(JSON.stringify(json.Outputs.AdresWebhookGithub)).toContain('/webhook/github/{firma}');
     expect(JSON.stringify(json.Outputs.NazwaSzyny.Value)).toContain('Szyna');
+  });
+
+  test('wyjście Region = region stosu', () => {
+    expect(json.Outputs.Region.Value).toBe('eu-central-1');
+  });
+
+  test('IAM sekretów zawężone: webhook tylko github/*, eskalacja i przetwarzanie tylko discord/*', () => {
+    const sekretyDla = (frag: string) => {
+      const [, p] = zasoby('AWS::IAM::Policy').find(([id]) => id.includes(frag))!;
+      const stm: any[] = p.Properties.PolicyDocument.Statement;
+      return stm.filter((s) => ([] as string[]).concat(s.Action).includes('secretsmanager:GetSecretValue'));
+    };
+    const w = sekretyDla('Webhook');
+    expect(w).toHaveLength(1);
+    expect(JSON.stringify(w[0].Resource)).toContain('secret:cognifly-test/github/*');
+    for (const f of ['Przetwarzanie', 'Eskalacja']) {
+      const s = sekretyDla(f);
+      expect(s).toHaveLength(1);
+      expect(JSON.stringify(s[0].Resource)).toContain('secret:cognifly-test/discord/*');
+    }
+    const api = zasoby('AWS::IAM::Policy').find(([id]) => /^Api/.test(id));
+    expect(JSON.stringify(api ?? '')).not.toContain('secretsmanager');
+  });
+
+  test('Cognito: odzyskiwanie konta tylko e-mailem', () => {
+    t.hasResourceProperties('AWS::Cognito::UserPool', {
+      AccountRecoverySetting: { RecoveryMechanisms: [{ Name: 'verified_email', Priority: 1 }] },
+    });
+  });
+
+  test('kontekst domenaSes -> SES z zweryfikowaną domeną; tabela i pula nadal RETAIN', () => {
+    const t2 = Template.fromStack(zbuduj({ ...KONTEKST, domenaSes: 'example.com' }));
+    t2.hasResourceProperties('AWS::Cognito::UserPool', {
+      EmailConfiguration: Match.objectLike({ EmailSendingAccount: 'DEVELOPER', From: 'nadawca@example.com' }),
+    });
+    const ses = JSON.stringify(Object.values<any>(t2.toJSON().Resources).find((r) => r.Type === 'AWS::Cognito::UserPool'));
+    expect(ses).toContain('identity/example.com');
+    t2.hasResource('AWS::Cognito::UserPool', { DeletionPolicy: 'Retain' });
+    t2.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
   });
 
   test('tag Project=cognifly na zasobach z tagami', () => {

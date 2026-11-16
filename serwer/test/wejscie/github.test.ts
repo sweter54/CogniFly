@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { beforeEach, describe, expect, test } from 'vitest';
+import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
@@ -62,6 +62,15 @@ describe('mapujGithub', () => {
     expect(mapujGithub('pull_request_review', 'd', fx('pull_request_review.submitted'), 'f1')!.podmiot.recenzent).toBe('recenzent1');
     expect(mapujGithub('pull_request', 'd', fx('pull_request.review_requested'), 'f1')!.podmiot.recenzent).toBe('recenzent1');
   });
+  test('walidacja zdarzenia nie przechodzi -> null z logiem powodu (bez payloadu)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const p = fx('pull_request.synchronize');
+    p.repository.full_name = 'x'.repeat(400) + 'SEKRETNY-PAYLOAD';
+    expect(mapujGithub('pull_request', 'd', p, 'f1')).toBeNull();
+    expect(warn).toHaveBeenCalled();
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('SEKRETNY-PAYLOAD');
+    warn.mockRestore();
+  });
   test('nieobsługiwane -> null', () => {
     expect(mapujGithub('star', 'd', { action: 'created' }, 'f1')).toBeNull();
     expect(mapujGithub('pull_request', 'd', { ...fx('pull_request.synchronize'), action: 'closed' }, 'f1')).toBeNull();
@@ -110,8 +119,54 @@ describe('handler', () => {
     expect(eb.commandCalls(PutEventsCommand)).toHaveLength(0);
   });
   test('brak sekretu -> 401', async () => {
-    sm.reset(); sm.on(GetSecretValueCommand).rejects(new Error('ResourceNotFoundException'));
+    const e = Object.assign(new Error('Secrets Manager can\'t find the specified secret.'), { name: 'ResourceNotFoundException' });
+    sm.reset(); sm.on(GetSecretValueCommand).rejects(e);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     expect(await kod(zadanie())).toBe(401);
+    expect(warn.mock.calls.flat().join(' ')).toContain('ResourceNotFoundException');
+    warn.mockRestore();
+  });
+  test('AccessDenied / throttling Secrets Managera -> 500, log z nazwą błędu bez sekretu', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    for (const nazwa of ['AccessDeniedException', 'ThrottlingException']) {
+      sm.reset(); sm.on(GetSecretValueCommand).rejects(Object.assign(new Error(`tajny-szczegol ${SEKRET}`), { name: nazwa }));
+      wyczyscCache();
+      expect(await kod(zadanie())).toBe(500);
+    }
+    const log = warn.mock.calls.flat().join(' ');
+    expect(log).toContain('AccessDeniedException');
+    expect(log).toContain('ThrottlingException');
+    expect(log).not.toContain(SEKRET);
+    expect(eb.commandCalls(PutEventsCommand)).toHaveLength(0);
+    warn.mockRestore();
+  });
+  test('application/x-www-form-urlencoded: podpis z surowego ciała, payload= jako JSON', async () => {
+    const body = 'payload=' + encodeURIComponent(JSON.stringify(fx('push')));
+    const z = zadanie({ body }) as unknown as { headers: Record<string, string> };
+    z.headers['content-type'] = 'application/x-www-form-urlencoded';
+    expect(await kod(z as never)).toBe(202);
+    expect(JSON.parse(eb.commandCalls(PutEventsCommand)[0]!.args[0].input.Entries![0]!.Detail!).typ).toBe('github.push');
+  });
+  test('form-urlencoded ze złym podpisem -> 401; bez pola payload -> 400', async () => {
+    const body = 'payload=' + encodeURIComponent(JSON.stringify(fx('push')));
+    const zly = zadanie({ body, sig: podpisz('x') }) as unknown as { headers: Record<string, string> };
+    zly.headers['content-type'] = 'application/x-www-form-urlencoded';
+    expect(await kod(zly as never)).toBe(401);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const bez = zadanie({ body: 'inne=1' }) as unknown as { headers: Record<string, string> };
+    bez.headers['content-type'] = 'application/x-www-form-urlencoded';
+    expect(await kod(bez as never)).toBe(400);
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+  test('400 loguje powód (bez treści ciała)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await kod(zadanie({ delivery: null }))).toBe(400);
+    expect(await kod(zadanie({ body: 'nie json tajne-cialo' }))).toBe(400);
+    const log = warn.mock.calls.flat().join(' ');
+    expect(log).toContain('x-github-delivery');
+    expect(log).not.toContain('tajne-cialo');
+    warn.mockRestore();
   });
   test('zła firma -> 404 bez sięgania po sekret', async () => {
     expect(await kod(zadanie({ firma: '../x' }))).toBe(404);

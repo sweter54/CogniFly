@@ -1,28 +1,53 @@
 // Wywołania API CogniFly i polecenia CLI. Bez zależności.
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Stan, katalog, czytaj, punktCognito, odswiez, zaloguj, kod, wyloguj } from './sesja.mjs';
+import { Stan, katalog, czytaj, zapisz, punktCognito, odswiez, zaloguj, kod, wyloguj } from './sesja.mjs';
 
 const DOBA = 86_400_000;
 const STANY = ['w_trakcie', 'do_akceptacji', 'zrobione'];
 const ID_ZADANIA = /^zad_([0-9a-f]{12}|[0-9a-f]{24})$/;
 const DOMYSLNA_KONF = fileURLToPath(new URL('../../konfiguracja.json', import.meta.url));
 
+// Kolejność: zmienne środowiskowe > konfiguracja wtyczki > <katalog>/konfiguracja.json (~/.cognifly) > domyślne.
+// Plik w katalogu użytkownika podlega tym samym zasadom (lstat, odmowa dla symlinków) co pozostałe pliki sesji.
 export function wczytajKonfiguracje(env = process.env) {
   let k = {};
   try { k = JSON.parse(readFileSync(env.COGNIFLY_KONFIGURACJA || DOMYSLNA_KONF, 'utf8')); } catch {}
+  const pole = (v) => (typeof v === 'string' ? v.trim() : '');
+  const wtyczki = { adresApi: pole(k.adresApi), region: pole(k.region), klientCognito: pole(k.klientCognito), firmaDomyslna: pole(k.firmaDomyslna) };
+  const zEnv = { adresApi: pole(env.COGNIFLY_ADRES_API), region: pole(env.COGNIFLY_REGION), klientCognito: pole(env.COGNIFLY_KLIENT), firmaDomyslna: pole(env.COGNIFLY_FIRMA) };
+  let u = {};
+  if (Object.keys(wtyczki).some((n) => !zEnv[n] && !wtyczki[n])) {
+    const z = czytaj(katalog(env), 'konfiguracja.json');
+    if (z && typeof z === 'object') u = z;
+  }
   return {
-    adresApi: env.COGNIFLY_ADRES_API || k.adresApi || '',
-    region: k.region || '',
-    klientCognito: k.klientCognito || '',
-    firmaDomyslna: k.firmaDomyslna || '',
+    adresApi: pole(env.COGNIFLY_ADRES_API) || wtyczki.adresApi || pole(u.adresApi),
+    region: pole(env.COGNIFLY_REGION) || wtyczki.region || pole(u.region) || 'eu-central-1',
+    klientCognito: pole(env.COGNIFLY_KLIENT) || wtyczki.klientCognito || pole(u.klientCognito),
+    firmaDomyslna: pole(env.COGNIFLY_FIRMA) || wtyczki.firmaDomyslna || pole(u.firmaDomyslna),
   };
 }
+
+function konfiguruj(kat, opcje) {
+  const adres = opcje['adres-api'], klient = opcje.klient, region = opcje.region ?? 'eu-central-1', firma = opcje.firma ?? '';
+  if (typeof adres !== 'string' || !/^https?:\/\/[^\s]+$/.test(adres) || typeof klient !== 'string' || !/^[A-Za-z0-9]{1,128}$/.test(klient)
+    || !/^[a-z]{2}(-[a-z]+)+-\d$/.test(region) || !/^[a-z0-9-]{0,40}$/.test(firma)) {
+    throw new Stan('BLAD', { kod: 'ZLE_PARAMETRY_KONFIGURACJI' });
+  }
+  zapisz(kat, 'konfiguracja.json', { adresApi: adres.replace(/\/+$/, ''), region, klientCognito: klient, firmaDomyslna: firma });
+  return { stan: 'KONFIGURACJA_ZAPISANA' };
+}
+
+const FLAGI = ['dane']; // opcje bez wartości
 
 export function parsuj(argv) {
   const poz = [], opcje = {};
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i].startsWith('--')) { opcje[argv[i].slice(2)] = argv[i + 1]; i++; } else poz.push(argv[i]);
+    if (argv[i].startsWith('--')) {
+      const n = argv[i].slice(2);
+      if (FLAGI.includes(n)) opcje[n] = true; else { opcje[n] = argv[i + 1]; i++; }
+    } else poz.push(argv[i]);
   }
   return { poz, opcje };
 }
@@ -83,6 +108,17 @@ async function zSesja(ctx, metoda, sciezka, body) {
   return r;
 }
 
+// Domyślnie bez treści pochodzącej od obcych (`dane`, nazwa gałęzi); pełny obiekt tylko z --dane.
+function odchudz(z) {
+  if (!z || typeof z !== 'object') return z;
+  const { dane, podmiot, ...reszta } = z; // eslint-disable-line no-unused-vars
+  const wynik = {};
+  for (const k of ['id', 'czas', 'typ', 'zrodlo', 'opis']) if (k in reszta) wynik[k] = reszta[k];
+  if (podmiot && typeof podmiot === 'object') { const { galaz, ...p } = podmiot; wynik.podmiot = p; } // eslint-disable-line no-unused-vars
+  if ('wymagaPracy' in reszta) wynik.wymagaPracy = reszta.wymagaPracy;
+  return wynik;
+}
+
 const blad = (r) => ({ stan: 'BLAD', kod: typeof r.json?.kod === 'string' ? r.json.kod : `HTTP_${r.status}` });
 
 export async function wykonaj(argv, env = process.env) {
@@ -91,6 +127,7 @@ export async function wykonaj(argv, env = process.env) {
   const kat = katalog(env);
   try {
     if (polecenie === 'wyloguj') return wyloguj(kat);
+    if (polecenie === 'konfiguruj') return konfiguruj(kat, opcje);
     const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'biore', 'stan', 'podsumowanie'];
     if (!komendy.includes(polecenie)) throw new Stan('BLAD', { kod: 'NIEZNANE_POLECENIE' });
 
@@ -120,7 +157,10 @@ export async function wykonaj(argv, env = process.env) {
       case 'kod': return await kod({ ...ctx, kod: opcje.kod });
       case 'zdarzenia': {
         const r = await zSesja(ctx, 'GET', `/zdarzenia${zapytanie}`);
-        if (r.status === 200) return { stan: 'OK', zdarzenia: r.json.zdarzenia ?? [] };
+        if (r.status === 200) {
+          const lista = Array.isArray(r.json.zdarzenia) ? r.json.zdarzenia : [];
+          return { stan: 'OK', zdarzenia: opcje.dane === true ? lista : lista.map(odchudz) };
+        }
         if (r.status === 400 && r.json?.kod === 'ZLY_PRZEDZIAL') return { stan: 'ZLY_PRZEDZIAL' };
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         return blad(r);

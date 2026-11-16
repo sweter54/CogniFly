@@ -3,7 +3,7 @@ import { ArnFormat, CfnOutput, Duration, RemovalPolicy, Stack, Tags, type StackP
 import { CfnScheduleGroup } from 'aws-cdk-lib/aws-scheduler';
 import { Alarm, ComparisonOperator, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
-import { FeaturePlan, UserPool, UserPoolEmail, UserPoolClient } from 'aws-cdk-lib/aws-cognito';
+import { AccountRecovery, FeaturePlan, UserPool, UserPoolEmail, UserPoolClient } from 'aws-cdk-lib/aws-cognito';
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { EventBus, Match, Rule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
@@ -43,6 +43,8 @@ export class StosCogniFly extends Stack {
     super(scope, id, props);
     const nadawca = kontekst(this, 'nadawca');
     const emailAlarmow = kontekst(this, 'emailAlarmow');
+    const domenaSesRaw = this.node.tryGetContext('domenaSes');
+    const domenaSes = typeof domenaSesRaw === 'string' && domenaSesRaw.trim() !== '' ? domenaSesRaw.trim() : undefined;
 
     // --- Dane (odzwierciedla definicjaTabeli() z serwer/src/dane/tabela.ts) ---
     const tabela = new Table(this, 'Tabela', {
@@ -139,8 +141,10 @@ export class StosCogniFly extends Stack {
     }, dlq);
 
     // --- Uprawnienia (least privilege) ---
-    const sekrety = this.formatArn({ service: 'secretsmanager', resource: 'secret', resourceName: `${PREFIKS}/*`, arnFormat: ArnFormat.COLON_RESOURCE_NAME });
-    const odczytSekretow = new PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [sekrety] });
+    const odczytSekretow = (rodzaj: 'github' | 'discord') => new PolicyStatement({
+      actions: ['secretsmanager:GetSecretValue'],
+      resources: [this.formatArn({ service: 'secretsmanager', resource: 'secret', resourceName: `${PREFIKS}/${rodzaj}/*`, arnFormat: ArnFormat.COLON_RESOURCE_NAME })],
+    });
     const wysylkaSes = new PolicyStatement({
       actions: ['ses:SendEmail'],
       // Tożsamość odbiorcy też bywa autoryzowana (sandbox SES), a nadawcą może być domena: zawężamy warunkiem From.
@@ -149,11 +153,11 @@ export class StosCogniFly extends Stack {
     });
 
     szyna.grantPutEventsTo(webhook);
-    webhook.addToRolePolicy(odczytSekretow); // sekret podpisu cognifly-test/github/<firma>
+    webhook.addToRolePolicy(odczytSekretow('github')); // sekret podpisu cognifly-test/github/<firma>
 
     for (const f of [przetwarzanie, eskalacja, api]) tabela.grantReadWriteData(f);
     for (const f of [przetwarzanie, eskalacja]) {
-      f.addToRolePolicy(odczytSekretow); // webhooki Discorda cognifly-test/discord/*
+      f.addToRolePolicy(odczytSekretow('discord')); // webhooki Discorda cognifly-test/discord/*
       f.addToRolePolicy(wysylkaSes);
     }
     przetwarzanie.addToRolePolicy(new PolicyStatement({
@@ -181,7 +185,12 @@ export class StosCogniFly extends Stack {
       selfSignUpEnabled: false,
       signInAliases: { email: true },
       // EMAIL_OTP wymaga wysyłki przez SES (DEVELOPER); nadawca z kontekstu, ta sama tożsamość SES co powiadomienia.
-      email: UserPoolEmail.withSES({ fromEmail: adresNadawcy(nadawca), sesRegion: 'eu-central-1' }),
+      email: UserPoolEmail.withSES({
+        fromEmail: adresNadawcy(nadawca),
+        sesRegion: 'eu-central-1',
+        ...(domenaSes ? { sesVerifiedDomain: domenaSes } : {}),
+      }),
+      accountRecovery: AccountRecovery.EMAIL_ONLY,
       autoVerify: { email: true },
       signInPolicy: { allowedFirstAuthFactors: { password: true, emailOtp: true } },
       removalPolicy: RemovalPolicy.RETAIN,
@@ -251,6 +260,7 @@ export class StosCogniFly extends Stack {
     const adresApi = httpApi.apiEndpoint;
     new CfnOutput(this, 'AdresApi', { value: adresApi });
     new CfnOutput(this, 'AdresWebhookGithub', { value: `${adresApi}/webhook/github/{firma}` });
+    new CfnOutput(this, 'Region', { value: this.region });
     new CfnOutput(this, 'PulaCognito', { value: pula.userPoolId });
     new CfnOutput(this, 'KlientCognito', { value: klient.userPoolClientId });
     new CfnOutput(this, 'NazwaSzyny', { value: szyna.eventBusName });

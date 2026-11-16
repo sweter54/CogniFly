@@ -71,5 +71,9 @@ export function mapujGithub(nazwaZdarzenia: string, idDostawy: string, payload: 
     dane,
     wymagaPracy,
   });
-  return wynik.ok ? wynik.zdarzenie : null;
+  if (!wynik.ok) {
+    console.warn(`mapujGithub: zdarzenie ${nazwaZdarzenia} odrzucone przez walidację: ${wynik.blad}`);
+    return null;
+  }
+  return wynik.zdarzenie;
 }
