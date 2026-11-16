@@ -1,0 +1,8 @@
+{
+  "name": "cognifly",
+  "version": "0.1.0",
+  "description": "CogniFly: zdarzenia z GitHuba i skrzynka zadań w Claude Code, bez przerywania pracy; podsumowanie na starcie sesji i pomoc przy code review.",
+  "author": {
+    "name": "CogniFly"
+  }
+}
