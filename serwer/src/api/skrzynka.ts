@@ -1,11 +1,12 @@
 import { skrzynka as pobierz } from '../dane/kolejka.js';
+import { WAITING_STATES } from '@cognifly/wspolne/api';
 import type { Kontekst, Odpowiedz } from './kontekst.js';
 
 export async function skrzynkaOsoby(k: Kontekst): Promise<Odpowiedz> {
   return { status: 200, body: { zadania: await pobierz(k.firma, k.osoba) } };
 }
 
-const ISTOTNE = ['nowe', 'eskalowane'] as const;
+const ISTOTNE = WAITING_STATES;
 
 
 /** Polska liczba mnoga: 1 zadanie, 2-4 zadania (nie 12-14), reszta zadań. */

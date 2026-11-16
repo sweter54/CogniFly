@@ -3,23 +3,13 @@ import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { BatchGetCommand, GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import type { Kanal } from '@cognifly/wspolne';
 import { klient, nazwaTabeli, pauza, transakcja } from './tabela.js';
+import type { Escalation, Task, TaskState } from '@cognifly/wspolne/api';
 
-export type StanZadania = 'nowe' | 'wziete' | 'w_trakcie' | 'do_akceptacji' | 'zrobione' | 'eskalowane';
+// Kontrakt API żyje w @cognifly/wspolne/api (współdzielony z aplikacją).
+export type StanZadania = TaskState;
 export type KanalEskalacji = Kanal;
-export interface Eskalacja { osoba: string; kanaly: KanalEskalacji[] }
-
-export interface Zadanie {
-  id: string;
-  firma: string;
-  zdarzenieId: string;
-  kandydaci: string[];
-  wlasciciel?: string;
-  stan: StanZadania;
-  utworzono: string;
-  postep?: string;
-  opis: string;
-  eskalujDo?: Eskalacja[];
-}
+export type Eskalacja = Escalation;
+export type Zadanie = Task;
 
 export type WynikWez =
   | { ok: true; zadanie: Zadanie }

@@ -1,8 +1,7 @@
 import { pobierzZadanie, ustawStan, wez, type StanZadania } from '../dane/kolejka.js';
 import { HttpBlad, type Kontekst, type Odpowiedz } from './kontekst.js';
-
-const ID = /^zad_(?:[0-9a-f]{12}|[0-9a-f]{24})$/; // 12 hex: utworzZadanie bez id; 24 hex: id z zdarzenia (przetwarzanie)
-const DOZWOLONE = ['w_trakcie', 'do_akceptacji', 'zrobione'] as const;
+import { TASK_ID_PATTERN as ID, USER_SETTABLE_STATES as DOZWOLONE } from '@cognifly/wspolne/api';
+// ID: 12 hex = utworzZadanie bez id; 24 hex = id ze zdarzenia (przetwarzanie)
 
 function sprawdzId(id: string | undefined): string {
   if (id === undefined || !ID.test(id)) throw new HttpBlad(404, 'NIE_ZNALEZIONO');
