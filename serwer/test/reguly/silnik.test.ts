@@ -122,4 +122,10 @@ describe('rozstrzygnij', () => {
   test('nieznana rola -> brak osób', () => {
     expect(rozstrzygnij(zd(), [reg({ powiadom: { role: ['nikt'], kanaly: ['email'] } })], {}).powiadom).toEqual([]);
   });
+  test('rola o nazwie z prototypu (constructor/__proto__) nie psuje wyniku', () => {
+    for (const nazwa of ['constructor', '__proto__', 'toString']) {
+      const d = rozstrzygnij(zd(), [reg({ powiadom: { role: [nazwa], kanaly: ['email'] } })], {});
+      expect(d.powiadom).toEqual([]);
+    }
+  });
 });

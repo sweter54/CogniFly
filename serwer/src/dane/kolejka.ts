@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
 import { BatchGetCommand, GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
 import type { Kanal } from '@cognifly/wspolne';
 import { klient, nazwaTabeli, pauza, transakcja } from './tabela.js';
@@ -45,9 +46,10 @@ export async function utworzZadanie(
   firma: string,
   zdarzenieId: string,
   kandydaci: string[],
-  extra?: { opis: string; eskalujDo?: Eskalacja[] },
+  extra?: { opis: string; eskalujDo?: Eskalacja[]; id?: string },
 ): Promise<Zadanie> {
-  const id = `zad_${randomBytes(6).toString('hex')}`;
+  // `id` podane przez wołającego = tworzenie idempotentne: istniejące zadanie o tym id jest zwracane bez zmian.
+  const id = extra?.id ?? `zad_${randomBytes(6).toString('hex')}`;
   const utworzono = new Date().toISOString();
   const zadanie: Zadanie = {
     id, firma, zdarzenieId, kandydaci, stan: 'nowe', utworzono,
@@ -63,7 +65,15 @@ export async function utworzZadanie(
   ];
   // limit transakcji to 100 elementów
   if (items.length > 100) throw new Error('Za wielu kandydatów (maks. 99)');
-  await klient().send(new TransactWriteCommand({ TransactItems: items }));
+  try {
+    await klient().send(new TransactWriteCommand({ TransactItems: items }));
+  } catch (e) {
+    if (extra?.id && e instanceof TransactionCanceledException && e.CancellationReasons?.[0]?.Code === 'ConditionalCheckFailed') {
+      const istniejace = await pobierzZadanie(firma, id);
+      if (istniejace) return istniejace;
+    }
+    throw e;
+  }
   return zadanie;
 }
 

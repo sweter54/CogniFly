@@ -19,7 +19,7 @@ function pasuje(r: Regula, z: Zdarzenie): boolean {
 
 function osoby(o: { osoby?: string[]; role?: string[] } | undefined, role: Record<string, string[]>): string[] {
   if (!o) return [];
-  return [...(o.osoby ?? []), ...(o.role ?? []).flatMap((r) => role[r] ?? [])];
+  return [...(o.osoby ?? []), ...(o.role ?? []).flatMap((r) => Object.hasOwn(role, r) ? role[r]! : [])];
 }
 
 function dodaj(m: Map<string, Kanal[]>, osoba: string, kanaly: Kanal[]): void {
