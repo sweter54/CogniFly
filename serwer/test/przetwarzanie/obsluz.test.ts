@@ -40,6 +40,20 @@ beforeEach(() => {
 const wywolania = () => sch.commandCalls(CreateScheduleCommand).map((c) => c.args[0].input);
 
 describe('obsluzZdarzenie', () => {
+  test('budzik trafia do grupy z COGNIFLY_GRUPA_ESKALACJI (domyślnie default)', async () => {
+    await zapiszRole('f-grp', 'dev', ['ola']);
+    await zapiszRegule(reg({ id: 'g', firma: 'f-grp', przydziel: { role: ['dev'] } }));
+    delete process.env.COGNIFLY_GRUPA_ESKALACJI;
+    await obsluzZdarzenie(zd({ firma: 'f-grp' }), zal);
+    expect(wywolania()[0]?.GroupName).toBe('default');
+    sch.reset(); sch.on(CreateScheduleCommand).resolves({});
+    process.env.COGNIFLY_GRUPA_ESKALACJI = 'cognifly-test-eskalacje';
+    try {
+      await obsluzZdarzenie(zd({ firma: 'f-grp' }), zal);
+      expect(wywolania()[0]?.GroupName).toBe('cognifly-test-eskalacje');
+    } finally { delete process.env.COGNIFLY_GRUPA_ESKALACJI; }
+  });
+
   test('bez przydziału: tylko powiadomienia, bez zadania i budzika', async () => {
     await zapiszRegule(reg({ id: 'p1', firma: 'f-pow' }));
     const z = zd({ firma: 'f-pow' });

@@ -79,6 +79,7 @@ async function utworzBudzik(scheduler: Zaleznosci['scheduler'], firma: string, z
     await scheduler.send(
       new CreateScheduleCommand({
         Name: `cognifly-test-esk-${zadanieId}`,
+        GroupName: process.env.COGNIFLY_GRUPA_ESKALACJI ?? 'default',
         ScheduleExpression: atWyrazenie(kiedy),
         ScheduleExpressionTimezone: 'UTC',
         FlexibleTimeWindow: { Mode: 'OFF' },
