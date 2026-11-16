@@ -133,14 +133,14 @@ describe('stos CogniFly', () => {
     for (const s of stm) expect(s.Resource).not.toBe('*');
   });
 
-  test('HTTP API: webhook bez autoryzatora, 7 tras API z JWT (pula + klient)', () => {
+  test('HTTP API: webhook bez autoryzatora, 8 tras API z JWT (pula + klient)', () => {
     const trasy = zasoby('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
-    expect(trasy).toHaveLength(8);
+    expect(trasy).toHaveLength(9);
     const wh = trasy.find((r) => r.RouteKey === 'POST /webhook/github/{firma}');
     expect(wh).toBeDefined();
     expect(wh.AuthorizationType ?? 'NONE').toBe('NONE');
     expect(wh.AuthorizerId).toBeUndefined();
-    for (const k of ['GET /zdarzenia', 'GET /skrzynka', 'GET /zadania/{id}', 'POST /zadania/{id}/biore', 'POST /zadania/{id}/stan', 'GET /podsumowanie', 'GET /ja']) {
+    for (const k of ['GET /zdarzenia', 'GET /skrzynka', 'GET /zadania/{id}', 'POST /zadania/{id}/biore', 'POST /zadania/{id}/stan', 'POST /zadania/{id}/przekaz', 'GET /podsumowanie', 'GET /ja']) {
       const r = trasy.find((x) => x.RouteKey === k);
       expect(r, k).toBeDefined();
       expect(r.AuthorizationType).toBe('JWT');

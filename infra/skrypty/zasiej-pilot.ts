@@ -14,6 +14,7 @@
  *   --osoba-szymon / ZASIEJ_OSOBA_SZYMON        osobaId Szymona (domyślnie `szymon`)
  *   --pula / COGNIFLY_PULA                      id puli Cognito (wyjście stosu PulaCognito)
  *   --discord-michal / ZASIEJ_DISCORD_MICHAL    adres webhooka Discorda Michała (opcjonalny)
+ *   --github-michal / ZASIEJ_GITHUB_MICHAL      login GitHub Michała (opcjonalny; przekazanie zadań po code review)
  *   --discord-szymon / ZASIEJ_DISCORD_SZYMON    adres webhooka Discorda Szymona (opcjonalny)
  *   --sekret-github / ZASIEJ_SEKRET_GITHUB      sekret webhooka GitHuba (domyślnie: istniejący sekret zostaje, brakujący = losowe 32 bajty hex)
  *   --wykonaj                                   faktycznie wykonaj zapisy
@@ -36,7 +37,7 @@ export const REGION = 'eu-central-1';
 export const SEKRET_GITHUB = 'cognifly-test/github/pilot';
 export const sekretDiscord = (osoba: string) => `cognifly-test/discord/pilot/${osoba}`;
 
-export interface Osoba { osobaId: string; email: string; discord?: string }
+export interface Osoba { osobaId: string; email: string; discord?: string; github?: string }
 
 export function regulaPilota(osobaMichal: string): Regula {
   return {
@@ -56,6 +57,7 @@ export function przeczytajOpcje(argv: string[], env: NodeJS.ProcessEnv) {
       'osoba-michal': { type: 'string' }, 'osoba-szymon': { type: 'string' },
       pula: { type: 'string' },
       'discord-michal': { type: 'string' }, 'discord-szymon': { type: 'string' },
+      'github-michal': { type: 'string' }, 'github-szymon': { type: 'string' },
       'sekret-github': { type: 'string' },
       wykonaj: { type: 'boolean', default: false },
     },
@@ -65,12 +67,14 @@ export function przeczytajOpcje(argv: string[], env: NodeJS.ProcessEnv) {
   const osoby: Osoba[] = [{
     osobaId: values['osoba-michal'] ?? env.ZASIEJ_OSOBA_MICHAL ?? 'michal', email: emailMichal,
     discord: values['discord-michal'] ?? env.ZASIEJ_DISCORD_MICHAL,
+    github: values['github-michal'] ?? env.ZASIEJ_GITHUB_MICHAL,
   }];
   const emailSzymon = values['email-szymon'] ?? env.ZASIEJ_EMAIL_SZYMON;
   if (emailSzymon) {
     osoby.push({
       osobaId: values['osoba-szymon'] ?? env.ZASIEJ_OSOBA_SZYMON ?? 'szymon', email: emailSzymon,
       discord: values['discord-szymon'] ?? env.ZASIEJ_DISCORD_SZYMON,
+      github: values['github-szymon'] ?? env.ZASIEJ_GITHUB_SZYMON,
     });
   }
   return {
@@ -132,6 +136,7 @@ export interface Dane {
   zapiszKontakt(firma: string, osoba: string, k: { email?: string; discordWebhookRef?: string }): Promise<void>;
   zapiszRegule(r: Regula): Promise<void>;
   kontaktOsoby(firma: string, osoba: string): Promise<{ email?: string; discordWebhookRef?: string }>;
+  zapiszLoginGithub(firma: string, login: string, osoba: string): Promise<void>;
 }
 export interface Zaleznosci {
   cog: Pick<CognitoIdentityProviderClient, 'send'>;
@@ -151,7 +156,7 @@ export async function zasiej(
   if (!wykonaj) {
     for (const o of osoby) {
       log(`- Cognito: użytkownik ${o.email} (email_verified, bez hasła, bez wiadomości) -> sub -> tożsamość ${FIRMA}/${o.osobaId}`);
-      log(`- DynamoDB: OSOBA#${o.osobaId} (${o === michal ? 'admin' : 'czlonek'}), KONTAKT#${o.osobaId}${o.discord ? ` z discordWebhookRef=${sekretDiscord(o.osobaId)}` : ' (tylko e-mail)'}`);
+      log(`- DynamoDB: OSOBA#${o.osobaId} (${o === michal ? 'admin' : 'czlonek'}), KONTAKT#${o.osobaId}${o.discord ? ` z discordWebhookRef=${sekretDiscord(o.osobaId)}` : ' (tylko e-mail)'}${o.github ? `, GITHUB#${o.github.toLowerCase()}` : ''}`);
       if (o.discord) log(`- Secrets Manager: ${sekretDiscord(o.osobaId)} (adres webhooka Discorda; wartość nie jest wypisywana)`);
     }
     log(`- Secrets Manager: ${SEKRET_GITHUB} (${opcje.sekretGithub ? 'podany sekret' : 'istniejący zostaje, brakujący dostanie losowe 32 bajty hex'}; wartość nie jest wypisywana)`);
@@ -183,6 +188,10 @@ export async function zasiej(
       log(`sekret ${discordWebhookRef}: ${await zapiszSekret(sm, discordWebhookRef, o.discord)}`);
     }
     await dane.zapiszKontakt(FIRMA, o.osobaId, { email: o.email, ...(discordWebhookRef ? { discordWebhookRef } : {}) });
+    if (o.github) {
+      await dane.zapiszLoginGithub(FIRMA, o.github, o.osobaId);
+      log(`osoba ${o.osobaId}: login GitHub ${o.github}`);
+    }
     log(`osoba ${o.osobaId}: użytkownik Cognito, tożsamość, osoba i kontakt zapisane`);
   }
 

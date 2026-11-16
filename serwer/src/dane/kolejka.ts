@@ -144,6 +144,38 @@ export async function ustawStan(
   );
 }
 
+/**
+ * Przekazanie zadania innej osobie (np. autorowi PR po code review): tylko właściciel; zadanie wraca do `nowe`
+ * z jedynym kandydatem `doOsoby`, bez właściciela. Wpisy skrzynki dawnych kandydatów znikają w tej samej transakcji.
+ */
+export async function przekaz(firma: string, idZadania: string, odOsoby: string, doOsoby: string, postep: string): Promise<Zadanie | null> {
+  const z = await pobierzZadanie(firma, idZadania);
+  if (!z || z.wlasciciel !== odOsoby) return null;
+  const T = nazwaTabeli();
+  const w = await transakcja([
+    {
+      Update: {
+        TableName: T,
+        Key: { pk: pkZad(firma), sk: z.id },
+        ConditionExpression: '#wl = :od',
+        UpdateExpression: 'SET #stan = :nowe, #kan = :kan, #po = :po REMOVE #wl',
+        ExpressionAttributeNames: { '#wl': 'wlasciciel', '#stan': 'stan', '#kan': 'kandydaci', '#po': 'postep' },
+        ExpressionAttributeValues: { ':od': odOsoby, ':nowe': 'nowe', ':kan': [doOsoby], ':po': postep },
+      },
+    },
+    ...z.kandydaci.filter((o) => o !== doOsoby).map((o) => ({ Delete: { TableName: T, Key: { pk: pkSkr(firma, o), sk: z.id } } })),
+    {
+      Put: {
+        TableName: T,
+        Item: { pk: pkSkr(firma, doOsoby), sk: z.id, gsi1pk: gsiPk(firma, doOsoby), gsi1sk: `nowe#${z.utworzono}`, zadanieId: z.id },
+      },
+    },
+  ]);
+  if (w !== 'OK') return null;
+  const { wlasciciel: _wl, ...reszta } = z;
+  return { ...reszta, stan: 'nowe', kandydaci: [doOsoby], postep };
+}
+
 /** Tylko z stanu `nowe`. false (bez wyjątku), gdy ktoś już wziął lub zadanie nie istnieje. */
 export async function oznaczEskalowane(firma: string, id: string): Promise<boolean> {
   const z = await pobierzZadanie(firma, id);

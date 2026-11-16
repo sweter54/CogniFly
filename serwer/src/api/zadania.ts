@@ -1,7 +1,8 @@
 import type { Zdarzenie } from '@cognifly/wspolne';
 import type { EventSummary } from '@cognifly/wspolne/api';
 import { zdarzenieZadania } from '../dane/historia.js';
-import { pobierzZadanie, ustawStan, wez, type StanZadania } from '../dane/kolejka.js';
+import { LOGIN_GITHUB, osobaPoLoginie } from '../dane/konfiguracja.js';
+import { pobierzZadanie, przekaz as przekazZadanie, ustawStan, wez, type StanZadania } from '../dane/kolejka.js';
 import { HttpBlad, type Kontekst, type Odpowiedz } from './kontekst.js';
 import { TASK_ID_PATTERN as ID, USER_SETTABLE_STATES as DOZWOLONE } from '@cognifly/wspolne/api';
 // ID: 12 hex = utworzZadanie bez id; 24 hex = id ze zdarzenia (przetwarzanie)
@@ -21,10 +22,7 @@ export async function biore(k: Kontekst, id: string | undefined): Promise<Odpowi
 
 export async function stan(k: Kontekst, id: string | undefined, surowe: string | null | undefined): Promise<Odpowiedz> {
   const zid = sprawdzId(id);
-  let b: unknown;
-  try { b = JSON.parse(surowe ?? ''); } catch { throw new HttpBlad(400, 'ZLY_JSON'); }
-  if (typeof b !== 'object' || b === null || Array.isArray(b)) throw new HttpBlad(400, 'ZLE_DANE');
-  const { stan: s, postep } = b as { stan?: unknown; postep?: unknown };
+  const { stan: s, postep } = obiektJson(surowe);
   if (typeof s !== 'string' || !(DOZWOLONE as readonly string[]).includes(s)) throw new HttpBlad(400, 'ZLY_STAN');
   if (postep !== undefined && (typeof postep !== 'string' || postep.length > 200)) throw new HttpBlad(400, 'ZLY_POSTEP');
   if (!(await ustawStan(k.firma, zid, k.osoba, s as StanZadania, postep))) throw new HttpBlad(403, 'BRAK_DOSTEPU');
@@ -44,4 +42,29 @@ export async function szczegoly(k: Kontekst, id: string | undefined): Promise<Od
   if (!zadanie.kandydaci.includes(k.osoba) && zadanie.wlasciciel !== k.osoba) throw new HttpBlad(403, 'BRAK_DOSTEPU');
   const z = await zdarzenieZadania(k.firma, zadanie.zdarzenieId, zadanie.utworzono);
   return { status: 200, body: { zadanie, zdarzenie: z ? odchudzZdarzenie(z) : null } };
+}
+
+const POSTEP_PRZEKAZANIA = 'Uwagi z code review do poprawy';
+
+/** Treść żądania jako obiekt JSON albo 400. */
+function obiektJson(surowe: string | null | undefined): Record<string, unknown> {
+  let b: unknown;
+  try { b = JSON.parse(surowe ?? ''); } catch { throw new HttpBlad(400, 'ZLY_JSON'); }
+  if (typeof b !== 'object' || b === null || Array.isArray(b)) throw new HttpBlad(400, 'ZLE_DANE');
+  return b as Record<string, unknown>;
+}
+
+/** POST /zadania/{id}/przekaz {doLoginu}: właściciel przekazuje zadanie osobie o danym loginie GitHub. */
+export async function przekaz(k: Kontekst, id: string | undefined, surowe: string | null | undefined): Promise<Odpowiedz> {
+  const zid = sprawdzId(id);
+  const { doLoginu } = obiektJson(surowe);
+  if (typeof doLoginu !== 'string' || !LOGIN_GITHUB.test(doLoginu)) throw new HttpBlad(400, 'ZLY_LOGIN');
+  const z = await pobierzZadanie(k.firma, zid);
+  if (!z) throw new HttpBlad(404, 'NIE_ZNALEZIONO');
+  if (z.wlasciciel !== k.osoba) throw new HttpBlad(403, 'BRAK_DOSTEPU');
+  const osoba = await osobaPoLoginie(k.firma, doLoginu);
+  if (!osoba) throw new HttpBlad(409, 'BRAK_OSOBY');
+  const zadanie = await przekazZadanie(k.firma, zid, k.osoba, osoba, POSTEP_PRZEKAZANIA);
+  if (!zadanie) throw new HttpBlad(409, 'KONFLIKT');
+  return { status: 200, body: { zadanie } };
 }

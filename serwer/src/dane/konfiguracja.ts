@@ -8,6 +8,7 @@ import { klient, nazwaTabeli } from './tabela.js';
  *   ROLA#<nazwa>     -> { osoby: string[] }
  *   KONTAKT#<osoba>  -> { email?, discordWebhookRef? }
  *   OSOBA#<osoba>    -> { email, rola: 'admin' | 'czlonek' }
+ *   GITHUB#<login>   -> { osoba }   (login małymi literami)
  */
 const pk = (firma: string) => `FIRMA#${firma}#KONF`;
 
@@ -67,6 +68,22 @@ export const zapiszKontakt = (firma: string, osoba: string, k: { email?: string;
 
 export const zapiszOsobe = (firma: string, osoba: string, o: { email: string; rola: 'admin' | 'czlonek' }) =>
   wstaw(firma, `OSOBA#${osoba}`, { ...o });
+
+/** Login GitHub (także konta botów `nazwa[bot]`). */
+export const LOGIN_GITHUB = /^[A-Za-z0-9-]{1,39}(\[bot\])?$/;
+
+/** Powiązanie loginu GitHub z osobą w firmie (ustawia admin, np. skrypt zasiewu). */
+export const zapiszLoginGithub = (firma: string, login: string, osoba: string) =>
+  wstaw(firma, `GITHUB#${login.toLowerCase()}`, { osoba });
+
+/** Osoba CogniFly o danym loginie GitHub albo null. */
+export async function osobaPoLoginie(firma: string, login: string): Promise<string | null> {
+  if (!LOGIN_GITHUB.test(login)) return null;
+  const r = await klient().send(
+    new GetCommand({ TableName: nazwaTabeli(), Key: { pk: pk(firma), sk: `GITHUB#${login.toLowerCase()}` }, ConsistentRead: true }),
+  );
+  return typeof r.Item?.osoba === 'string' ? r.Item.osoba : null;
+}
 
 /*
  * Tożsamość (indeks per użytkownik, celowo NIE w przestrzeni firmy): pk=OSOBA#<sub>, sk=PROFIL,

@@ -1,7 +1,7 @@
 import { kontekst, HttpBlad, type Odpowiedz, type ZdarzenieApi } from './kontekst.js';
 import { podsumowanie, skrzynkaOsoby } from './skrzynka.js';
 import { ja } from './ja.js';
-import { biore, stan, szczegoly } from './zadania.js';
+import { biore, przekaz, stan, szczegoly } from './zadania.js';
 import { zdarzenia } from './zdarzenia.js';
 
 const NAGLOWKI = { 'content-type': 'application/json' };
@@ -19,6 +19,7 @@ export async function handler(event: ZdarzenieApi) {
       'GET /zadania/{id}': (k) => szczegoly(k, event.pathParameters?.id),
       'POST /zadania/{id}/biore': (k) => biore(k, event.pathParameters?.id),
       'POST /zadania/{id}/stan': (k) => stan(k, event.pathParameters?.id, tresc(event)),
+      'POST /zadania/{id}/przekaz': (k) => przekaz(k, event.pathParameters?.id, tresc(event)),
       'GET /podsumowanie': (k) => podsumowanie(k),
     };
     if (event.routeKey === 'GET /ja') return odp(await ja(event)); // bez kontekstu firmy
