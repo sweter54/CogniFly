@@ -3,7 +3,7 @@ import { ArnFormat, CfnOutput, Duration, RemovalPolicy, Stack, Tags, type StackP
 import { CfnScheduleGroup } from 'aws-cdk-lib/aws-scheduler';
 import { Alarm, ComparisonOperator, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
-import { FeaturePlan, UserPool, UserPoolClient } from 'aws-cdk-lib/aws-cognito';
+import { FeaturePlan, UserPool, UserPoolEmail, UserPoolClient } from 'aws-cdk-lib/aws-cognito';
 import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { EventBus, Match, Rule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
@@ -69,8 +69,20 @@ export class StosCogniFly extends Stack {
       retention: Duration.days(30),
     });
 
+    // --- DLQ: błędy wywołań asynchronicznych (EventBridge i Scheduler wołają Lambdy async) ---
+    const dlq = new Queue(this, 'Dlq', {
+      queueName: `${PREFIKS}-przetwarzanie-dlq`,
+      retentionPeriod: Duration.days(14),
+      enforceSSL: true,
+    });
+    const dlqEskalacji = new Queue(this, 'DlqEskalacji', {
+      queueName: `${PREFIKS}-eskalacja-dlq`,
+      retentionPeriod: Duration.days(14),
+      enforceSSL: true,
+    });
+
     // --- Funkcje ---
-    const wspolne = (nazwa: string, wejscie: string, env: Record<string, string>) => {
+    const wspolne = (nazwa: string, wejscie: string, env: Record<string, string>, deadLetterQueue?: Queue) => {
       const logi = new LogGroup(this, `${nazwa}Logi`, {
         logGroupName: `/aws/lambda/${PREFIKS}-${nazwa.toLowerCase()}`,
         retention: RetentionDays.TWO_WEEKS,
@@ -88,6 +100,7 @@ export class StosCogniFly extends Stack {
         timeout: Duration.seconds(30),
         logGroup: logi,
         environment: env,
+        ...(deadLetterQueue ? { deadLetterQueue } : {}),
         bundling: {
           format: OutputFormat.ESM,
           target: 'node22',
@@ -103,7 +116,7 @@ export class StosCogniFly extends Stack {
     const webhook = wspolne('Webhook', 'wejscie/github.ts', { COGNIFLY_SZYNA: NAZWA_SZYNY });
     const eskalacja = wspolne('Eskalacja', 'eskalacja/obsluz.ts', {
       COGNIFLY_TABELA: NAZWA_TABELI, COGNIFLY_NADAWCA: nadawca,
-    });
+    }, dlqEskalacji);
     const api = wspolne('Api', 'api/index.ts', { COGNIFLY_TABELA: NAZWA_TABELI });
 
     // Scheduler: grupa + rola, która może wyłącznie wywołać Lambdę eskalacji.
@@ -123,14 +136,16 @@ export class StosCogniFly extends Stack {
       COGNIFLY_GRUPA_ESKALACJI: NAZWA_GRUPY,
       COGNIFLY_ESKALACJA_ARN: eskalacja.functionArn,
       COGNIFLY_SCHEDULER_ROLA_ARN: schedulerRola.roleArn,
-    });
+    }, dlq);
 
     // --- Uprawnienia (least privilege) ---
     const sekrety = this.formatArn({ service: 'secretsmanager', resource: 'secret', resourceName: `${PREFIKS}/*`, arnFormat: ArnFormat.COLON_RESOURCE_NAME });
     const odczytSekretow = new PolicyStatement({ actions: ['secretsmanager:GetSecretValue'], resources: [sekrety] });
     const wysylkaSes = new PolicyStatement({
       actions: ['ses:SendEmail'],
-      resources: [this.formatArn({ service: 'ses', resource: 'identity', resourceName: adresNadawcy(nadawca), arnFormat: ArnFormat.SLASH_RESOURCE_NAME })],
+      // Tożsamość odbiorcy też bywa autoryzowana (sandbox SES), a nadawcą może być domena: zawężamy warunkiem From.
+      resources: [this.formatArn({ service: 'ses', resource: 'identity', resourceName: '*', arnFormat: ArnFormat.SLASH_RESOURCE_NAME })],
+      conditions: { StringEquals: { 'ses:FromAddress': adresNadawcy(nadawca) } },
     });
 
     szyna.grantPutEventsTo(webhook);
@@ -151,12 +166,7 @@ export class StosCogniFly extends Stack {
     }));
     przetwarzanie.node.addDependency(grupa);
 
-    // --- Reguła szyny -> przetwarzanie (DLQ) ---
-    const dlq = new Queue(this, 'Dlq', {
-      queueName: `${PREFIKS}-przetwarzanie-dlq`,
-      retentionPeriod: Duration.days(14),
-      enforceSSL: true,
-    });
+    // --- Reguła szyny -> przetwarzanie ---
     new Rule(this, 'RegulaPrzetwarzania', {
       ruleName: `${PREFIKS}-przetwarzanie`,
       eventBus: szyna,
@@ -170,6 +180,8 @@ export class StosCogniFly extends Stack {
       featurePlan: FeaturePlan.ESSENTIALS,
       selfSignUpEnabled: false,
       signInAliases: { email: true },
+      // EMAIL_OTP wymaga wysyłki przez SES (DEVELOPER); nadawca z kontekstu, ta sama tożsamość SES co powiadomienia.
+      email: UserPoolEmail.withSES({ fromEmail: adresNadawcy(nadawca), sesRegion: 'eu-central-1' }),
       autoVerify: { email: true },
       signInPolicy: { allowedFirstAuthFactors: { password: true, emailOtp: true } },
       removalPolicy: RemovalPolicy.RETAIN,
@@ -178,6 +190,7 @@ export class StosCogniFly extends Stack {
       userPool: pula,
       userPoolClientName: `${PREFIKS}-klient`,
       generateSecret: false,
+      disableOAuth: true,
       authFlows: { user: true }, // ALLOW_USER_AUTH (+ ALLOW_REFRESH_TOKEN_AUTH dodawany zawsze)
       preventUserExistenceErrors: true,
     });
@@ -216,6 +229,17 @@ export class StosCogniFly extends Stack {
       new Alarm(this, `Alarm${nazwa}`, {
         alarmName: `${PREFIKS}-${nazwa.toLowerCase()}-bledy`,
         metric: f.metricErrors({ period: Duration.minutes(5), statistic: 'Sum' }),
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: TreatMissingData.NOT_BREACHING,
+      }).addAlarmAction(new SnsAction(alarmy));
+    }
+
+    for (const [nazwa, q] of Object.entries({ Przetwarzanie: dlq, Eskalacja: dlqEskalacji })) {
+      new Alarm(this, `AlarmDlq${nazwa}`, {
+        alarmName: `${PREFIKS}-${nazwa.toLowerCase()}-dlq`,
+        metric: q.metricApproximateNumberOfMessagesVisible({ period: Duration.minutes(5), statistic: 'Maximum' }),
         threshold: 0,
         evaluationPeriods: 1,
         comparisonOperator: ComparisonOperator.GREATER_THAN_THRESHOLD,

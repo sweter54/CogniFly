@@ -53,7 +53,22 @@ describe('stos CogniFly', () => {
         DeadLetterConfig: { Arn: Match.anyValue() },
       })],
     });
-    t.resourceCountIs('AWS::SQS::Queue', 1);
+    t.resourceCountIs('AWS::SQS::Queue', 2);
+  });
+
+  test('DLQ na poziomie funkcji (async) dla przetwarzania i eskalacji + alarmy na DLQ', () => {
+    for (const fragment of ['Przetwarzanie', 'Eskalacja']) {
+      const [, r] = zasoby('AWS::Lambda::Function').find(([id]) => id.includes(fragment))!;
+      expect(r.Properties.DeadLetterConfig?.TargetArn, fragment).toBeDefined();
+    }
+    const kolejki = zasoby('AWS::CloudWatch::Alarm').filter(([, a]) => a.Properties.MetricName === 'ApproximateNumberOfMessagesVisible');
+    expect(kolejki).toHaveLength(2);
+    for (const [, a] of kolejki) {
+      expect(a.Properties.Namespace).toBe('AWS/SQS');
+      expect(a.Properties.Threshold).toBe(0);
+      expect(a.Properties.ComparisonOperator).toBe('GreaterThanThreshold');
+      expect(JSON.stringify(a.Properties.AlarmActions)).toContain('Alarmy');
+    }
   });
 
   test('Lambdy: Node 22, ARM64, logi 14 dni, nazwy z prefiksem', () => {
@@ -108,7 +123,8 @@ describe('stos CogniFly', () => {
     expect(JSON.stringify(pr[0].Resource)).toContain('SchedulerRola');
     const ses = dla('ses:SendEmail');
     expect(ses).toHaveLength(1);
-    expect(JSON.stringify(ses[0].Resource)).toContain(':identity/nadawca@example.com');
+    expect(JSON.stringify(ses[0].Resource)).toContain(':identity/*');
+    expect(ses[0].Condition).toEqual({ StringEquals: { 'ses:FromAddress': 'nadawca@example.com' } });
     const sm = dla('secretsmanager:GetSecretValue');
     expect(JSON.stringify(sm[0].Resource)).toContain('secret:cognifly-test/*');
     // żadnych gwiazdek na zasobach
@@ -142,6 +158,7 @@ describe('stos CogniFly', () => {
       UsernameAttributes: ['email'],
       AutoVerifiedAttributes: ['email'],
       AdminCreateUserConfig: { AllowAdminCreateUserOnly: true },
+      EmailConfiguration: Match.objectLike({ EmailSendingAccount: 'DEVELOPER', From: 'nadawca@example.com' }),
       Policies: { SignInPolicy: { AllowedFirstAuthFactors: ['PASSWORD', 'EMAIL_OTP'] } },
     });
     t.hasResourceProperties('AWS::Cognito::UserPoolClient', {
@@ -149,11 +166,14 @@ describe('stos CogniFly', () => {
       ExplicitAuthFlows: Match.arrayWith(['ALLOW_USER_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH']),
     });
     const [, k] = zasoby('AWS::Cognito::UserPoolClient')[0]!;
+    expect(k.Properties.AllowedOAuthFlows).toBeUndefined();
+    expect(k.Properties.CallbackURLs).toBeUndefined();
+    expect(k.Properties.AllowedOAuthFlowsUserPoolClient ?? false).toBe(false);
     expect(k.Properties.ExplicitAuthFlows.sort()).toEqual(['ALLOW_REFRESH_TOKEN_AUTH', 'ALLOW_USER_AUTH']);
   });
 
   test('alarmy błędów Lambd -> SNS -> e-mail', () => {
-    t.resourceCountIs('AWS::CloudWatch::Alarm', 4);
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 6);
     t.hasResourceProperties('AWS::CloudWatch::Alarm', {
       MetricName: 'Errors', Namespace: 'AWS/Lambda', Threshold: 0,
       ComparisonOperator: 'GreaterThanThreshold', AlarmActions: [{ Ref: Match.stringLikeRegexp('Alarmy') }],

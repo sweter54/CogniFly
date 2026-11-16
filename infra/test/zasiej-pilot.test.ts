@@ -1,5 +1,7 @@
-import { describe, expect, test } from 'vitest';
-import { przeczytajOpcje, regulaPilota, zasiej } from '../skrypty/zasiej-pilot.js';
+import { describe, expect, test, vi } from 'vitest';
+import { ResourceNotFoundException, CreateSecretCommand, DescribeSecretCommand, PutSecretValueCommand } from '@aws-sdk/client-secrets-manager';
+import { UserNotFoundException } from '@aws-sdk/client-cognito-identity-provider';
+import { przeczytajOpcje, regulaPilota, zasiej, type Zaleznosci } from '../skrypty/zasiej-pilot.js';
 
 describe('zasiej-pilot (tylko dry-run, bez AWS)', () => {
   test('wymaga e-maila Michała', () => {
@@ -22,6 +24,53 @@ describe('zasiej-pilot (tylko dry-run, bez AWS)', () => {
     expect(regulaPilota('michal')).toMatchObject({
       gdy: { zrodlo: 'github', typ: 'github.pr.*' }, firma: 'pilot', eskalacjaMin: 15,
       powiadom: { osoby: ['michal'], kanaly: ['email', 'discord'] }, przydziel: { osoby: ['michal'] },
+    });
+  });
+});
+
+describe('zasiej-pilot --wykonaj na atrapach (bez AWS)', () => {
+  const zbuduj = (opcje: { istniejacySekret: boolean; kontakt?: { discordWebhookRef?: string } }) => {
+    const sm = { send: vi.fn(async (c: unknown) => {
+      if (c instanceof DescribeSecretCommand && !opcje.istniejacySekret) {
+        throw new ResourceNotFoundException({ message: 'brak', $metadata: {} });
+      }
+      return {};
+    }) };
+    const cog = { send: vi.fn(async (c: { constructor: { name: string } }) => {
+      if (c.constructor.name === 'AdminGetUserCommand') return { UserAttributes: [{ Name: 'sub', Value: 'sub-1' }] };
+      throw new UserNotFoundException({ message: 'x', $metadata: {} });
+    }) };
+    const dane = {
+      zapiszTozsamosc: vi.fn(async () => {}), zapiszOsobe: vi.fn(async () => {}), zapiszRegule: vi.fn(async () => {}),
+      zapiszKontakt: vi.fn(async () => {}), kontaktOsoby: vi.fn(async () => opcje.kontakt ?? {}),
+    };
+    return { sm, cog, dane, zal: { sm, cog, dane } as unknown as Zaleznosci };
+  };
+  const opcje = (...a: string[]) => przeczytajOpcje(['--email-michal', 'm@example.com', '--pula', 'pula-1', '--wykonaj', ...a], {});
+  const polecenia = (sm: { send: { mock: { calls: unknown[][] } } }, K: new (...a: never[]) => unknown) =>
+    sm.send.mock.calls.filter(([c]) => c instanceof K);
+
+  test('istniejący sekret GitHuba bez --sekret-github zostaje nietknięty', async () => {
+    const m = zbuduj({ istniejacySekret: true });
+    await zasiej(opcje(), () => {}, m.zal);
+    expect(polecenia(m.sm, CreateSecretCommand)).toHaveLength(0);
+    expect(polecenia(m.sm, PutSecretValueCommand)).toHaveLength(0);
+  });
+
+  test('brakujący sekret GitHuba jest tworzony, a jawnie podany nadpisywany', async () => {
+    const m = zbuduj({ istniejacySekret: false });
+    await zasiej(opcje(), () => {}, m);
+    expect(polecenia(m.sm, CreateSecretCommand)).toHaveLength(1);
+    const m2 = zbuduj({ istniejacySekret: true });
+    await zasiej(opcje('--sekret-github', 'jawny'), () => {}, m2.zal);
+    expect(polecenia(m2.sm, DescribeSecretCommand)).toHaveLength(0);
+  });
+
+  test('ponowny przebieg bez --discord nie gubi discordWebhookRef w kontakcie', async () => {
+    const m = zbuduj({ istniejacySekret: true, kontakt: { discordWebhookRef: 'cognifly-test/discord/pilot/michal' } });
+    await zasiej(opcje(), () => {}, m.zal);
+    expect(m.dane.zapiszKontakt).toHaveBeenCalledWith('pilot', 'michal', {
+      email: 'm@example.com', discordWebhookRef: 'cognifly-test/discord/pilot/michal',
     });
   });
 });
