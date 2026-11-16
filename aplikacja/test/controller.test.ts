@@ -27,6 +27,8 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
       return json(200, { AuthenticationResult: { AccessToken: 'A', RefreshToken: 'R', ExpiresIn: 3600 } });
     }
     if (url.endsWith('/ja')) return json(200, { firmy: state.firmy });
+    if (url.endsWith('/osoby')) return json(200, { osoby: [{ osoba: 'ania' }, { osoba: 'michal' }] });
+    if (url.endsWith('/recenzje')) return json(200, { zadanie: task(9) });
     if (url.endsWith('/skrzynka')) return json(200, { zadania: state.inbox });
     if (url.endsWith('/biore')) return json(409, { kod: 'ZAJETE', wlasciciel: 'szymon' });
     return json(404, { kod: 'NIE_ZNALEZIONO' });
@@ -243,5 +245,14 @@ describe('Controller', () => {
     await c.start();
     await c.focusTask(id(1));
     expect(ports.showScreen).toHaveBeenLastCalledWith('login');
+  });
+
+  it('review request: lists people and creates the task; bad params fail before the network', async () => {
+    const { c } = setup({ inbox: [] });
+    await c.start();
+    const h = c.handlers();
+    expect(await h['people.list']!({})).toEqual({ people: [{ osoba: 'ania' }, { osoba: 'michal' }] });
+    expect(await h['review.request']!({ repo: 'o/r', pr: 4, reviewers: ['ania'] })).toEqual({ taskId: id(9) });
+    await expect(h['review.request']!({ repo: 'o/r', pr: 'x', reviewers: ['ania'] })).rejects.toMatchObject({ code: 'ZLY_PR' });
   });
 });

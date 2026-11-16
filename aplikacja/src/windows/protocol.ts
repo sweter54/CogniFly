@@ -44,5 +44,7 @@ export interface Methods {
   'task.openInClaude': { params: { id: string }; result: { ok: true } };
   'config.pickFolder': { params: { current: string }; result: { path: string | null } };
   'config.setWorkFolder': { params: { path: string }; result: { ok: true } };
+  'people.list': { params: Record<string, never>; result: { people: { osoba: string; github?: string }[] } };
+  'review.request': { params: { repo: string; pr: number; reviewers: string[] }; result: { taskId: string } };
 }
 export type Method = keyof Methods;

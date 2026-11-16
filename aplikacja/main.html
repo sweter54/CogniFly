@@ -79,8 +79,23 @@
       <section id="screen-inbox" hidden>
         <div class="bar">
           <h1>Skrzynka</h1>
-          <button type="button" id="refresh" class="secondary">Odśwież</button>
+          <div class="actions">
+            <button type="button" id="review-open" class="secondary">Poproś o code review</button>
+            <button type="button" id="refresh" class="secondary">Odśwież</button>
+          </div>
         </div>
+        <form id="review-form" class="card" novalidate hidden>
+          <h2>Poproś o code review swoich zmian</h2>
+          <label>Repozytorium <input name="repo" placeholder="właściciel/nazwa" spellcheck="false" required /></label>
+          <label>Numer PR <input name="pr" inputmode="numeric" required /></label>
+          <fieldset id="reviewers">
+            <legend>Kto ma zrecenzować</legend>
+          </fieldset>
+          <div class="actions">
+            <button type="button" id="review-cancel" class="secondary">Anuluj</button>
+            <button type="submit">Wyślij prośbę</button>
+          </div>
+        </form>
         <ul id="list" class="tasks"></ul>
         <h2 id="done-title" hidden></h2>
         <ul id="done-list" class="tasks"></ul>

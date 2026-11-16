@@ -42,6 +42,11 @@ const MESSAGES: Record<string, string> = {
   CLAUDE_NOT_FOUND: 'Nie znaleziono aplikacji Claude. Zainstaluj Claude na Maca i spróbuj ponownie.',
   BAD_TASK_ID: 'Nieprawidłowy identyfikator zadania.',
   BAD_COMPANY: 'Nie należysz do tej firmy.',
+  ZLE_REPO: 'Podaj repozytorium w postaci właściciel/nazwa.',
+  ZLY_PR: 'Podaj numer PR (liczba).',
+  ZLI_RECENZENCI: 'Wybierz co najmniej jedną osobę z firmy.',
+  BRAK_PR: 'Nie ma takiego PR (albo CogniFly go nie widzi).',
+  PR_ZAMKNIETY: 'Ten PR jest już zamknięty.',
   NO_WORK_FOLDER: 'Najpierw wybierz folder pracy.',
   BAD_FOLDER: 'Tego folderu nie można użyć. Wybierz folder na tym Macu (pełna ścieżka).',
 };

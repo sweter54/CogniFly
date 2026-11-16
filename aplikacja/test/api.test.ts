@@ -74,4 +74,24 @@ describe('ApiClient', () => {
     expect(await api.me()).toEqual([{ firma: 'pilot', osoba: 'michal' }]);
     expect(calls[0]!.url).toBe(`${DEFAULT_CONFIG.apiUrl}/ja`);
   });
+
+  it('people: GET /osoby; requestReview: POST /recenzje with reviewers', async () => {
+    const { api, calls } = setup([
+      { status: 200, body: { osoby: [{ osoba: 'ania', github: 'ania-gh' }, { osoba: 'michal' }, { zle: 1 }] } },
+      { status: 200, body: { zadanie: task({ stan: 'nowe' }) } },
+      { status: 409, body: { kod: 'PR_ZAMKNIETY' } },
+    ]);
+    expect(await api.people()).toEqual([{ osoba: 'ania', github: 'ania-gh' }, { osoba: 'michal' }]);
+    expect((await api.requestReview('o/r', 4, ['ania'])).id).toBe(ID);
+    expect(calls[1]!.body).toEqual({ repo: 'o/r', pr: 4, recenzenci: ['ania'] });
+    await expect(api.requestReview('o/r', 4, ['ania'])).rejects.toEqual(new ApiError(409, 'PR_ZAMKNIETY'));
+  });
+
+  it('requestReview validates locally before any request', async () => {
+    const { api, calls } = setup([]);
+    await expect(api.requestReview('zle', 4, ['ania'])).rejects.toMatchObject({ code: 'ZLE_REPO' });
+    await expect(api.requestReview('o/r', 0, ['ania'])).rejects.toMatchObject({ code: 'ZLY_PR' });
+    await expect(api.requestReview('o/r', 4, [])).rejects.toMatchObject({ code: 'ZLI_RECENZENCI' });
+    expect(calls).toHaveLength(0);
+  });
 });

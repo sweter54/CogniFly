@@ -1,6 +1,6 @@
 // Client of the CogniFly HTTP API (Cognito JWT + X-Cognifly-Firma).
 import {
-  TASK_ID_PATTERN, USER_SETTABLE_STATES, type MeResponse, type Task, type UserSettableState,
+  isRepo, TASK_ID_PATTERN, USER_SETTABLE_STATES, type MeResponse, type Person, type Task, type UserSettableState,
 } from '@cognifly/wspolne/api';
 import type { AppConfig } from './config.js';
 import { ApiError, LoginRequiredError } from './errors.js';
@@ -43,6 +43,39 @@ export class ApiClient {
     if (r.status !== 200) throw apiError(r);
     const list = (r.json as { firmy?: unknown }).firmy;
     return Array.isArray(list) ? list.filter(isMembership) : [];
+  }
+
+  /**
+   * People of the company (reviewer picker).
+   *
+   * Call: `await api.people()` (`GET /osoby`).
+   * Expects: a session.
+   * Output: well-formed people (`osoba`, optional `github`).
+   * Throws: `ApiError`, session errors.
+   */
+  async people(): Promise<Person[]> {
+    const r = await this.call('GET', '/osoby');
+    if (r.status !== 200) throw apiError(r);
+    const list = (r.json as { osoby?: unknown }).osoby;
+    return Array.isArray(list) ? list.filter(isPerson) : [];
+  }
+
+  /**
+   * Asks colleagues to review a PR.
+   *
+   * Call: `await api.requestReview(repo, pr, reviewers)` (`POST /recenzje`).
+   * Expects: `owner/name`, a positive PR number, 1+ person ids.
+   * Output: the created "Prośba o recenzję" task.
+   * Throws: `ApiError(400, 'ZLE_REPO' | 'ZLY_PR' | 'ZLI_RECENZENCI')`
+   * locally; server codes (`BRAK_PR`, `PR_ZAMKNIETY`, …) otherwise.
+   */
+  async requestReview(repo: string, pr: number, reviewers: string[]): Promise<Task> {
+    if (!isRepo(repo)) throw new ApiError(400, 'ZLE_REPO');
+    if (!Number.isInteger(pr) || pr < 1) throw new ApiError(400, 'ZLY_PR');
+    if (!reviewers.length) throw new ApiError(400, 'ZLI_RECENZENCI');
+    const r = await this.call('POST', '/recenzje', { repo, pr, recenzenci: reviewers });
+    if (r.status !== 200) throw apiError(r);
+    return taskFrom(r);
   }
 
   /**
@@ -186,4 +219,18 @@ function isMembership(x: unknown): x is Membership {
   if (typeof x !== 'object' || x === null) return false;
   const m = x as Record<string, unknown>;
   return typeof m.firma === 'string' && m.firma !== '' && typeof m.osoba === 'string' && m.osoba !== '';
+}
+
+/**
+ * Checks one `GET /osoby` entry.
+ *
+ * Call: `isPerson(x)`.
+ * Expects: anything from the network.
+ * Output: true when `osoba` is a non-empty string and `github`, if
+ * present, is a string.
+ */
+function isPerson(x: unknown): x is Person {
+  if (typeof x !== 'object' || x === null) return false;
+  const p = x as Record<string, unknown>;
+  return typeof p.osoba === 'string' && p.osoba !== '' && (p.github === undefined || typeof p.github === 'string');
 }

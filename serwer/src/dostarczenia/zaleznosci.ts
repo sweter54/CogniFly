@@ -1,23 +1,14 @@
 // Dependencies between deliveries (pull requests): explicit "Zależy od:"
 // lines in the PR description and PRs stacked on another PR's branch.
+import { isRepo } from '@cognifly/wspolne/api';
+
+export { isRepo };
 
 /** A pull request in a repository (`owner/name`). */
 export interface PrRef { repo: string; number: number }
 
 const LINE = /^\s*(?:zależy od|zalezy od|depends on)\s*:(.*)$/gimu;
 const ITEM = /(?:^|[\s,;(])((?:[A-Za-z0-9][\w.-]*\/[\w.-]+)?)#(\d{1,7})\b/g;
-const REPO = /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9_.-]+$/;
-
-/**
- * Checks an `owner/name` repository string.
- *
- * Call: `isRepo('o/r')`.
- * Expects: any string.
- * Output: true for GitHub-like `owner/name` without `..` segments.
- */
-export function isRepo(repo: string): boolean {
-  return REPO.test(repo) && !repo.split('/').includes('..');
-}
 
 /**
  * Stable key of a PR reference.

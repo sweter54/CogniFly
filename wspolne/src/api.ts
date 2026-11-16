@@ -35,6 +35,21 @@ export interface Task {
 /** Task id format accepted by the API (12 or 24 hex digits). */
 export const TASK_ID_PATTERN = /^zad_(?:[0-9a-f]{12}|[0-9a-f]{24})$/;
 
+/**
+ * Checks an `owner/name` GitHub repository string.
+ *
+ * Call: `isRepo('o/r')`.
+ * Expects: any string.
+ * Output: true for `owner/name` made of letters, digits, `_`, `.`,
+ * `-` (owner starting alphanumeric) without `..` segments.
+ */
+export function isRepo(repo: string): boolean {
+  return /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9_.-]+$/.test(repo) && !repo.split('/').includes('..');
+}
+
+/** A person of the company (`GET /osoby`). */
+export interface Person { osoba: string; github?: string }
+
 /** `GET /skrzynka` → 200 */
 export interface InboxResponse { zadania: Task[] }
 /** `POST /zadania/{id}/biore|stan` → 200 */

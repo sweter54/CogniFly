@@ -167,6 +167,8 @@ export class Controller {
       'task.openInClaude': (p) => this.openInClaude(text(p, 'id')),
       'config.pickFolder': (p) => this.pickFolder(text(p, 'current')),
       'config.setWorkFolder': (p) => this.setWorkFolder(text(p, 'path')),
+      'people.list': async () => ({ people: await this.api().people() }),
+      'review.request': (p) => this.requestReview(p),
       'session.logout': async () => {
         await this.logout();
         return { ok: true };
@@ -337,6 +339,22 @@ export class Controller {
     await this.api().setState(id, state as UserSettableState);
     void this.poll();
     return { ok: true };
+  }
+
+  /**
+   * Asks colleagues to review a PR and refreshes the inbox.
+   *
+   * Call: rpc `review.request` with `{ repo, pr, reviewers }`.
+   * Expects: values from the form (validated by `ApiClient`).
+   * Output: `{ taskId }` of the created review-request task.
+   */
+  private async requestReview(p: unknown): Promise<{ taskId: string }> {
+    const reviewers = field(p, 'reviewers');
+    const list = Array.isArray(reviewers) ? reviewers.filter((r): r is string => typeof r === 'string') : [];
+    const pr = field(p, 'pr');
+    const task = await this.api().requestReview(text(p, 'repo'), typeof pr === 'number' ? pr : NaN, list);
+    void this.poll();
+    return { taskId: task.id };
   }
 
   /**
