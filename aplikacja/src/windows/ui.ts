@@ -41,6 +41,7 @@ const MESSAGES: Record<string, string> = {
   VAULT_UNAVAILABLE: 'Pęk kluczy jest niedostępny.',
   CLAUDE_NOT_FOUND: 'Nie znaleziono aplikacji Claude. Zainstaluj Claude na Maca i spróbuj ponownie.',
   BAD_TASK_ID: 'Nieprawidłowy identyfikator zadania.',
+  NO_WORK_FOLDER: 'Najpierw wybierz folder pracy.',
   BAD_FOLDER: 'Tego folderu nie można użyć. Wybierz folder na tym Macu (pełna ścieżka).',
 };
 
@@ -116,4 +117,21 @@ export function formValues(form: HTMLFormElement): Record<string, string> {
  */
 export async function hideSelf(): Promise<void> {
   await getCurrentWebviewWindow().hide();
+}
+
+/** How long to wait for the user in the folder dialog. */
+const PICKER_WAIT_MS = 10 * 60_000;
+
+/**
+ * Asks the background window to show the folder picker.
+ *
+ * Call: `await pickFolder(call, currentPath)`.
+ * Expects: a connected `call`; `currentPath` may be `''`.
+ * Output: the chosen path, or `null` when cancelled. Waits up to
+ * 10 minutes for the user.
+ * Throws: `RpcError` (e.g. `BAD_FOLDER`).
+ */
+export async function pickFolder(call: Call, currentPath: string): Promise<string | null> {
+  const { path } = await call('config.pickFolder', { current: currentPath }, PICKER_WAIT_MS);
+  return path;
 }

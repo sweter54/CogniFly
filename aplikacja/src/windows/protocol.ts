@@ -22,6 +22,8 @@ export interface InboxView {
   tasks: Task[];
   /** ISO time of the last successful poll, or `null`. */
   updatedAt: string | null;
+  /** Work folder for Claude; `''` means setup is not finished. */
+  workFolder: string;
 }
 
 /** Methods served by the background window: params → result. */
@@ -37,5 +39,6 @@ export interface Methods {
   'session.logout': { params: Record<string, never>; result: { ok: true } };
   'task.openInClaude': { params: { id: string }; result: { ok: true } };
   'config.pickFolder': { params: { current: string }; result: { path: string | null } };
+  'config.setWorkFolder': { params: { path: string }; result: { ok: true } };
 }
 export type Method = keyof Methods;

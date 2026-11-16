@@ -11,7 +11,7 @@
 - W linku i poleceniu wyłącznie id zadania pasujące do `TASK_ID_PATTERN`.
 - Odpowiedź `GET /zadania/{id}` bez `zdarzenie.dane` i bez `podmiot.galaz`; dostęp tylko kandydat/właściciel.
 - Opener: tylko `claude://*`, tylko okno `background`.
-- Folder pracy: opcjonalny, ścieżka bezwzględna, bez `..`, bez znaków sterujących, ≤ 1024 znaki.
+- Folder pracy: wymagany (krok konfiguracji), ścieżka bezwzględna, bez `..`, bez znaków sterujących, ≤ 1024 znaki.
 - Nowy kod po angielsku z opisami funkcji (≤ 20 linii × 75 znaków); kod serwera i wtyczki zachowuje istniejące polskie nazewnictwo modułów, które rozszerza.
 - `npm test` zielony; wdrożenie na pilota tylko po zgodzie Michała.
 

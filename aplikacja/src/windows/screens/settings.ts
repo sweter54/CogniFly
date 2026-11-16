@@ -1,6 +1,6 @@
 // Settings screen: API address, Cognito client, region, company.
 import type { AppConfig } from '../../logic/config.js';
-import { byId, formValues, messageFor, setBusy, setStatus, type Call } from '../ui.js';
+import { byId, formValues, messageFor, pickFolder, setBusy, setStatus, type Call } from '../ui.js';
 
 /** Polish hints for invalid fields. */
 const FIELD_HINTS: Record<keyof AppConfig, string> = {
@@ -8,11 +8,8 @@ const FIELD_HINTS: Record<keyof AppConfig, string> = {
   clientId: 'Klient Cognito może zawierać tylko litery i cyfry.',
   region: 'Region ma postać np. eu-central-1.',
   company: 'Firma: małe litery, cyfry i myślniki.',
-  workFolder: 'Folder pracy: pełna ścieżka zaczynająca się od / (bez „..”), albo puste pole.',
+  workFolder: 'Wybierz folder pracy przyciskiem „Wybierz…” — jest wymagany.',
 };
-
-/** How long to wait for the user in the folder dialog. */
-const PICKER_WAIT_MS = 10 * 60_000;
 
 /** Handle returned by `mountSettings`. */
 export interface SettingsScreen { load(): Promise<void> }
@@ -61,7 +58,7 @@ async function save(call: Call, form: HTMLFormElement): Promise<void> {
  */
 async function chooseFolder(call: Call, input: HTMLInputElement): Promise<void> {
   try {
-    const { path } = await call('config.pickFolder', { current: input.value.trim() }, PICKER_WAIT_MS);
+    const path = await pickFolder(call, input.value.trim());
     if (path === null) return;
     input.value = path;
     setStatus('Wybrano folder — kliknij „Zapisz”.', 'info');
@@ -89,9 +86,6 @@ export function mountSettings(call: Call, back: () => void): SettingsScreen {
   byId('settings-back').addEventListener('click', back);
   const folder = byId<HTMLInputElement>('work-folder');
   byId('pick-folder').addEventListener('click', () => void chooseFolder(call, folder));
-  byId('clear-folder').addEventListener('click', () => {
-    folder.value = '';
-  });
   return {
     async load() {
       const r = await call('config.get', {});

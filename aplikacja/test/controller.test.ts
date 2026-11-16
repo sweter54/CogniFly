@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_CONFIG } from '../src/logic/config.js';
 import { Controller, waitingCount, type Ports } from '../src/logic/controller.js';
 import { NetworkError } from '../src/logic/errors.js';
 import type { FetchFn } from '../src/logic/http.js';
@@ -114,7 +115,7 @@ describe('Controller', () => {
     const h = c.handlers();
     const { config } = (await h['config.get']!({})) as { config: Record<string, string> };
     expect(await h['config.save']!({ config: { ...config, region: 'zly' } })).toEqual({ ok: false, field: 'region' });
-    expect(await h['config.save']!({ config: { ...config, clientId: 'innyklient' } })).toEqual({ ok: true });
+    expect(await h['config.save']!({ config: { ...config, workFolder: '/Users/m', clientId: 'innyklient' } })).toEqual({ ok: true });
     expect(await ports.vault.read()).toBeNull();
     expect(c.current().loggedIn).toBe(false);
   });
@@ -175,6 +176,7 @@ describe('Controller', () => {
 
   it('reports CLAUDE_NOT_FOUND when the OS cannot open claude://', async () => {
     const { ports } = setup();
+    ports.store.setItem('cognifly.config', JSON.stringify({ ...DEFAULT_CONFIG, workFolder: '/Users/m' }));
     const c = new Controller({ ...ports, openUrl: async () => { throw new Error('no handler'); } });
     await expect(c.handlers()['task.openInClaude']!({ id: id(1) })).rejects.toMatchObject({ code: 'CLAUDE_NOT_FOUND' });
     await expect(c.handlers()['task.openInClaude']!({ id: 'x&q=1' })).rejects.toMatchObject({ code: 'BAD_TASK_ID' });
@@ -190,5 +192,28 @@ describe('Controller', () => {
     expect(await cancelled.handlers()['config.pickFolder']!({ current: '/Users/m' })).toEqual({ path: null });
     const unsafe = new Controller({ ...ports, pickFolder: async () => '/Volumes/x/../y' });
     await expect(unsafe.handlers()['config.pickFolder']!({ current: '' })).rejects.toMatchObject({ code: 'BAD_FOLDER' });
+  });
+
+  it('work folder is required: setup opens after login, settings refuse empty, Claude waits', async () => {
+    const { c, ports } = setup({ inbox: [] });
+    await c.start();
+    expect(ports.showScreen).toHaveBeenCalledWith('login');
+    const h = c.handlers();
+    const { config } = (await h['config.get']!({})) as { config: Record<string, string> };
+    expect(await h['config.save']!({ config: { ...config, workFolder: '' } })).toEqual({ ok: false, field: 'workFolder' });
+    await expect(h['task.openInClaude']!({ id: id(1) })).rejects.toMatchObject({ code: 'NO_WORK_FOLDER' });
+    await expect(h['config.setWorkFolder']!({ path: 'wzgledny' })).rejects.toMatchObject({ code: 'BAD_FOLDER' });
+    expect(await h['config.setWorkFolder']!({ path: '/Users/m/repo' })).toEqual({ ok: true });
+    expect(c.current().workFolder).toBe('/Users/m/repo');
+    expect(JSON.parse(ports.store.getItem('cognifly.config')!).workFolder).toBe('/Users/m/repo');
+    await h['task.openInClaude']!({ id: id(1) });
+    expect(ports.openUrl).toHaveBeenCalledTimes(1);
+  });
+
+  it('logged in with a folder: no setup screen at start', async () => {
+    const { ports } = setup({ inbox: [] });
+    ports.store.setItem('cognifly.config', JSON.stringify({ ...DEFAULT_CONFIG, workFolder: '/Users/m' }));
+    await new Controller(ports).start();
+    expect(ports.showScreen).not.toHaveBeenCalled();
   });
 });

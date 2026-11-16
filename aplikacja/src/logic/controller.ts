@@ -5,7 +5,7 @@ import type { Task, UserSettableState } from '@cognifly/wspolne/api';
 import type { InboxView, Methods, Screen } from '../windows/protocol.js';
 import { ApiClient } from './api.js';
 import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, type PendingLogin } from './cognito.js';
-import { DEFAULT_CONFIG, isSafeFolder, loadConfig, saveConfig, type AppConfig } from './config.js';
+import { DEFAULT_CONFIG, isSafeFolder, loadConfig, saveConfig, validateConfig, type AppConfig } from './config.js';
 import { claudeLink } from './claude-link.js';
 import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
 import type { FetchFn } from './http.js';
@@ -43,7 +43,7 @@ export class Controller {
   private readonly session: SessionManager;
   private pending: PendingLogin | null = null;
   private polling: Promise<InboxView> | null = null;
-  private view: InboxView = { loggedIn: false, offline: false, email: null, tasks: [], updatedAt: null };
+  private view: InboxView;
 
   /**
    * Call: `new Controller(ports)`.
@@ -52,6 +52,7 @@ export class Controller {
    */
   constructor(private readonly ports: Ports) {
     this.config = loadConfig(ports.store);
+    this.view = { loggedIn: false, offline: false, email: null, tasks: [], updatedAt: null, workFolder: this.config.workFolder };
     this.session = new SessionManager(ports.vault, (rt) => refreshTokens(this.cognito(), rt), ports.now);
   }
 
@@ -61,7 +62,8 @@ export class Controller {
    * Call: `await controller.start()` when the background window loads.
    * Expects: nothing.
    * Output: the first view; without a session (or when the keychain
-   * refuses access) the main window opens on the guided login.
+   * refuses access) or without a work folder, the main window opens
+   * on the guided setup.
    */
   async start(): Promise<InboxView> {
     let s: Awaited<ReturnType<SessionManager['current']>>;
@@ -76,6 +78,7 @@ export class Controller {
       await this.ports.showScreen('login');
       return this.view;
     }
+    if (!this.config.workFolder) await this.ports.showScreen('login');
     return this.poll();
   }
 
@@ -139,6 +142,7 @@ export class Controller {
       'inbox.setState': (p) => this.setState(text(p, 'id'), text(p, 'state')),
       'task.openInClaude': (p) => this.openInClaude(text(p, 'id')),
       'config.pickFolder': (p) => this.pickFolder(text(p, 'current')),
+      'config.setWorkFolder': (p) => this.setWorkFolder(text(p, 'path')),
       'session.logout': async () => {
         await this.logout();
         return { ok: true };
@@ -212,15 +216,17 @@ export class Controller {
    *
    * Call: rpc `config.save`.
    * Expects: raw settings from the form.
-   * Output: `{ ok: true }` or the invalid field. Changing the user
-   * pool (region/client id) logs out; changing API or company resets
-   * the notification memory so nothing old is announced as new.
+   * Output: `{ ok: true }` or the invalid field; the work folder is
+   * required. Changing the user pool (region/client id) logs out;
+   * changing API or company resets the notification memory so
+   * nothing old is announced as new.
    */
   private async saveSettings(input: unknown): Promise<Methods['config.save']['result']> {
     const before = this.config;
-    const check = saveConfig(this.ports.store, input);
+    const check = validateConfig(input);
     if (!check.ok) return check;
-    this.config = check.config;
+    if (!check.config.workFolder) return { ok: false, field: 'workFolder' };
+    this.applyConfig(check.config);
     if (before.region !== check.config.region || before.clientId !== check.config.clientId) await this.logout();
     else if (before.apiUrl !== check.config.apiUrl || before.company !== check.config.company) clearSeen(this.ports.store);
     void this.poll();
@@ -292,6 +298,33 @@ export class Controller {
   }
 
   /**
+   * Stores the work folder chosen in the guided setup.
+   *
+   * Call: rpc `config.setWorkFolder`.
+   * Expects: a path from the folder picker.
+   * Output: `{ ok: true }`; the view's `workFolder` is updated.
+   * Throws: `AppError('BAD_FOLDER')` for an unsafe or empty path.
+   */
+  private async setWorkFolder(path: string): Promise<{ ok: true }> {
+    if (!isSafeFolder(path)) throw new AppError('BAD_FOLDER');
+    this.applyConfig({ ...this.config, workFolder: path });
+    return { ok: true };
+  }
+
+  /**
+   * Saves a validated config and reflects the folder in the view.
+   *
+   * Call: `this.applyConfig(config)`.
+   * Expects: a config that passed `validateConfig`.
+   * Output: none; stored, kept in memory and rendered.
+   */
+  private applyConfig(config: AppConfig): void {
+    saveConfig(this.ports.store, config);
+    this.config = config;
+    this.update({ workFolder: config.workFolder });
+  }
+
+  /**
    * Lets the user pick the work folder in the OS dialog.
    *
    * Call: rpc `config.pickFolder` from the settings screen.
@@ -315,10 +348,15 @@ export class Controller {
    * Call: rpc `task.openInClaude`.
    * Expects: a task id; the link holds only the id and the work folder.
    * Output: `{ ok: true }` once the OS accepted the link.
-   * Throws: `AppError('BAD_TASK_ID')`, `AppError('CLAUDE_NOT_FOUND')`
-   * when no app handles `claude://` (the cause is logged).
+   * Throws: `AppError('NO_WORK_FOLDER')` before setup is finished,
+   * `AppError('BAD_TASK_ID')`, `AppError('CLAUDE_NOT_FOUND')` when no
+   * app handles `claude://` (the cause is logged).
    */
   private async openInClaude(id: string): Promise<{ ok: true }> {
+    if (!this.config.workFolder) {
+      await this.ports.showScreen('login');
+      throw new AppError('NO_WORK_FOLDER');
+    }
     const link = claudeLink(id, this.config.workFolder);
     try {
       await this.ports.openUrl(link);

@@ -25,7 +25,8 @@
         <ol class="steps" aria-label="Postęp logowania">
           <li data-step="email">1. E-mail</li>
           <li data-step="code">2. Kod z maila</li>
-          <li data-step="done">3. Gotowe</li>
+          <li data-step="folder">3. Folder pracy</li>
+          <li data-step="done">4. Gotowe</li>
         </ol>
 
         <div data-pane="email">
@@ -51,6 +52,17 @@
               <button type="submit">Zaloguj</button>
             </div>
           </form>
+        </div>
+
+        <div data-pane="folder" hidden>
+          <h1>Wybierz folder pracy</h1>
+          <p>W tym folderze CogniFly i Claude będą trzymać pliki zadań — najlepiej folder z Twoim projektem
+            (np. klon repozytorium). Tu otworzy się sesja Claude po kliknięciu „Pracuj w Claude”.</p>
+          <div class="folder-choice">
+            <button type="button" id="setup-pick-folder">Wybierz folder…</button>
+            <code id="setup-folder" class="muted">Nie wybrano folderu</code>
+          </div>
+          <div class="actions"><button type="button" id="setup-folder-next" disabled>Dalej</button></div>
         </div>
 
         <div data-pane="done" hidden>
@@ -97,13 +109,12 @@
           <label>Klient Cognito <input name="clientId" required /></label>
           <label>Region <input name="region" required /></label>
           <label>Firma <input name="company" /></label>
-          <label for="work-folder">Folder pracy dla Claude (opcjonalnie)</label>
+          <label for="work-folder">Folder pracy (pliki zadań, sesje Claude)</label>
           <div class="folder-row">
-            <input id="work-folder" name="workFolder" placeholder="Nie wybrano folderu" spellcheck="false" />
+            <input id="work-folder" name="workFolder" placeholder="Nie wybrano folderu" spellcheck="false" readonly />
             <button type="button" id="pick-folder" class="secondary">Wybierz…</button>
-            <button type="button" id="clear-folder" class="secondary">Wyczyść</button>
           </div>
-          <p class="hint">W tym folderze „Pracuj w Claude” otworzy sesję Claude Code (np. klon repozytorium). Claude poprosi o potwierdzenie folderu.</p>
+          <p class="hint">Folder zmieniasz przyciskiem „Wybierz…”. W nim „Pracuj w Claude” otwiera sesję Claude Code (Claude poprosi o potwierdzenie).</p>
           <div class="actions">
             <button type="button" id="defaults" class="secondary">Przywróć domyślne</button>
             <button type="button" id="settings-back" class="secondary">Wróć</button>

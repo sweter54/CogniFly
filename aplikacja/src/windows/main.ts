@@ -19,9 +19,20 @@ const SCREENS: Screen[] = ['login', 'inbox', 'settings'];
  * Output: none; nav and logout show only when logged in.
  */
 function renderHeader(view: InboxView): void {
-  byId('nav').hidden = !view.loggedIn;
+  byId('nav').hidden = needsSetup(view);
   byId('logout').hidden = !view.loggedIn;
   byId('who').textContent = view.loggedIn ? (view.email ?? '') : '';
+}
+
+/**
+ * Tells whether the guided setup still has steps to do.
+ *
+ * Call: `needsSetup(view)`.
+ * Expects: a view.
+ * Output: `true` when logged out or when no work folder is chosen.
+ */
+function needsSetup(view: InboxView): boolean {
+  return !view.loggedIn || !view.workFolder;
 }
 
 /**
@@ -51,21 +62,23 @@ async function main(): Promise<void> {
   const call = await connect();
   let view = await call('inbox.get', {});
   let current: Screen = 'login';
-  const login = mountLogin(call);
+  const login = mountLogin(call, () => view.workFolder !== '');
   const inbox = mountInbox(call);
   const settings = mountSettings(call, () => go(view.loggedIn ? 'inbox' : 'login'));
 
   /**
-   * Navigates to a screen (logged-out users cannot open the inbox).
+   * Navigates to a screen; until setup is finished (logged in and a
+   * work folder chosen) only the setup and settings are reachable.
    * Call: `go(screen)`. Expects: any screen.
    * Output: none.
    */
   function go(screen: Screen): void {
-    current = screen === 'inbox' && !view.loggedIn ? 'login' : screen;
+    current = needsSetup(view) && screen !== 'settings' ? 'login' : screen;
     showOnly(current);
     if (current === 'inbox') inbox.render(view);
     if (current === 'settings') settings.load().catch((e) => setStatus(messageFor(e), 'error'));
     if (current === 'login' && !view.loggedIn) login.reset();
+    else if (current === 'login' && !view.workFolder) login.showFolder();
   }
 
   /**

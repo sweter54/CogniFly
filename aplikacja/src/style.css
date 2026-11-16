@@ -43,3 +43,5 @@ section h1 { margin-bottom: 10px; }
 .folder-row { display: flex; gap: 8px; align-items: center; margin-top: -8px; }
 .folder-row input { flex: 1; min-width: 0; }
 label[for] { font-weight: 500; }
+.folder-choice { display: flex; gap: 12px; align-items: center; margin: 12px 0; }
+.folder-choice code { overflow-wrap: anywhere; }
