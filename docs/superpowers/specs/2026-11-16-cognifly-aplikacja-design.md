@@ -42,6 +42,20 @@ nowe zadanie albo eskalacja — bez Claude'a, bez terminala, bez Node.
 - **Bezpieczeństwo:** ścisłe CSP (`default-src 'self'`, bez `unsafe-inline` dla skryptów), brak shell/fs,
   tokeny nigdy w logach ani w zdarzeniach do innych okien.
 
+## Zmiany po testach z Michałem (2026-11-16)
+- **Jedno okno główne** `main` zamiast trzech (logowanie / skrzynka / ustawienia): prowadzone logowanie
+  krokami (e-mail → kod → gotowe), skrzynka i ustawienia w zakładkach. Okno `main` ma tylko uprawnienia
+  zdarzeń, ukrycia i logu.
+- **Dock i Cmd+Tab:** gdy okno jest otwarte, aplikacja jest zwykłą aplikacją (ikona w Docku, Cmd+Tab);
+  po zamknięciu okna wraca do samej ikony przy zegarze. Klik w Dock / ponowne uruchomienie → okno.
+- **Ikona przy zegarze:** lewy klik otwiera okno, prawy — menu; dokładnie jedna ikona (usuwana po przeładowaniu).
+- **Jedna instancja:** `tauri-plugin-single-instance`.
+- **Odpytywanie w tle:** okno `background` ma `backgroundThrottling: disabled`, a pakiet `NSAppSleepDisabled`
+  — bez tego macOS usypiał ukryte okno i odpytywanie stawało (dymki ginęły).
+- **Diagnostyka:** `tauri-plugin-log` (stdout + `~/Library/Logs/pl.cognifly.aplikacja/`): błędy okien, HTTP
+  (tylko host), RPC (kody), wynik każdego odpytania (liczby, bez treści).
+- **Rust** poza wtyczkami: komendy Pęku kluczy, ukrywanie okna, Dock (polityka aktywacji), `Reopen`.
+
 ## Zostawione budowniczemu
 Ikony, wygląd okien, nazwy zdarzeń, podział plików TS. Propozycja (nie w v1): prefiks wersji API `/v1` i
 nagłówek minimalnej wersji klienta.
