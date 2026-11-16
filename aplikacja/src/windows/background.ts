@@ -33,10 +33,15 @@ function codeAndLog(e: unknown): string {
  */
 async function main(): Promise<void> {
   let tray: Tray | null = null;
-  const render = (view: InboxView) => {
+  /**
+   * Shows a view in the tray and the main window.
+   * Call: as the controller's `render` port. Expects: a view.
+   * Output: none; tray errors go to the log.
+   */
+  function render(view: InboxView): void {
     tray?.render(view).catch((e) => reportError('tray.render', e));
     pushView(view);
-  };
+  }
   const controller = new Controller({ store: localStorage, vault: keychainVault, fetch: pluginFetch, notify, render, showScreen, log: reportInfo });
   await rpcServer(tauriBus(), controller.handlers(), codeAndLog);
   tray = await createTray({
@@ -51,8 +56,8 @@ async function main(): Promise<void> {
     return false;
   });
   reportInfo(`notifications allowed: ${allowed}`);
+  setInterval(() => void controller.poll(), POLL_INTERVAL_MS); // before start: polling survives start errors
   await controller.start();
-  setInterval(() => void controller.poll(), POLL_INTERVAL_MS);
 }
 
 installErrorLog('background');

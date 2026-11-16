@@ -26,6 +26,7 @@ export type Refresher = (refreshToken: string) => Promise<Tokens>;
 export class SessionManager {
   private cached: Session | null | undefined;
   private refreshing: Promise<Session> | null = null;
+  private generation = 0;
 
   /**
    * Call: `new SessionManager(vault, refresher, now?)`.
@@ -58,7 +59,20 @@ export class SessionManager {
    * Output: none; the session is in the vault and in memory.
    */
   async start(email: string, tokens: Tokens): Promise<void> {
+    this.generation += 1;
     await this.store({ ...tokens, email });
+  }
+
+  /**
+   * Identifies the current login.
+   *
+   * Call: `manager.epoch()` before an await; compare after it.
+   * Expects: nothing.
+   * Output: a number that changes on every login and logout, so work
+   * started for an earlier session can be dropped.
+   */
+  epoch(): number {
+    return this.generation;
   }
 
   /**
@@ -97,6 +111,7 @@ export class SessionManager {
    * Output: none; vault entry and memory are cleared.
    */
   async logout(): Promise<void> {
+    this.generation += 1;
     this.cached = null;
     await this.vault.remove();
   }
@@ -138,10 +153,13 @@ export class SessionManager {
    * Output: the new session, stored in the vault.
    * Throws: `LoginRequiredError` (and clears the vault) only for
    * `LOGOUT_ERRORS`; any other error (network, throttling) is
-   * rethrown and the session is kept.
+   * rethrown and the session is kept. A result that arrives after a
+   * logout/login in the meantime is dropped (`LoginRequiredError`),
+   * so a logout always sticks.
    */
   private async runRefresh(): Promise<Session> {
     const session = await this.requireSession();
+    const started = this.generation;
     let tokens: Tokens;
     try {
       tokens = await this.refresher(session.refreshToken);
@@ -152,6 +170,7 @@ export class SessionManager {
       }
       throw e;
     }
+    if (this.generation !== started) throw new LoginRequiredError();
     const next = { ...tokens, email: session.email };
     await this.store(next);
     return next;

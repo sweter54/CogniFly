@@ -130,4 +130,32 @@ describe('Controller', () => {
     state.offline = true;
     await expect(c.handlers()['login.sendCode']!({ email: 'm@x.pl' })).rejects.toBeInstanceOf(NetworkError);
   });
+
+  it('an inbox answer arriving after logout is dropped (no old tasks, no seen-set)', async () => {
+    const { c, ports, state } = setup({ inbox: [task(1)] });
+    await c.start();
+    state.inbox = [task(1), task(2)];
+    const poll = c.poll();
+    await c.logout();
+    await poll;
+    expect(c.current()).toMatchObject({ loggedIn: false, tasks: [] });
+    expect(ports.store.getItem('cognifly.seen')).toBeNull();
+    expect(ports.notify).not.toHaveBeenCalled();
+  });
+
+  it('a revoked session clears the notification memory', async () => {
+    const { ports } = setup({ inbox: [task(1)] });
+    ports.store.setItem('cognifly.seen', JSON.stringify(['x#nowe']));
+    const revoked: FetchFn = vi.fn(async (url: string) => json(url.includes('cognito') ? 400 : 401, { __type: 'NotAuthorizedException' }));
+    const c = new Controller({ ...ports, vault: memoryVault(JSON.stringify({ accessToken: 'A', refreshToken: 'R', expiresAt: NOW, email: 'm@x.pl' })), fetch: revoked });
+    await c.start();
+    expect(ports.store.getItem('cognifly.seen')).toBeNull();
+  });
+
+  it('a keychain refusal at start opens the login screen instead of failing', async () => {
+    const { ports } = setup();
+    const c = new Controller({ ...ports, vault: { read: async () => { throw 'VAULT_ERROR'; }, write: async () => undefined, remove: async () => undefined } });
+    expect((await c.start()).loggedIn).toBe(false);
+    expect(ports.showScreen).toHaveBeenCalledWith('login');
+  });
 });

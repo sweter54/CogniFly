@@ -66,4 +66,16 @@ describe('SessionManager', () => {
     await manager.logout();
     expect(vault.value()).toBeNull();
   });
+
+  it('a refresh that finishes after logout does not restore the session', async () => {
+    let finish!: (t: Tokens) => void;
+    const { manager, vault, refresher } = setup(session(NOW), vi.fn(() => new Promise<Tokens>((r) => { finish = r; })));
+    const pending = manager.accessToken();
+    pending.catch(() => undefined);
+    await vi.waitFor(() => expect(refresher).toHaveBeenCalled());
+    await manager.logout();
+    finish(fresh);
+    await expect(pending).rejects.toBeInstanceOf(LoginRequiredError);
+    expect(vault.value()).toBeNull();
+  });
 });

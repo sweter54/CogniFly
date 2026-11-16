@@ -40,19 +40,30 @@ export type ConfigCheck =
  * lowercase letters, digits and dashes (may be empty).
  */
 export function validateConfig(input: unknown): ConfigCheck {
-  const o = (typeof input === 'object' && input !== null ? input : {}) as Record<string, unknown>;
-  const text = (k: string) => (typeof o[k] === 'string' ? (o[k] as string).trim() : '');
   const config: AppConfig = {
-    apiUrl: text('apiUrl').replace(/\/+$/, ''),
-    clientId: text('clientId'),
-    region: text('region'),
-    company: text('company'),
+    apiUrl: trimmedField(input, 'apiUrl').replace(/\/+$/, ''),
+    clientId: trimmedField(input, 'clientId'),
+    region: trimmedField(input, 'region'),
+    company: trimmedField(input, 'company'),
   };
   if (!isSafeHttpsUrl(config.apiUrl)) return { ok: false, field: 'apiUrl' };
   if (!CLIENT_ID.test(config.clientId)) return { ok: false, field: 'clientId' };
   if (!REGION.test(config.region)) return { ok: false, field: 'region' };
   if (!COMPANY.test(config.company)) return { ok: false, field: 'company' };
   return { ok: true, config };
+}
+
+/**
+ * Reads a trimmed string field.
+ *
+ * Call: `trimmedField(input, 'region')`.
+ * Expects: anything as `input`.
+ * Output: the trimmed string, or `''` when missing or not a string.
+ */
+function trimmedField(input: unknown, name: keyof AppConfig): string {
+  if (typeof input !== 'object' || input === null) return '';
+  const v = (input as Record<string, unknown>)[name];
+  return typeof v === 'string' ? v.trim() : '';
 }
 
 /**

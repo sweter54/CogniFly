@@ -57,6 +57,11 @@ export async function rpcClient(bus: Bus, selfLabel: string, timeoutMs = 20_000)
   return (method: string, params: unknown = {}): Promise<unknown> => new Promise((resolve, reject) => {
     const id = newId();
     const timer = setTimeout(() => settle({ id, ok: false, error: 'TIMEOUT' }), timeoutMs);
+    /**
+     * Finishes this call once (reply, timeout or transport error).
+     * Call: `settle(reply)`. Expects: the reply for `id`.
+     * Output: none; resolves or rejects the promise, clears the timer.
+     */
     function settle(r: RpcReply) {
       clearTimeout(timer);
       pending.delete(id);

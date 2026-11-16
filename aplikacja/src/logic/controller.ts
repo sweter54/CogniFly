@@ -55,11 +55,17 @@ export class Controller {
    *
    * Call: `await controller.start()` when the background window loads.
    * Expects: nothing.
-   * Output: the first view; without a session the main window opens
-   * on the guided login.
+   * Output: the first view; without a session (or when the keychain
+   * refuses access) the main window opens on the guided login.
    */
   async start(): Promise<InboxView> {
-    const s = await this.session.current();
+    let s: Awaited<ReturnType<SessionManager['current']>>;
+    try {
+      s = await this.session.current();
+    } catch (e) {
+      this.ports.log?.(`vault read failed: ${errorCode(e)}`);
+      s = null;
+    }
     this.update({ loggedIn: !!s, email: s?.email ?? null });
     if (!s) {
       await this.ports.showScreen('login');
@@ -138,12 +144,15 @@ export class Controller {
    *
    * Call: only via `poll()`.
    * Expects: nothing.
-   * Output: the new view (never throws).
+   * Output: the new view (never throws). A result that arrives after
+   * a logout is dropped, so old tasks never come back.
    */
   private async runPoll(): Promise<InboxView> {
     if (!this.view.loggedIn) return this.view;
+    const epoch = this.session.epoch();
     try {
       const tasks = await this.api().inbox();
+      if (this.session.epoch() !== epoch || !this.view.loggedIn) return this.view; // logged out meanwhile
       const fresh = await this.announce(tasks);
       this.ports.log?.(`poll ok: tasks=${tasks.length} waiting=${waitingTasks(tasks).length} new=${fresh}`);
       this.update({ offline: false, tasks, updatedAt: new Date(this.time()).toISOString() });
@@ -158,12 +167,14 @@ export class Controller {
    *
    * Call: from `runPoll`'s catch.
    * Expects: the thrown value.
-   * Output: none. Login required → logged-out view + login screen;
+   * Output: none. Login required → logged-out view, notification
+   * memory cleared, login screen;
    * anything else (network, server error) → `offline`, tasks kept.
    */
   private async pollFailed(e: unknown): Promise<void> {
     this.ports.log?.(`poll failed: ${errorCode(e)}`);
     if (e instanceof LoginRequiredError) {
+      clearSeen(this.ports.store);
       this.update({ loggedIn: false, offline: false, tasks: [] });
       await this.ports.showScreen('login');
       return;

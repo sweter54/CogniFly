@@ -60,10 +60,12 @@ export class ApiError extends Error {
  *
  * Call: `errorCode(e)` in catch blocks before replying to a window.
  * Expects: anything.
- * Output: the error's code for known errors, otherwise `UNEXPECTED`.
- * Never returns the raw message of unknown errors (may hold data).
+ * Output: the error's code for known errors and for keychain codes
+ * (`VAULT_*` strings rejected by the Rust commands), otherwise
+ * `UNEXPECTED`. Never returns raw messages of unknown errors.
  */
 export function errorCode(e: unknown): string {
+  if (typeof e === 'string' && /^VAULT_[A-Z_]+$/.test(e)) return e;
   if (e instanceof NetworkError || e instanceof LoginRequiredError) return e.message;
   if (e instanceof CognitoError || e instanceof ApiError) return e.code;
   return 'UNEXPECTED';

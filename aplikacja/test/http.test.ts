@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { NetworkError } from '../src/logic/errors.js';
+import { errorCode, NetworkError } from '../src/logic/errors.js';
 import { requestJson, stringField } from '../src/logic/http.js';
 import { scriptedFetch } from './helpers.js';
 
@@ -33,5 +33,13 @@ describe('stringField', () => {
     expect(stringField({ a: 'x', b: 1 }, 'a')).toBe('x');
     expect(stringField({ b: 1 }, 'b')).toBeUndefined();
     expect(stringField(null, 'a')).toBeUndefined();
+  });
+});
+
+describe('errorCode', () => {
+  it('passes keychain codes and hides unknown messages', () => {
+    expect(errorCode('VAULT_ERROR')).toBe('VAULT_ERROR');
+    expect(errorCode('secret text')).toBe('UNEXPECTED');
+    expect(errorCode(new NetworkError())).toBe('NETWORK');
   });
 });
