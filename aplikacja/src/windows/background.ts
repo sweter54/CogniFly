@@ -45,6 +45,7 @@ async function main(): Promise<void> {
   const controller = new Controller({ store: localStorage, vault: keychainVault, fetch: pluginFetch, notify, render, showScreen, log: reportInfo });
   await rpcServer(tauriBus(), controller.handlers(), codeAndLog);
   tray = await createTray({
+    openMain: () => void showScreen(controller.current().loggedIn ? 'inbox' : 'login'),
     openInbox: () => void showScreen('inbox'),
     refresh: () => void controller.poll(),
     openSettings: () => void showScreen('settings'),
