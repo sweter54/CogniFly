@@ -41,5 +41,22 @@ export interface InboxResponse { zadania: Task[] }
 export interface TaskResponse { zadanie: Task }
 /** `POST /zadania/{id}/biore` → 409 */
 export interface TakenResponse { kod: 'ZAJETE'; wlasciciel: string }
+/**
+ * Event behind a task, without data from outsiders: no `dane`, no
+ * `daneRef` and no `podmiot.galaz` (branch names are free text).
+ */
+export interface EventSummary {
+  id: string;
+  czas: string;
+  zrodlo: string;
+  typ: string;
+  opis: string;
+  podmiot: Record<string, string | number>;
+  wymagaPracy: boolean;
+}
+
+/** `GET /zadania/{id}` → 200; `zdarzenie` is null once history expired. */
+export interface TaskDetailsResponse { zadanie: Task; zdarzenie: EventSummary | null }
+
 /** Any error response body. */
 export interface ErrorResponse { kod: string }

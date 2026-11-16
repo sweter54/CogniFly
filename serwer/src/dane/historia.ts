@@ -66,3 +66,38 @@ export async function historia(
   } while (start);
   return wynik;
 }
+
+/** Okno szukania zdarzenia zadania: zdarzenie zapisane jest tuż przed utworzeniem zadania. */
+const PRZED_ZADANIEM_MS = 15 * 60_000;
+const PO_ZADANIU_MS = 60_000;
+
+/**
+ * Zdarzenie, z którego powstało zadanie (marker EVT nie przechowuje czasu, więc szukamy w historii
+ * w oknie [utworzono − 15 min, utworzono + 1 min] po id). null, gdy wygasło (TTL) lub go nie ma.
+ */
+export async function zdarzenieZadania(firma: string, zdarzenieId: string, utworzono: string): Promise<Zdarzenie | null> {
+  const t = new Date(utworzono).getTime();
+  if (Number.isNaN(t)) return null;
+  let start: Record<string, unknown> | undefined;
+  do {
+    const r = await klient().send(
+      new QueryCommand({
+        TableName: nazwaTabeli(),
+        KeyConditionExpression: 'pk = :pk AND sk BETWEEN :od AND :do',
+        FilterExpression: '#z.#id = :id',
+        ExpressionAttributeNames: { '#z': 'zdarzenie', '#id': 'id' },
+        ExpressionAttributeValues: {
+          ':pk': pkHist(firma),
+          ':od': new Date(t - PRZED_ZADANIEM_MS).toISOString(),
+          ':do': `${new Date(t + PO_ZADANIU_MS).toISOString()}~`,
+          ':id': zdarzenieId,
+        },
+        ExclusiveStartKey: start,
+      }),
+    );
+    const it = r.Items?.[0];
+    if (it) return it.zdarzenie as Zdarzenie;
+    start = r.LastEvaluatedKey;
+  } while (start);
+  return null;
+}
