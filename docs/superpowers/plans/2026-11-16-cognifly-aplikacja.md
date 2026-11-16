@@ -29,6 +29,8 @@
   wywołanie (parametry), oczekiwania (warunki wstępne, błędy) i wyjście (zwracana wartość/efekty).
 - Nazwy w planie poniżej (`konfiguracja.ts`, `MenedzerSesji`, …) tłumaczyć na angielski przy implementacji
   (np. `config.ts`, `SessionManager`, `pickNew`, `notificationText`).
+- **Funkcje atomowe:** jedna odpowiedzialność na funkcję; powtórzona logika → refaktor do wspólnej
+  funkcji/modułu (np. jeden `postJson` dla Cognito i API, jeden `requestReply` dla zdarzeń między oknami).
 
 ## Review Focus
 
