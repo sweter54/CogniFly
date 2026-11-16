@@ -34,10 +34,10 @@ function codeAndLog(e: unknown): string {
 async function main(): Promise<void> {
   let tray: Tray | null = null;
   const render = (view: InboxView) => {
-    tray?.render(view).catch(() => undefined);
+    tray?.render(view).catch((e) => reportError('tray.render', e));
     pushView(view);
   };
-  const controller = new Controller({ store: localStorage, vault: keychainVault, fetch: pluginFetch, notify, render, showScreen });
+  const controller = new Controller({ store: localStorage, vault: keychainVault, fetch: pluginFetch, notify, render, showScreen, log: reportInfo });
   await rpcServer(tauriBus(), controller.handlers(), codeAndLog);
   tray = await createTray({
     openInbox: () => void showScreen('inbox'),
@@ -46,7 +46,11 @@ async function main(): Promise<void> {
     login: () => void showScreen('login'),
     logout: () => void controller.logout(),
   });
-  await setupNotifications(() => void showScreen('inbox')).catch(() => false);
+  const allowed = await setupNotifications(() => void showScreen('inbox')).catch((e) => {
+    reportError('notifications.setup', e);
+    return false;
+  });
+  reportInfo(`notifications allowed: ${allowed}`);
   await controller.start();
   setInterval(() => void controller.poll(), POLL_INTERVAL_MS);
 }

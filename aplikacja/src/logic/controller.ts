@@ -6,7 +6,7 @@ import type { InboxView, Methods, Screen } from '../windows/protocol.js';
 import { ApiClient } from './api.js';
 import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, type PendingLogin } from './cognito.js';
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type AppConfig } from './config.js';
-import { CognitoError, LoginRequiredError } from './errors.js';
+import { CognitoError, errorCode, LoginRequiredError } from './errors.js';
 import type { FetchFn } from './http.js';
 import { clearSeen, loadSeen, notificationBody, notificationTitle, pickNew, saveSeen, waitingTasks } from './notify.js';
 import type { Handler } from './rpc.js';
@@ -27,6 +27,8 @@ export interface Ports {
   render(view: InboxView): void;
   /** Brings the main window to the front on the given screen. */
   showScreen(screen: Screen): Promise<void>;
+  /** Writes a diagnostic line (counts and codes only, no task text). */
+  log?(line: string): void;
   now?: () => number;
 }
 
@@ -142,7 +144,8 @@ export class Controller {
     if (!this.view.loggedIn) return this.view;
     try {
       const tasks = await this.api().inbox();
-      await this.announce(tasks);
+      const fresh = await this.announce(tasks);
+      this.ports.log?.(`poll ok: tasks=${tasks.length} waiting=${waitingTasks(tasks).length} new=${fresh}`);
       this.update({ offline: false, tasks, updatedAt: new Date(this.time()).toISOString() });
     } catch (e) {
       await this.pollFailed(e);
@@ -159,6 +162,7 @@ export class Controller {
    * anything else (network, server error) → `offline`, tasks kept.
    */
   private async pollFailed(e: unknown): Promise<void> {
+    this.ports.log?.(`poll failed: ${errorCode(e)}`);
     if (e instanceof LoginRequiredError) {
       this.update({ loggedIn: false, offline: false, tasks: [] });
       await this.ports.showScreen('login');
@@ -172,15 +176,17 @@ export class Controller {
    *
    * Call: `await this.announce(tasks)` after each successful fetch.
    * Expects: the full inbox.
-   * Output: none; notification failures are ignored (the tray count
-   * still shows the tasks); the seen set is saved.
+   * Output: number of new tasks; a failed notification is logged and
+   * skipped (the tray count still shows the task); seen set saved.
    */
-  private async announce(tasks: Task[]): Promise<void> {
+  private async announce(tasks: Task[]): Promise<number> {
     const { fresh, seen } = pickNew(tasks, loadSeen(this.ports.store));
     saveSeen(this.ports.store, seen);
     for (const t of fresh) {
-      await this.ports.notify(notificationTitle(t), notificationBody(t.opis)).catch(() => undefined);
+      await this.ports.notify(notificationTitle(t), notificationBody(t.opis))
+        .catch((e: unknown) => this.ports.log?.(`notify failed: ${String(e)}`));
     }
+    return fresh.length;
   }
 
   /**
