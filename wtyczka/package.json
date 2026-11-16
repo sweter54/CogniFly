@@ -3,5 +3,6 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": { "cognifly": "cli/cognifly.mjs" },
   "scripts": { "test": "vitest run --passWithNoTests" }
 }
