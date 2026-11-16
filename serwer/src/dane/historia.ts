@@ -1,7 +1,6 @@
-import { QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
-import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
+import { QueryCommand } from '@aws-sdk/lib-dynamodb';
 import type { Zdarzenie, Zrodlo } from '@cognifly/wspolne';
-import { klient, nazwaTabeli } from './tabela.js';
+import { klient, nazwaTabeli, transakcja } from './tabela.js';
 
 const pkHist = (firma: string) => `FIRMA#${firma}#HIST`;
 const pkEvt = (firma: string) => `FIRMA#${firma}#EVT`;
@@ -10,31 +9,23 @@ const pkEvt = (firma: string) => `FIRMA#${firma}#EVT`;
 export async function zapiszZdarzenie(z: Zdarzenie, dniRetencji = 90): Promise<'NOWE' | 'DUPLIKAT'> {
   const wygasa = Math.floor(Date.now() / 1000) + dniRetencji * 86400;
   const T = nazwaTabeli();
-  try {
-    await klient().send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Put: {
-              TableName: T,
-              Item: { pk: pkEvt(z.firma), sk: z.id, wygasa },
-              ConditionExpression: 'attribute_not_exists(sk)',
-            },
-          },
-          {
-            Put: {
-              TableName: T,
-              Item: { pk: pkHist(z.firma), sk: `${z.czas}#${z.id}`, zrodlo: z.zrodlo, typ: z.typ, zdarzenie: z, wygasa },
-            },
-          },
-        ],
-      }),
-    );
-    return 'NOWE';
-  } catch (e) {
-    if (e instanceof TransactionCanceledException) return 'DUPLIKAT';
-    throw e;
-  }
+  const wynik = await transakcja([
+    {
+      Put: {
+        TableName: T,
+        Item: { pk: pkEvt(z.firma), sk: z.id, wygasa },
+        ConditionExpression: 'attribute_not_exists(sk)',
+      },
+    },
+    {
+      // sk z znormalizowanego ISO (zawsze z ms), by kolejność leksykalna zgadzała się z granicami z toISOString()
+      Put: {
+        TableName: T,
+        Item: { pk: pkHist(z.firma), sk: `${new Date(z.czas).toISOString()}#${z.id}`, zrodlo: z.zrodlo, typ: z.typ, zdarzenie: z, wygasa },
+      },
+    },
+  ]);
+  return wynik === 'OK' ? 'NOWE' : 'DUPLIKAT';
 }
 
 /** Zdarzenia firmy w [od, doCzasu], malejąco po czasie, maks. 200. */

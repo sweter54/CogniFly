@@ -1,5 +1,5 @@
-import { DynamoDBClient, type CreateTableCommandInput } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
+import { DynamoDBClient, TransactionCanceledException, type CreateTableCommandInput } from '@aws-sdk/client-dynamodb';
+import { DynamoDBDocumentClient, TransactWriteCommand, type TransactWriteCommandInput } from '@aws-sdk/lib-dynamodb';
 
 export const nazwaTabeli = (): string => process.env.COGNIFLY_TABELA ?? 'cognifly-test-dane';
 
@@ -53,3 +53,30 @@ export function definicjaTabeli(nazwa: string = nazwaTabeli()): CreateTableComma
 }
 
 export const ATRYBUT_TTL = 'wygasa';
+
+export const pauza = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Transakcja z rozróżnieniem przyczyn anulowania.
+ * 'OK' | 'WARUNEK' (ConditionalCheckFailed na pierwszym elemencie).
+ * TransactionConflict jest ponawiany (maks. 4 próby z krótkim backoffem), potem wyjątek; reszta błędów leci dalej.
+ */
+export async function transakcja(items: TransactWriteCommandInput['TransactItems']): Promise<'OK' | 'WARUNEK'> {
+  const PROB = 4;
+  for (let i = 1; ; i++) {
+    try {
+      await klient().send(new TransactWriteCommand({ TransactItems: items }));
+      return 'OK';
+    } catch (e) {
+      if (!(e instanceof TransactionCanceledException)) throw e;
+      const kody = (e.CancellationReasons ?? []).map((r) => r.Code);
+      if (kody.includes('TransactionConflict')) {
+        if (i >= PROB) throw e;
+        await pauza(10 * 2 ** i + Math.random() * 10);
+        continue;
+      }
+      if (kody[0] === 'ConditionalCheckFailed') return 'WARUNEK';
+      throw e;
+    }
+  }
+}

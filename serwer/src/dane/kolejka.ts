@@ -1,7 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { BatchGetCommand, GetCommand, QueryCommand, TransactWriteCommand } from '@aws-sdk/lib-dynamodb';
-import { TransactionCanceledException } from '@aws-sdk/client-dynamodb';
-import { klient, nazwaTabeli } from './tabela.js';
+import { klient, nazwaTabeli, pauza, transakcja } from './tabela.js';
 
 export type StanZadania = 'nowe' | 'wziete' | 'w_trakcie' | 'do_akceptacji' | 'zrobione' | 'eskalowane';
 export type KanalEskalacji = 'email' | 'discord' | 'claude';
@@ -85,53 +84,48 @@ async function zmien(
   ustawWartosci: Record<string, unknown>,
 ): Promise<boolean> {
   const T = nazwaTabeli();
-  try {
-    await klient().send(
-      new TransactWriteCommand({
-        TransactItems: [
-          {
-            Update: {
-              TableName: T,
-              Key: { pk: pkZad(z.firma), sk: z.id },
-              ConditionExpression: warunek,
-              UpdateExpression: `SET ${ustaw}`,
-              ExpressionAttributeNames: nazwy,
-              ExpressionAttributeValues: { ...wartosci, ...ustawWartosci },
-            },
-          },
-          ...z.kandydaci.map((o) => ({
-            Update: {
-              TableName: T,
-              Key: { pk: pkSkr(z.firma, o), sk: z.id },
-              UpdateExpression: 'SET gsi1sk = :gsk',
-              ExpressionAttributeValues: { ':gsk': `${nowyStan}#${z.utworzono}` },
-            },
-          })),
-        ],
-      }),
-    );
-    return true;
-  } catch (e) {
-    if (e instanceof TransactionCanceledException) return false;
-    throw e;
-  }
+  const w = await transakcja([
+    {
+      Update: {
+        TableName: T,
+        Key: { pk: pkZad(z.firma), sk: z.id },
+        ConditionExpression: warunek,
+        UpdateExpression: `SET ${ustaw}`,
+        ExpressionAttributeNames: nazwy,
+        ExpressionAttributeValues: { ...wartosci, ...ustawWartosci },
+      },
+    },
+    ...z.kandydaci.map((o) => ({
+      Update: {
+        TableName: T,
+        Key: { pk: pkSkr(z.firma, o), sk: z.id },
+        UpdateExpression: 'SET gsi1sk = :gsk',
+        ExpressionAttributeValues: { ':gsk': `${nowyStan}#${z.utworzono}` },
+      },
+    })),
+  ]);
+  return w === 'OK';
 }
 
 export async function wez(firma: string, idZadania: string, osoba: string): Promise<WynikWez> {
-  const z = await pobierzZadanie(firma, idZadania);
-  if (!z) return { ok: false, kod: 'NIE_ZNALEZIONO' };
-  if (!z.kandydaci.includes(osoba)) return { ok: false, kod: 'BRAK_DOSTEPU' };
-  const ok = await zmien(
-    z, 'wziete',
-    '#stan = :nowe OR #stan = :eskal',
-    { '#stan': 'stan', '#wl': 'wlasciciel' },
-    { ':nowe': 'nowe', ':eskal': 'eskalowane' },
-    '#stan = :wziete, #wl = :osoba',
-    { ':wziete': 'wziete', ':osoba': osoba },
-  );
-  if (ok) return { ok: true, zadanie: { ...z, stan: 'wziete', wlasciciel: osoba } };
-  const aktualne = await pobierzZadanie(firma, idZadania);
-  return { ok: false, kod: 'ZAJETE', wlasciciel: aktualne?.wlasciciel ?? '' };
+  for (let proba = 0; proba < 3; proba++) {
+    const z = await pobierzZadanie(firma, idZadania);
+    if (!z) return { ok: false, kod: 'NIE_ZNALEZIONO' };
+    if (!z.kandydaci.includes(osoba)) return { ok: false, kod: 'BRAK_DOSTEPU' };
+    const ok = await zmien(
+      z, 'wziete',
+      '#stan = :nowe OR #stan = :eskal',
+      { '#stan': 'stan', '#wl': 'wlasciciel' },
+      { ':nowe': 'nowe', ':eskal': 'eskalowane' },
+      '#stan = :wziete, #wl = :osoba',
+      { ':wziete': 'wziete', ':osoba': osoba },
+    );
+    if (ok) return { ok: true, zadanie: { ...z, stan: 'wziete', wlasciciel: osoba } };
+    const aktualne = await pobierzZadanie(firma, idZadania);
+    if (aktualne?.wlasciciel) return { ok: false, kod: 'ZAJETE', wlasciciel: aktualne.wlasciciel };
+    await pauza(20); // warunek nie przeszedł, a właściciela brak — ponów z aktualnym stanem
+  }
+  throw new Error(`wez: nie udało się rozstrzygnąć zadania ${idZadania}`);
 }
 
 export async function ustawStan(
@@ -176,12 +170,16 @@ export async function skrzynka(firma: string, osoba: string, stany?: StanZadania
   const wynik: Zadanie[] = [];
   for (let i = 0; i < ids.length; i += 100) {
     const paczka = ids.slice(i, i + 100);
-    const r = await klient().send(
-      new BatchGetCommand({
-        RequestItems: { [T]: { Keys: paczka.map((id) => ({ pk: pkZad(firma), sk: id })), ConsistentRead: true } },
-      }),
-    );
-    for (const it of r.Responses?.[T] ?? []) wynik.push(zRekordu(it));
+    let klucze: Record<string, unknown>[] = paczka.map((id) => ({ pk: pkZad(firma), sk: id }));
+    for (let proba = 0; klucze.length; proba++) {
+      if (proba >= 5) throw new Error('skrzynka: BatchGet nie przetworzył wszystkich kluczy');
+      if (proba) await pauza(20 * 2 ** proba);
+      const r = await klient().send(
+        new BatchGetCommand({ RequestItems: { [T]: { Keys: klucze, ConsistentRead: true } } }),
+      );
+      for (const it of r.Responses?.[T] ?? []) wynik.push(zRekordu(it));
+      klucze = (r.UnprocessedKeys?.[T]?.Keys as Record<string, unknown>[] | undefined) ?? [];
+    }
   }
   return wynik
     .filter((z) => !stany || stany.includes(z.stan))
