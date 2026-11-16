@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
-import { buildGraph, nodeFromPr, type GithubPr } from '../../src/dostarczenia/github.js';
+import { buildGraph, MAX_CHAIN, nodeFromPr, type GithubPr } from '../../src/dostarczenia/github.js';
+import { assessChain } from '../../src/dostarczenia/ocena.js';
 import { refKey } from '../../src/dostarczenia/zaleznosci.js';
 
 const pr = (over: Partial<GithubPr> = {}): GithubPr => ({
@@ -43,8 +44,25 @@ describe('buildGraph', () => {
     };
     const fetchPr = vi.fn(async (r: { repo: string; number: number }) => data[refKey(r)] ?? null);
     const stacked = vi.fn(async () => null);
-    const g = await buildGraph({ repo: 'o/r', number: 1 }, fetchPr, stacked, () => null);
+    const { graph: g } = await buildGraph({ repo: 'o/r', number: 1 }, fetchPr, stacked, () => null);
     expect([...g.keys()].sort()).toEqual(['o/r#1', 'o/r#2']);
     expect(fetchPr).toHaveBeenCalledTimes(3);
+  });
+
+  test('does not follow dependencies of merged PRs (old history is no cycle)', async () => {
+    const data: Record<string, GithubPr> = {
+      'o/r#1': pr({ number: 1, body: 'Zależy od: #2' }),
+      'o/r#2': pr({ number: 2, state: 'MERGED', merged: true, body: 'Zależy od: #1' }),
+    };
+    const { graph } = await buildGraph({ repo: 'o/r', number: 1 }, async (r) => data[refKey(r)] ?? null, async () => null, () => ({ sha: 'h1', at: '' }));
+    expect(assessChain({ repo: 'o/r', number: 1 }, graph)).toMatchObject({ ready: true });
+  });
+
+  test('stops after MAX_CHAIN PRs and says the chain is too long', async () => {
+    const body = 'Zależy od: ' + Array.from({ length: 60 }, (_, i) => `#${i + 2}`).join(', ');
+    const fetchPr = vi.fn(async (r: { number: number }) => pr({ number: r.number, body: r.number === 1 ? body : '' }));
+    const r = await buildGraph({ repo: 'o/r', number: 1 }, fetchPr, async () => null, () => null);
+    expect(r.truncated).toBe(true);
+    expect(fetchPr).toHaveBeenCalledTimes(MAX_CHAIN);
   });
 });

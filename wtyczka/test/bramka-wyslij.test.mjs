@@ -15,15 +15,15 @@ const assistant = { type: 'assistant', message: { role: 'assistant', content: [{
 const toolResult = user([{ type: 'tool_result', tool_use_id: 'x', content: 'wynik' }]);
 const COMMAND = user('<command-message>cognifly:wyslij-komentarz is running…</command-message>\n<command-name>/cognifly:wyslij-komentarz</command-name>');
 
-function run(command, entries) {
+function run(command, entries, tool = { tool_name: 'Bash', tool_input: { command } }) {
   const transcript = join(tmp, 't.jsonl');
   writeFileSync(transcript, entries.map((e) => JSON.stringify(e)).join('\n') + '\n');
   return new Promise((ok) => {
     const p = spawn(process.execPath, [HOOK]);
     let err = '';
     p.stderr.on('data', (c) => (err += c));
-    p.on('close', (code) => ok({ code, err }));
-    p.stdin.end(JSON.stringify({ tool_name: 'Bash', tool_input: { command }, transcript_path: transcript }));
+    p.on('close', (code) => ok({ code, err, transcript }));
+    p.stdin.end(JSON.stringify({ ...tool, transcript_path: transcript }));
   });
 }
 const WYSLIJ = 'node "/x/skills/github/skrypty/cr.mjs" wyslij --repo o/r --pr 7';
@@ -54,5 +54,21 @@ describe('bramka wyślij', () => {
     const p = spawn(process.execPath, [HOOK]);
     const code = await new Promise((ok) => { p.on('close', ok); p.stdin.end(JSON.stringify({ tool_input: { command: WYSLIJ }, transcript_path: '/brak' })); });
     expect(code).toBe(2);
+  });
+
+  it('blocks GraphQL review mutations', async () => {
+    expect((await run(`gh api graphql -f query='mutation{addPullRequestReview(input:{}){clientMutationId}}'`, [user('x')])).code).toBe(2);
+    expect((await run(`gh api graphql -f query='query{viewer{login}}'`, [user('x')])).code).toBe(0);
+  });
+  it('blocks tampering with the session transcript (Bash or file tools)', async () => {
+    const t = join(tmp, 't.jsonl');
+    expect((await run(`echo '{}' >> "${t}"`, [user('x')])).code).toBe(2);
+    expect((await run('cat ~/.claude/projects/x/y.jsonl', [user('x')])).code).toBe(2);
+    expect((await run('', [user('x')], { tool_name: 'Write', tool_input: { file_path: t, content: '{}' } })).code).toBe(2);
+    expect((await run('', [user('x')], { tool_name: 'Edit', tool_input: { file_path: '/Users/m/.claude/projects/a/b.jsonl' } })).code).toBe(2);
+    expect((await run('', [user('x')], { tool_name: 'Write', tool_input: { file_path: '/tmp/zwykly.txt' } })).code).toBe(0);
+  });
+  it('does not block reading or grepping the script', async () => {
+    expect((await run('grep -n wyslij wtyczka/skills/github/skrypty/cr.mjs', [user('x')])).code).toBe(0);
   });
 });

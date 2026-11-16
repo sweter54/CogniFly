@@ -1,8 +1,9 @@
 #!/usr/bin/env node
-// PreToolUse gate (Bash): publishing a code review is allowed only right
-// after the human typed /cognifly:wyslij-komentarz. The model cannot
-// forge a human message in the transcript, and the command has
-// `disable-model-invocation`, so the model cannot send reviews itself.
+// PreToolUse gate: publishing a code review is allowed only right after
+// the human typed /cognifly:wyslij-komentarz (the command has
+// `disable-model-invocation`). The gate reads the session transcript,
+// so it also blocks the model from writing to transcripts (Bash or file
+// tools) — otherwise it could append a fake human message.
 // Exit 2 = block (stderr is shown to the model); exit 0 = allow.
 import { readFileSync } from 'node:fs';
 
@@ -13,14 +14,33 @@ const COMMAND_TAG = /<command-name>\/(?:cognifly:)?wyslij-komentarz<\/command-na
  *
  * Call: `publishesReview(command)`.
  * Expects: the Bash command string.
- * Output: true for `cr.mjs … wyslij`, `gh pr review`, and `gh api`
- * writes to `…/reviews` (POST/PUT/fields/input).
+ * Output: true for `cr.mjs wyslij`, `gh pr review`, GraphQL review
+ * mutations and `gh api` writes to `…/reviews` (POST/PUT/fields/input).
  */
 export function publishesReview(command) {
   const c = String(command ?? '');
-  if (/cr\.mjs/.test(c) && /\bwyslij\b/.test(c)) return true;
+  if (/cr\.mjs["']?\s+wyslij\b/.test(c)) return true;
   if (/\bgh\s+pr\s+review\b/.test(c)) return true;
+  if (/\bgh\s+api\s+graphql\b/.test(c) && /(add|submit)PullRequestReview/i.test(c)) return true;
   return /\bgh\s+api\b/.test(c) && /\/reviews\b/.test(c) && /(-X\s*(POST|PUT|PATCH)|--method\s+(POST|PUT|PATCH)|\s-[fF]\s|--field|--raw-field|--input)/i.test(c);
+}
+
+/**
+ * Tells whether a tool call touches session transcripts.
+ *
+ * Call: `touchesTranscript(toolName, toolInput, transcriptPath)`.
+ * Expects: the PreToolUse input.
+ * Output: true for Bash commands mentioning the transcript path or
+ * `.claude/projects`, and for file tools writing inside them.
+ */
+export function touchesTranscript(toolName, toolInput, transcriptPath) {
+  const projects = /\.claude\/projects\b/;
+  if (toolName === 'Bash') {
+    const c = String(toolInput?.command ?? '');
+    return projects.test(c) || (!!transcriptPath && c.includes(transcriptPath));
+  }
+  const file = String(toolInput?.file_path ?? toolInput?.notebook_path ?? '');
+  return !!file && (projects.test(file) || file === transcriptPath);
 }
 
 /**
@@ -63,14 +83,19 @@ function lastHumanIsSendCommand(transcriptPath) {
  * Hook entry.
  *
  * Call: by Claude Code with the PreToolUse JSON on stdin.
- * Expects: `tool_input.command` and `transcript_path`.
- * Output: exit 0 (allow) or 2 with a reason (block). Unreadable input
- * blocks only commands that publish a review (fail closed).
+ * Expects: `tool_name`, `tool_input` and `transcript_path`.
+ * Output: exit 0 (allow) or 2 with a reason (block). Transcript access
+ * is always blocked; publishing a review only without the command.
+ * Unreadable transcript blocks publishing (fail closed).
  */
 function main() {
   let input = {};
   try { input = JSON.parse(readFileSync(0, 'utf8')); } catch { /* treated as no command */ }
-  if (!publishesReview(input?.tool_input?.command)) process.exit(0);
+  if (touchesTranscript(input?.tool_name, input?.tool_input, input?.transcript_path)) {
+    process.stderr.write('CogniFly: zapis i odczyt transkrypcji sesji są zablokowane (chroni bramkę wysyłania recenzji).');
+    process.exit(2);
+  }
+  if ((input?.tool_name ?? 'Bash') !== 'Bash' || !publishesReview(input?.tool_input?.command)) process.exit(0);
   let allowed = false;
   try { allowed = lastHumanIsSendCommand(input.transcript_path); } catch { allowed = false; }
   if (allowed) process.exit(0);

@@ -80,7 +80,8 @@ async function evaluateWatch(w: Watch): Promise<Assessment> {
  *
  * Call: `await assess(firma, root, watch)`.
  * Expects: the watch of the root (or null).
- * Output: the assessment plus the root author's login.
+ * Output: the assessment plus the root author's login; a chain longer
+ * than `MAX_CHAIN` is never ready (`LANCUCH_ZA_DLUGI`).
  */
 async function assess(firma: string, root: PrRef, watch: Watch | null): Promise<Assessment & { author?: string | null }> {
   const token = await readToken(firma);
@@ -88,8 +89,10 @@ async function assess(firma: string, root: PrRef, watch: Watch | null): Promise<
   const { fetchPr, fetchStacked } = githubFetchers(token);
   const acceptanceOf = (r: PrRef) =>
     watch && refKey(r) === refKey(root) ? { sha: watch.acceptedSha, at: watch.acceptedAt } : null;
-  const graph = await buildGraph(root, fetchPr, fetchStacked, acceptanceOf);
-  return { ...assessChain(root, graph), author: graph.get(refKey(root))?.author ?? null };
+  const { graph, truncated } = await buildGraph(root, fetchPr, fetchStacked, acceptanceOf);
+  const result = assessChain(root, graph);
+  if (truncated) result.reasons.push('LANCUCH_ZA_DLUGI');
+  return { ...result, ready: result.ready && !truncated, author: graph.get(refKey(root))?.author ?? null };
 }
 
 /**

@@ -260,12 +260,14 @@ async function send(repo, pr) {
  * Expects: a sent draft; `task` may be null (CR without a task).
  * Output: results of the CogniFly calls, or `{ stan: 'BEZ_ZADANIA' }`.
  * Changes → task handed to the PR author; accept → delivery watch
- * started, then the CR task marked done.
+ * started, and only if it started, the CR task marked done (a failed
+ * watch leaves the task open: `zadanieOtwarte`).
  */
 async function updateCogniFly(d) {
   if (!d.task) return { stan: 'BEZ_ZADANIA' };
   if (!d.verdict.accept) return { przekaz: await wykonaj(['przekaz', d.task, '--do-loginu', d.author]) };
   const watch = await wykonaj(['dostarczenie', '--repo', d.repo, '--pr', String(d.pr), '--zadanie', d.task, '--sha', d.headSha]);
+  if (watch.stan !== 'NASLUCH') return { dostarczenie: watch, zadanieOtwarte: true };
   const done = await wykonaj(['stan', d.task, 'zrobione', '--postep', 'Code review zaakceptowane']);
   return { dostarczenie: watch, stan: done };
 }
@@ -291,7 +293,11 @@ async function main(argv) {
       const d = loadDraft(repo, pr);
       return { stan: 'OK', komentarze: d.comments, nieomowione: undiscussed(d), werdykt: d.verdict, wyslane: d.sent };
     }
-    case 'werdykt': return verdict(repo, pr, argv.includes('--akceptuj'), opt(argv, '--podsumowanie'));
+    case 'werdykt': {
+      const accept = argv.includes('--akceptuj'), changes = argv.includes('--zmiany');
+      if (accept === changes) return { stan: 'ZLY_WERDYKT' };
+      return verdict(repo, pr, accept, opt(argv, '--podsumowanie'));
+    }
     case 'wyslij': return send(repo, pr);
     default: return { stan: 'NIEZNANE_POLECENIE' };
   }

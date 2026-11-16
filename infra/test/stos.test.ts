@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test, beforeAll } from 'vitest';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
@@ -133,9 +134,9 @@ describe('stos CogniFly', () => {
     for (const s of stm) expect(s.Resource).not.toBe('*');
   });
 
-  test('HTTP API: webhook bez autoryzatora, 8 tras API z JWT (pula + klient)', () => {
+  test('HTTP API: webhook bez autoryzatora, 10 tras API z JWT (pula + klient)', () => {
     const trasy = zasoby('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
-    expect(trasy).toHaveLength(9);
+    expect(trasy).toHaveLength(11);
     const wh = trasy.find((r) => r.RouteKey === 'POST /webhook/github/{firma}');
     expect(wh).toBeDefined();
     expect(wh.AuthorizationType ?? 'NONE').toBe('NONE');
@@ -216,6 +217,18 @@ describe('stos CogniFly', () => {
     }
   });
 
+  test('każda trasa obsługiwana przez Lambdę API istnieje w API Gateway z JWT', () => {
+    const zrodlo = readFileSync(new URL('../../serwer/src/api/index.ts', import.meta.url), 'utf8');
+    const klucze = [...zrodlo.matchAll(/'((?:GET|POST) \/[^']+)'/g)].map((m) => m[1]);
+    expect(klucze.length).toBeGreaterThan(5);
+    const trasy = zasoby('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
+    for (const k of klucze) {
+      const r = trasy.find((x) => x.RouteKey === k);
+      expect(r, k).toBeDefined();
+      expect(r.AuthorizationType, k).toBe('JWT');
+    }
+  });
+
   test('dostarczenia: Lambda, reguła sygnałów z webhooka (poza potokiem zdarzeń) i harmonogram co 10 min', () => {
     const [, f] = zasoby('AWS::Lambda::Function').find(([, r]) => r.Properties.FunctionName === 'cognifly-test-dostarczenia')!;
     expect(f).toBeDefined();
@@ -227,6 +240,8 @@ describe('stos CogniFly', () => {
       Name: 'cognifly-test-dostarczenia', ScheduleExpression: 'rate(10 minutes)',
       FlexibleTimeWindow: { Mode: 'OFF' },
     });
+    const [, rola] = zasoby('AWS::IAM::Role').find(([id]) => id.includes('PrzegladDostarczenRola'))!;
+    expect(JSON.stringify(rola.Properties.AssumeRolePolicyDocument)).toContain('aws:SourceAccount');
   });
 
   test('Cognito: odzyskiwanie konta tylko e-mailem', () => {

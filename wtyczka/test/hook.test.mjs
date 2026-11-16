@@ -121,10 +121,10 @@ describe('hook startu sesji', () => {
     } finally { s.close(); }
   });
 
-  it('hooks.json: SessionStart z node i limitem > 1,5 s; poza tym tylko bramka Bash (brak hooka na wiadomości)', () => {
+  it('hooks.json: SessionStart z node i limitem > 1,5 s; poza tym tylko bramka wysyłania (brak hooka na wiadomości)', () => {
     const h = JSON.parse(readFileSync(join(KORZEN, 'hooks', 'hooks.json'), 'utf8'));
     expect(Object.keys(h.hooks).sort()).toEqual(['PreToolUse', 'SessionStart']);
-    expect(h.hooks.PreToolUse).toEqual([{ matcher: 'Bash', hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/bramka-wyslij.mjs"', timeout: 5 }] }]);
+    expect(h.hooks.PreToolUse).toEqual([{ matcher: 'Bash|Write|Edit|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command: 'node "${CLAUDE_PLUGIN_ROOT}/hooks/bramka-wyslij.mjs"', timeout: 5 }] }]);
     const cmd = h.hooks.SessionStart[0].hooks[0];
     expect(cmd.type).toBe('command');
     expect(cmd.command).toBe('node "${CLAUDE_PLUGIN_ROOT}/hooks/start-sesji.mjs" 2>/dev/null || true');

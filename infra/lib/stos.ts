@@ -189,7 +189,9 @@ export class StosCogniFly extends Stack {
       eventPattern: { source: ['dostarczenia.github'] },
       targets: [new LambdaFunction(dostarczenia, { retryAttempts: 2 })],
     });
-    const rolaPrzegladu = new Role(this, 'PrzegladDostarczenRola', { assumedBy: new ServicePrincipal('scheduler.amazonaws.com') });
+    const rolaPrzegladu = new Role(this, 'PrzegladDostarczenRola', {
+      assumedBy: new ServicePrincipal('scheduler.amazonaws.com', { conditions: { StringEquals: { 'aws:SourceAccount': this.account } } }),
+    });
     dostarczenia.grantInvoke(rolaPrzegladu);
     new CfnSchedule(this, 'PrzegladDostarczen', {
       name: `${PREFIKS}-dostarczenia`,
@@ -247,6 +249,7 @@ export class StosCogniFly extends Stack {
       [HttpMethod.GET, '/zdarzenia'], [HttpMethod.GET, '/skrzynka'], [HttpMethod.GET, '/zadania/{id}'],
       [HttpMethod.POST, '/zadania/{id}/biore'], [HttpMethod.POST, '/zadania/{id}/przekaz'], [HttpMethod.POST, '/zadania/{id}/stan'],
       [HttpMethod.GET, '/podsumowanie'], [HttpMethod.GET, '/ja'],
+      [HttpMethod.POST, '/dostarczenia'], [HttpMethod.GET, '/dostarczenia/ocena'],
     ] as const) {
       httpApi.addRoutes({ path: sciezka, methods: [metoda], integration: apiIntegracja, authorizer: autoryzator });
     }

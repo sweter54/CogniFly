@@ -118,4 +118,20 @@ describe('cr.mjs', () => {
     fakeGh(odpowiedzi({ user: { login: 'ania' } }));
     expect(await cr('wyslij', '--repo', R, '--pr', '7')).toMatchObject({ stan: 'WYSLANO', zdarzenie: 'COMMENT', wlasnyPr: true });
   });
+
+  it('accepting: a failed watch does not close the CR task', async () => {
+    fakeGh(odpowiedzi());
+    await cr('kontekst', '--repo', R, '--pr', '7', '--zadanie', 'zad_0123456789ab');
+    await cr('werdykt', '--repo', R, '--pr', '7', '--akceptuj', '--podsumowanie', 'OK');
+    const r = await cr('wyslij', '--repo', R, '--pr', '7');
+    expect(r).toMatchObject({ stan: 'WYSLANO', zdarzenie: 'APPROVE' });
+    expect(r.cognifly).toEqual({ dostarczenie: { stan: 'BRAK_KONFIGURACJI' }, zadanieOtwarte: true });
+  });
+
+  it('werdykt needs exactly one of --akceptuj / --zmiany', async () => {
+    fakeGh(odpowiedzi());
+    await cr('kontekst', '--repo', R, '--pr', '7');
+    expect(await cr('werdykt', '--repo', R, '--pr', '7', '--podsumowanie', 'x')).toEqual({ stan: 'ZLY_WERDYKT' });
+    expect(await cr('werdykt', '--repo', R, '--pr', '7', '--akceptuj', '--zmiany', '--podsumowanie', 'x')).toEqual({ stan: 'ZLY_WERDYKT' });
+  });
 });

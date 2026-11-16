@@ -76,32 +76,39 @@ function ciState(rollup: string | null): ChainNode['ci'] {
   return rollup === 'PENDING' || rollup === 'EXPECTED' ? 'pending' : 'failure';
 }
 
+/** Most PRs read for one chain (keeps one assessment within seconds). */
+export const MAX_CHAIN = 25;
+
 /**
- * Reads a PR and its whole dependency chain.
+ * Reads a PR and its dependency chain.
  *
  * Call: `await buildGraph(root, fetchPr, fetchStacked, acceptanceOf)`.
  * Expects: fetchers that return null for PRs the token cannot read.
- * Output: refKey → node for every readable PR reachable from the root;
- * each PR is fetched once, so cycles terminate.
+ * Output: `{ graph, truncated }` — refKey → node for readable PRs
+ * reachable from the root. Each PR is read once (cycles end); merged
+ * PRs are leaves (their old dependencies do not matter); at most
+ * `MAX_CHAIN` PRs are read, then `truncated` is true.
  */
 export async function buildGraph(
   root: PrRef, fetchPr: FetchPr, fetchStacked: FetchStacked, acceptanceOf: (ref: PrRef) => Acceptance | null,
-): Promise<Map<string, ChainNode>> {
+): Promise<{ graph: Map<string, ChainNode>; truncated: boolean }> {
   const graph = new Map<string, ChainNode>();
   const visited = new Set<string>();
   const queue: PrRef[] = [root];
   while (queue.length) {
     const ref = queue.shift()!;
     if (visited.has(refKey(ref))) continue;
+    if (visited.size >= MAX_CHAIN) return { graph, truncated: true };
     visited.add(refKey(ref));
     const pr = await fetchPr(ref);
     if (!pr) continue;
     const parent = pr.state === 'OPEN' ? await fetchStacked(ref.repo, pr.baseRefName) : null;
     const node = nodeFromPr(ref, pr, acceptanceOf(ref), parent);
+    if (node.merged) node.deps = [];
     graph.set(refKey(ref), node);
     queue.push(...node.deps);
   }
-  return graph;
+  return { graph, truncated: false };
 }
 
 /**
