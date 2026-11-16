@@ -22,3 +22,18 @@ button:disabled { opacity: .5; cursor: default; }
 .task .desc { margin: 0 0 4px; font-weight: 500; overflow-wrap: anywhere; }
 .task .meta { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
 [hidden] { display: none !important; }
+.top { display: flex; align-items: center; gap: 12px; padding: 10px 20px; border-bottom: 1px solid var(--line); }
+.brand { font-size: 15px; }
+.spacer { flex: 1; }
+.muted { color: var(--muted); font-size: 12px; }
+nav { display: flex; gap: 4px; }
+button.tab { background: transparent; color: CanvasText; padding: 5px 10px; }
+button.tab[data-active="true"] { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; }
+.hint { color: var(--muted); font-size: 13px; }
+.steps { display: flex; gap: 6px; list-style: none; padding: 0; margin: 0 0 18px; }
+.steps li { flex: 1; text-align: center; font-size: 12px; padding: 6px 4px; border-radius: 999px; background: color-mix(in srgb, var(--line) 50%, transparent); color: var(--muted); }
+.steps li[data-state="current"] { background: var(--accent); color: #fff; }
+.steps li[data-state="done"] { color: var(--ok); }
+.guide { padding-left: 18px; display: grid; gap: 8px; }
+section h1 { margin-bottom: 10px; }

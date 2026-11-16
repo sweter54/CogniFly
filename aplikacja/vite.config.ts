@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { defineConfig } from 'vitest/config';
 
 // One HTML page per Tauri window; fixed port expected by tauri.conf.json.
-const pages = ['background', 'settings', 'login', 'inbox'];
+const pages = ['background', 'main'];
 
 export default defineConfig({
   clearScreen: false,

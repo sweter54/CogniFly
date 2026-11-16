@@ -36,7 +36,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
     fetch,
     notify: vi.fn(async () => undefined),
     render: (v) => void views.push(v),
-    showWindow: vi.fn(async () => undefined),
+    showScreen: vi.fn(async () => undefined),
     now: () => NOW,
   };
   return { c: new Controller(ports), ports, state, views };
@@ -46,7 +46,7 @@ describe('Controller', () => {
   it('without a session opens the login window and does not poll', async () => {
     const { c, ports } = setup({ session: null });
     expect((await c.start()).loggedIn).toBe(false);
-    expect(ports.showWindow).toHaveBeenCalledWith('login');
+    expect(ports.showScreen).toHaveBeenCalledWith('login');
     expect(ports.fetch).not.toHaveBeenCalled();
   });
 
@@ -86,6 +86,15 @@ describe('Controller', () => {
     expect(c.current().loggedIn).toBe(true);
   });
 
+  it('a revoked session switches to the login screen and clears the vault', async () => {
+    const { ports } = setup({ session: JSON.stringify({ accessToken: 'A', refreshToken: 'R', expiresAt: NOW, email: 'm@x.pl' }) });
+    const revoked: FetchFn = vi.fn(async (url: string) => json(url.includes('cognito') ? 400 : 401, { __type: 'NotAuthorizedException' }));
+    const c = new Controller({ ...ports, fetch: revoked });
+    expect((await c.start()).loggedIn).toBe(false);
+    expect(ports.showScreen).toHaveBeenCalledWith('login');
+    expect(await ports.vault.read()).toBeNull();
+  });
+
   it('confirm without sendCode fails with NO_PENDING_LOGIN', async () => {
     const { c } = setup({ session: null });
     await expect(c.handlers()['login.confirm']!({ code: '123456' })).rejects.toMatchObject({ code: 'NO_PENDING_LOGIN' });
@@ -108,10 +117,10 @@ describe('Controller', () => {
     expect(c.current().loggedIn).toBe(false);
   });
 
-  it('logout clears the vault and the view', async () => {
+  it('logout (rpc) clears the vault and the view', async () => {
     const { c, ports } = setup({ inbox: [task(1)] });
     await c.start();
-    await c.logout();
+    expect(await c.handlers()['session.logout']!({})).toEqual({ ok: true });
     expect(await ports.vault.read()).toBeNull();
     expect(c.current()).toMatchObject({ loggedIn: false, tasks: [], email: null });
   });

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CogniFly</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <strong class="brand">CogniFly</strong>
+      <nav id="nav" hidden>
+        <button type="button" class="tab" data-go="inbox">Skrzynka</button>
+        <button type="button" class="tab" data-go="settings">Ustawienia</button>
+      </nav>
+      <span class="spacer"></span>
+      <span id="who" class="muted"></span>
+      <button type="button" id="logout" class="link" hidden>Wyloguj</button>
+    </header>
+
+    <main>
+      <p id="status" role="status"></p>
+
+      <section id="screen-login" hidden>
+        <ol class="steps" aria-label="Postęp logowania">
+          <li data-step="email">1. E-mail</li>
+          <li data-step="code">2. Kod z maila</li>
+          <li data-step="done">3. Gotowe</li>
+        </ol>
+
+        <div data-pane="email">
+          <h1>Witaj w CogniFly</h1>
+          <p>CogniFly pokazuje przy zegarze, ile zadań na Ciebie czeka, i powiadamia Cię, gdy pojawi się nowe
+            zadanie albo eskalacja. Zaloguj się adresem e-mail, który podałeś firmie — bez hasła.</p>
+          <form id="email-form" novalidate>
+            <label>Twój e-mail <input name="email" type="email" autocomplete="email" required /></label>
+            <div class="actions"><button type="submit">Wyślij kod</button></div>
+          </form>
+          <p class="hint">Łączysz się z innym serwerem? <button type="button" class="link" data-go="settings">Ustawienia połączenia</button></p>
+        </div>
+
+        <div data-pane="code" hidden>
+          <h1>Wpisz kod z e-maila</h1>
+          <p>Wysłaliśmy jednorazowy kod na <strong id="email-shown"></strong>. Kod jest ważny ok. 3 minuty.</p>
+          <p class="hint">Nie widzisz wiadomości? Sprawdź folder <strong>Spam</strong> — nadawcą jest CogniFly.</p>
+          <form id="code-form" novalidate>
+            <label>Kod <input name="code" inputmode="numeric" autocomplete="one-time-code" required /></label>
+            <div class="actions">
+              <button type="button" id="change-email" class="secondary">Zmień e-mail</button>
+              <button type="button" id="resend" class="secondary">Wyślij nowy kod</button>
+              <button type="submit">Zaloguj</button>
+            </div>
+          </form>
+        </div>
+
+        <div data-pane="done" hidden>
+          <h1>Gotowe!</h1>
+          <p>Jesteś zalogowany jako <strong id="email-done"></strong>.</p>
+          <ul class="guide">
+            <li>Ikona <strong>CogniFly</strong> przy zegarze pokazuje liczbę zadań, które na Ciebie czekają.</li>
+            <li>Gdy pojawi się nowe zadanie lub eskalacja, dostaniesz powiadomienie. Kliknij je, aby otworzyć skrzynkę.</li>
+            <li>To okno możesz zamknąć — CogniFly działa dalej w tle. Wrócisz tu z menu ikony.</li>
+          </ul>
+          <div class="actions"><button type="button" data-go="inbox">Przejdź do skrzynki</button></div>
+        </div>
+      </section>
+
+      <section id="screen-inbox" hidden>
+        <div class="bar">
+          <h1>Skrzynka</h1>
+          <button type="button" id="refresh" class="secondary">Odśwież</button>
+        </div>
+        <ul id="list" class="tasks"></ul>
+        <template id="task-template">
+          <li class="task">
+            <p class="desc"></p>
+            <p class="meta"></p>
+            <div class="actions">
+              <button type="button" class="take">Biorę</button>
+              <select class="state" aria-label="Zmień stan">
+                <option value="">Zmień stan…</option>
+                <option value="w_trakcie">W trakcie</option>
+                <option value="do_akceptacji">Do akceptacji</option>
+                <option value="zrobione">Zrobione</option>
+              </select>
+            </div>
+          </li>
+        </template>
+      </section>
+
+      <section id="screen-settings" hidden>
+        <h1>Ustawienia połączenia</h1>
+        <p class="hint">Zwykle nie trzeba nic zmieniać — wartości są wypełnione dla Twojej firmy.</p>
+        <form id="settings-form" novalidate>
+          <label>Adres API <input name="apiUrl" type="url" required /></label>
+          <label>Klient Cognito <input name="clientId" required /></label>
+          <label>Region <input name="region" required /></label>
+          <label>Firma <input name="company" /></label>
+          <div class="actions">
+            <button type="button" id="defaults" class="secondary">Przywróć domyślne</button>
+            <button type="button" id="settings-back" class="secondary">Wróć</button>
+            <button type="submit">Zapisz</button>
+          </div>
+        </form>
+      </section>
+    </main>
+    <script type="module" src="/src/windows/main.ts"></script>
+  </body>
+</html>

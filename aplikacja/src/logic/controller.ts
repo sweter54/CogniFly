@@ -2,7 +2,7 @@
 // notifications and the rpc handlers. Platform effects are injected
 // as ports, so the whole flow is unit-tested without Tauri.
 import type { Task, UserSettableState } from '@cognifly/wspolne/api';
-import type { InboxView, Methods, UiWindow } from '../windows/protocol.js';
+import type { InboxView, Methods, Screen } from '../windows/protocol.js';
 import { ApiClient } from './api.js';
 import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, type PendingLogin } from './cognito.js';
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type AppConfig } from './config.js';
@@ -25,8 +25,8 @@ export interface Ports {
   notify(title: string, body: string): Promise<void>;
   /** Updates tray and inbox window with the latest view. */
   render(view: InboxView): void;
-  /** Shows and focuses a UI window. */
-  showWindow(label: UiWindow): Promise<void>;
+  /** Brings the main window to the front on the given screen. */
+  showScreen(screen: Screen): Promise<void>;
   now?: () => number;
 }
 
@@ -53,13 +53,14 @@ export class Controller {
    *
    * Call: `await controller.start()` when the background window loads.
    * Expects: nothing.
-   * Output: the first view; without a session the login window opens.
+   * Output: the first view; without a session the main window opens
+   * on the guided login.
    */
   async start(): Promise<InboxView> {
     const s = await this.session.current();
     this.update({ loggedIn: !!s, email: s?.email ?? null });
     if (!s) {
-      await this.ports.showWindow('login');
+      await this.ports.showScreen('login');
       return this.view;
     }
     return this.poll();
@@ -123,6 +124,10 @@ export class Controller {
       'inbox.refresh': () => this.poll(),
       'inbox.take': (p) => this.take(text(p, 'id')),
       'inbox.setState': (p) => this.setState(text(p, 'id'), text(p, 'state')),
+      'session.logout': async () => {
+        await this.logout();
+        return { ok: true };
+      },
     };
   }
 
@@ -150,13 +155,13 @@ export class Controller {
    *
    * Call: from `runPoll`'s catch.
    * Expects: the thrown value.
-   * Output: none. Login required → logged-out view + login window;
+   * Output: none. Login required → logged-out view + login screen;
    * anything else (network, server error) → `offline`, tasks kept.
    */
   private async pollFailed(e: unknown): Promise<void> {
     if (e instanceof LoginRequiredError) {
       this.update({ loggedIn: false, offline: false, tasks: [] });
-      await this.ports.showWindow('login');
+      await this.ports.showScreen('login');
       return;
     }
     this.update({ offline: true });

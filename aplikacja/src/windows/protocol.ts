@@ -4,13 +4,17 @@ import type { Task, UserSettableState } from '@cognifly/wspolne/api';
 import type { AppConfig } from '../logic/config.js';
 
 /** Window labels (must match tauri.conf.json and capabilities). */
-export const WINDOWS = { background: 'background', settings: 'settings', login: 'login', inbox: 'inbox' } as const;
-export type UiWindow = Exclude<(typeof WINDOWS)[keyof typeof WINDOWS], 'background'>;
+export const WINDOWS = { background: 'background', main: 'main' } as const;
 
-/** Event pushed to the inbox window after every poll. */
+/** Screens of the main window. */
+export type Screen = 'login' | 'inbox' | 'settings';
+
+/** Event pushed to the main window after every view change. */
 export const INBOX_EVENT = 'cognifly://inbox';
+/** Event asking the main window to switch screen. */
+export const SCREEN_EVENT = 'cognifly://screen';
 
-/** Snapshot of what the inbox window shows. */
+/** Snapshot of the session and inbox shown by the main window. */
 export interface InboxView {
   loggedIn: boolean;
   offline: boolean;
@@ -30,5 +34,6 @@ export interface Methods {
   'inbox.refresh': { params: Record<string, never>; result: InboxView };
   'inbox.take': { params: { id: string }; result: { status: 'TAKEN' } | { status: 'BUSY'; owner: string } };
   'inbox.setState': { params: { id: string; state: UserSettableState }; result: { ok: true } };
+  'session.logout': { params: Record<string, never>; result: { ok: true } };
 }
 export type Method = keyof Methods;

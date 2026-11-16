@@ -1,0 +1,16 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "Main window (guided login, inbox, settings): talks to the background window via events only.",
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "macOS",
+    "windows"
+  ],
+  "permissions": [
+    "core:event:default",
+    "core:window:allow-hide"
+  ]
+}

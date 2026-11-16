@@ -12,10 +12,24 @@
   "app": {
     "withGlobalTauri": false,
     "windows": [
-      { "label": "background", "url": "background.html", "visible": false, "width": 200, "height": 100 },
-      { "label": "settings", "url": "settings.html", "title": "CogniFly — ustawienia", "visible": false, "width": 460, "height": 420, "resizable": false, "center": true },
-      { "label": "login", "url": "login.html", "title": "CogniFly — logowanie", "visible": false, "width": 420, "height": 340, "resizable": false, "center": true },
-      { "label": "inbox", "url": "inbox.html", "title": "CogniFly — skrzynka", "visible": false, "width": 560, "height": 600, "center": true }
+      {
+        "label": "background",
+        "url": "background.html",
+        "visible": false,
+        "width": 200,
+        "height": 100
+      },
+      {
+        "label": "main",
+        "url": "main.html",
+        "title": "CogniFly",
+        "visible": false,
+        "width": 560,
+        "height": 640,
+        "minWidth": 420,
+        "minHeight": 480,
+        "center": true
+      }
     ],
     "security": {
       "csp": {
@@ -45,9 +59,19 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app"],
+    "targets": [
+      "app"
+    ],
     "category": "Productivity",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.png"],
-    "macOS": { "minimumSystemVersion": "12.0" }
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.png"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    }
   }
 }
