@@ -22,6 +22,13 @@
 - Zakres HTTP: `https://*.execute-api.*.amazonaws.com/*`, `https://cognito-idp.*.amazonaws.com/`.
 - Wartości domyślne pilota: API `https://td5k44easl.execute-api.eu-central-1.amazonaws.com`, klient `67b7re8ou041svoosk3ukotqrq`, region `eu-central-1`, firma `pilot`.
 - `npm test` w katalogu głównym zielony.
+- **Cały nowy kod po angielsku** (identyfikatory, komentarze, nazwy plików i testów). Wyjątek: pola formatu
+  przewodowego API (`zadania`, `opis`, `stan`, `wlasciciel`, …) i kody błędów serwera zostają jak w API.
+  Teksty widoczne dla użytkownika w UI — po polsku.
+- **Każda funkcja/metoda ma opis** (JSDoc / `///` w Ruście): maks. 20 linii, każda ≤ 75 znaków; opisuje
+  wywołanie (parametry), oczekiwania (warunki wstępne, błędy) i wyjście (zwracana wartość/efekty).
+- Nazwy w planie poniżej (`konfiguracja.ts`, `MenedzerSesji`, …) tłumaczyć na angielski przy implementacji
+  (np. `config.ts`, `SessionManager`, `pickNew`, `notificationText`).
 
 ## Review Focus
 
