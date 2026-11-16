@@ -1,0 +1,53 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "CogniFly",
+  "version": "0.1.0",
+  "identifier": "pl.cognifly.aplikacja",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      { "label": "background", "url": "background.html", "visible": false, "width": 200, "height": 100 },
+      { "label": "settings", "url": "settings.html", "title": "CogniFly — ustawienia", "visible": false, "width": 460, "height": 420, "resizable": false, "center": true },
+      { "label": "login", "url": "login.html", "title": "CogniFly — logowanie", "visible": false, "width": 420, "height": 340, "resizable": false, "center": true },
+      { "label": "inbox", "url": "inbox.html", "title": "CogniFly — skrzynka", "visible": false, "width": 560, "height": 600, "center": true }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self'",
+        "img-src": "'self' data:",
+        "connect-src": "ipc: http://ipc.localhost",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-ancestors": "'none'"
+      },
+      "devCsp": {
+        "default-src": "'self'",
+        "script-src": "'self'",
+        "style-src": "'self' 'unsafe-inline'",
+        "img-src": "'self' data:",
+        "connect-src": "ipc: http://ipc.localhost ws://localhost:1420",
+        "object-src": "'none'",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-ancestors": "'none'"
+      },
+      "freezePrototype": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app"],
+    "category": "Productivity",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.png"],
+    "macOS": { "minimumSystemVersion": "12.0" }
+  }
+}

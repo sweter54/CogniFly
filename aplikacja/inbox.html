@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CogniFly — skrzynka</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <header class="bar">
+        <h1>Skrzynka</h1>
+        <button type="button" id="refresh" class="secondary">Odśwież</button>
+      </header>
+      <p id="status" role="status"></p>
+      <ul id="list" class="tasks"></ul>
+      <template id="task-template">
+        <li class="task">
+          <p class="desc"></p>
+          <p class="meta"></p>
+          <div class="actions">
+            <button type="button" class="take">Biorę</button>
+            <select class="state" aria-label="Zmień stan">
+              <option value="">Zmień stan…</option>
+              <option value="w_trakcie">W trakcie</option>
+              <option value="do_akceptacji">Do akceptacji</option>
+              <option value="zrobione">Zrobione</option>
+            </select>
+          </div>
+        </li>
+      </template>
+    </main>
+    <script type="module" src="/src/windows/inbox.ts"></script>
+  </body>
+</html>
