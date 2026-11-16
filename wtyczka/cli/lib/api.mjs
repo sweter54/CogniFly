@@ -128,7 +128,7 @@ export async function wykonaj(argv, env = process.env) {
   try {
     if (polecenie === 'wyloguj') return wyloguj(kat);
     if (polecenie === 'konfiguruj') return konfiguruj(kat, opcje);
-    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'biore', 'stan', 'podsumowanie'];
+    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'zadanie', 'biore', 'stan', 'podsumowanie'];
     if (!komendy.includes(polecenie)) throw new Stan('BLAD', { kod: 'NIEZNANE_POLECENIE' });
 
     // walidacje lokalne przed siecią i konfiguracją
@@ -140,7 +140,7 @@ export async function wykonaj(argv, env = process.env) {
       if (opcje.typ) q.set('typ', opcje.typ);
       zapytanie = `?${q}`;
     }
-    if (polecenie === 'biore' || polecenie === 'stan') {
+    if (polecenie === 'zadanie' || polecenie === 'biore' || polecenie === 'stan') {
       id = poz[1];
       if (!ID_ZADANIA.test(id ?? '')) throw new Stan('NIE_ZNALEZIONO');
     }
@@ -169,6 +169,14 @@ export async function wykonaj(argv, env = process.env) {
         const r = await zSesja(ctx, 'GET', '/skrzynka');
         if (r.status === 200) return { stan: 'OK', zadania: r.json.zadania ?? [] };
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        return blad(r);
+      }
+      case 'zadanie': {
+        // Zdarzenie odchudzane także tutaj (obrona w głąb): bez `dane` i nazwy gałęzi.
+        const r = await zSesja(ctx, 'GET', `/zadania/${id}`);
+        if (r.status === 200) return { stan: 'OK', zadanie: r.json.zadanie, zdarzenie: r.json.zdarzenie ? odchudz(r.json.zdarzenie) : null };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
         return blad(r);
       }
       case 'biore': {

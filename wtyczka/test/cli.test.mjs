@@ -358,6 +358,27 @@ describe('polecenia', () => {
     apiHandler = () => ({ status: 404, body: {} });
     expect((await cli(['biore', id])).json.stan).toBe('NIE_ZNALEZIONO');
   });
+  it('zadanie: OK z odchudzonym zdarzeniem (bez dane/galaz); 403/404; zly id bez sieci', async () => {
+    const id = 'zad_0123456789ab';
+    const zdarzenie = { id: 'evt_1', czas: 't', typ: 'github.pr.review', zrodlo: 'github', opis: 'Nowa recenzja PR #7',
+      podmiot: { repo: 'a/b', pr: 7, recenzent: 'anna', galaz: 'zla' }, dane: { tytul: 'obce' }, wymagaPracy: true };
+    apiHandler = () => ({ status: 200, body: { zadanie: { id }, zdarzenie } });
+    const r = await cli(['zadanie', id]);
+    expect(r.json).toEqual({ stan: 'OK', zadanie: { id }, zdarzenie: {
+      id: 'evt_1', czas: 't', typ: 'github.pr.review', zrodlo: 'github', opis: 'Nowa recenzja PR #7',
+      podmiot: { repo: 'a/b', pr: 7, recenzent: 'anna' }, wymagaPracy: true } });
+    expect(api.log[0].method).toBe('GET');
+    expect(api.log[0].url).toBe(`/zadania/${id}`);
+    apiHandler = () => ({ status: 200, body: { zadanie: { id }, zdarzenie: null } });
+    expect((await cli(['zadanie', id])).json).toEqual({ stan: 'OK', zadanie: { id }, zdarzenie: null });
+    apiHandler = () => ({ status: 403, body: {} });
+    expect((await cli(['zadanie', id])).json.stan).toBe('BRAK_DOSTEPU');
+    apiHandler = () => ({ status: 404, body: {} });
+    expect((await cli(['zadanie', id])).json.stan).toBe('NIE_ZNALEZIONO');
+    api.log.length = 0;
+    expect((await cli(['zadanie', '../skrzynka'])).json.stan).toBe('NIE_ZNALEZIONO');
+    expect(api.log.length).toBe(0);
+  });
   it('stan: OK, ZLY_STAN lokalnie, postep przekazany', async () => {
     const id = 'zad_0123456789abcdef01234567';
     apiHandler = () => ({ status: 200, body: { zadanie: { id } } });
