@@ -96,7 +96,8 @@ export function setBusy(form: HTMLFormElement, busy: boolean): void {
  * Reads a form's text fields.
  *
  * Call: `formValues(form)`.
- * Expects: inputs with `name` attributes.
+ * Expects: inputs with `name` attributes, NOT disabled (FormData
+ * omits disabled fields) — read values before `setBusy(form, true)`.
  * Output: name → string value.
  */
 export function formValues(form: HTMLFormElement): Record<string, string> {

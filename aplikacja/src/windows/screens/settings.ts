@@ -35,9 +35,10 @@ function fill(form: HTMLFormElement, config: AppConfig): void {
  * Output: none; shows success or the field-specific hint.
  */
 async function save(call: Call, form: HTMLFormElement): Promise<void> {
+  const values = formValues(form); // before disabling: FormData skips disabled fields
   setBusy(form, true);
   try {
-    const r = await call('config.save', { config: formValues(form) as unknown as AppConfig });
+    const r = await call('config.save', { config: values as unknown as AppConfig });
     setStatus(r.ok ? 'Zapisano.' : FIELD_HINTS[r.field], r.ok ? 'ok' : 'error');
   } catch (e) {
     setStatus(messageFor(e), 'error');

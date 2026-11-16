@@ -29,15 +29,17 @@ function showStep(step: LoginStep): void {
 /**
  * Runs one async step with busy state and Polish error messages.
  *
- * Call: `await runStep(form, action)`.
+ * Call: `await runStep(form, (values) => ...)`.
  * Expects: an action that may throw rpc errors.
- * Output: none.
+ * Output: none. Values are read BEFORE the form is disabled, because
+ * disabled fields are left out of `FormData`.
  */
-async function runStep(form: HTMLFormElement, action: () => Promise<void>): Promise<void> {
+async function runStep(form: HTMLFormElement, action: (values: Record<string, string>) => Promise<void>): Promise<void> {
+  const values = formValues(form);
   setBusy(form, true);
   setStatus('');
   try {
-    await action();
+    await action(values);
   } catch (e) {
     setStatus(messageFor(e), 'error');
   } finally {
@@ -72,13 +74,15 @@ export function mountLogin(call: Call): LoginScreen {
   let email = '';
   emailForm.addEventListener('submit', (ev) => {
     ev.preventDefault();
-    email = formValues(emailForm).email ?? '';
-    void runStep(emailForm, () => sendCode(call, email));
+    void runStep(emailForm, (values) => {
+      email = values.email ?? '';
+      return sendCode(call, email);
+    });
   });
   codeForm.addEventListener('submit', (ev) => {
     ev.preventDefault();
-    void runStep(codeForm, async () => {
-      const r = await call('login.confirm', { code: formValues(codeForm).code ?? '' });
+    void runStep(codeForm, async (values) => {
+      const r = await call('login.confirm', { code: values.code ?? '' });
       codeForm.reset();
       byId('email-done').textContent = r.email;
       showStep('done');
