@@ -60,6 +60,7 @@ export function nodeFromPr(ref: PrRef, pr: GithubPr, acceptance: Acceptance | nu
       && pr.reviews.nodes.some((r) => r.submittedAt !== null && r.submittedAt > acceptance.at),
     acceptedSha: acceptance?.sha ?? null,
     deps,
+    author: pr.author?.login ?? null,
   };
 }
 

@@ -18,6 +18,8 @@ export interface ChainNode {
   /** Head sha accepted in CogniFly CR, or null (not accepted). */
   acceptedSha: string | null;
   deps: PrRef[];
+  /** GitHub login of the PR author (who may deliver it). */
+  author?: string | null;
 }
 
 /** Assessment result. */

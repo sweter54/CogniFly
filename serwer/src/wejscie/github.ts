@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { CI_ONLY_EVENTS, deliverySignal } from '../dostarczenia/sygnal.js';
 import { mapujGithub } from './mapuj-github.js';
 
 const eb = new EventBridgeClient({});
@@ -82,21 +83,17 @@ export async function handler(z: Zadanie): Promise<{ statusCode: number; body: s
     return odp(400);
   }
 
-  const zdarzenie = mapujGithub(nazwa, idDostawy, payload, firma);
-  if (!zdarzenie) return odp(202);
+  // Zdarzenia CI nie trafiają do historii ani reguł — budzą tylko nasłuch dostarczeń.
+  const zdarzenie = CI_ONLY_EVENTS.includes(nazwa) ? null : mapujGithub(nazwa, idDostawy, payload, firma);
+  const sygnal = deliverySignal(nazwa, payload, firma);
+  const szyna = process.env.COGNIFLY_SZYNA ?? 'cognifly-test-szyna';
+  const wpisy = [
+    ...(zdarzenie ? [{ EventBusName: szyna, Source: 'cognifly.github', DetailType: zdarzenie.typ, Detail: JSON.stringify(zdarzenie) }] : []),
+    ...(sygnal ? [{ EventBusName: szyna, Source: 'dostarczenia.github', DetailType: 'sygnal', Detail: JSON.stringify(sygnal) }] : []),
+  ];
+  if (!wpisy.length) return odp(202);
 
-  const wynik = await eb.send(
-    new PutEventsCommand({
-      Entries: [
-        {
-          EventBusName: process.env.COGNIFLY_SZYNA ?? 'cognifly-test-szyna',
-          Source: 'cognifly.github',
-          DetailType: zdarzenie.typ,
-          Detail: JSON.stringify(zdarzenie),
-        },
-      ],
-    }),
-  );
+  const wynik = await eb.send(new PutEventsCommand({ Entries: wpisy }));
   if ((wynik.FailedEntryCount ?? 0) > 0) return odp(500);
   return odp(202);
 }

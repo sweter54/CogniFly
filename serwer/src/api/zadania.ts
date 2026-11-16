@@ -3,11 +3,11 @@ import type { EventSummary } from '@cognifly/wspolne/api';
 import { zdarzenieZadania } from '../dane/historia.js';
 import { LOGIN_GITHUB, osobaPoLoginie } from '../dane/konfiguracja.js';
 import { pobierzZadanie, przekaz as przekazZadanie, ustawStan, wez, type StanZadania } from '../dane/kolejka.js';
-import { HttpBlad, type Kontekst, type Odpowiedz } from './kontekst.js';
+import { HttpBlad, obiektJson, type Kontekst, type Odpowiedz } from './kontekst.js';
 import { TASK_ID_PATTERN as ID, USER_SETTABLE_STATES as DOZWOLONE } from '@cognifly/wspolne/api';
 // ID: 12 hex = utworzZadanie bez id; 24 hex = id ze zdarzenia (przetwarzanie)
 
-function sprawdzId(id: string | undefined): string {
+export function sprawdzId(id: string | undefined): string {
   if (id === undefined || !ID.test(id)) throw new HttpBlad(404, 'NIE_ZNALEZIONO');
   return id;
 }
@@ -45,14 +45,6 @@ export async function szczegoly(k: Kontekst, id: string | undefined): Promise<Od
 }
 
 const POSTEP_PRZEKAZANIA = 'Uwagi z code review do poprawy';
-
-/** Treść żądania jako obiekt JSON albo 400. */
-function obiektJson(surowe: string | null | undefined): Record<string, unknown> {
-  let b: unknown;
-  try { b = JSON.parse(surowe ?? ''); } catch { throw new HttpBlad(400, 'ZLY_JSON'); }
-  if (typeof b !== 'object' || b === null || Array.isArray(b)) throw new HttpBlad(400, 'ZLE_DANE');
-  return b as Record<string, unknown>;
-}
 
 /** POST /zadania/{id}/przekaz {doLoginu}: właściciel przekazuje zadanie osobie o danym loginie GitHub. */
 export async function przekaz(k: Kontekst, id: string | undefined, surowe: string | null | undefined): Promise<Odpowiedz> {

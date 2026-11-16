@@ -73,13 +73,13 @@ describe('stos CogniFly', () => {
 
   test('Lambdy: Node 22, ARM64, logi 14 dni, nazwy z prefiksem', () => {
     const lambdy = zasoby('AWS::Lambda::Function').filter(([, r]) => r.Properties.Runtime);
-    expect(lambdy).toHaveLength(4);
+    expect(lambdy).toHaveLength(5);
     for (const [, r] of lambdy) {
       expect(r.Properties.Runtime).toBe('nodejs22.x');
       expect(r.Properties.Architectures).toEqual(['arm64']);
       expect(r.Properties.FunctionName).toMatch(/^cognifly-test-/);
     }
-    t.resourceCountIs('AWS::Logs::LogGroup', 4);
+    t.resourceCountIs('AWS::Logs::LogGroup', 5);
     for (const [, r] of zasoby('AWS::Logs::LogGroup')) expect(r.Properties.RetentionInDays).toBe(14);
   });
 
@@ -175,7 +175,7 @@ describe('stos CogniFly', () => {
   });
 
   test('alarmy błędów Lambd -> SNS -> e-mail', () => {
-    t.resourceCountIs('AWS::CloudWatch::Alarm', 6);
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 7);
     t.hasResourceProperties('AWS::CloudWatch::Alarm', {
       MetricName: 'Errors', Namespace: 'AWS/Lambda', Threshold: 0,
       ComparisonOperator: 'GreaterThanThreshold', AlarmActions: [{ Ref: Match.stringLikeRegexp('Alarmy') }],
@@ -209,8 +209,24 @@ describe('stos CogniFly', () => {
       expect(s).toHaveLength(1);
       expect(JSON.stringify(s[0].Resource)).toContain('secret:cognifly-test/discord/*');
     }
-    const api = zasoby('AWS::IAM::Policy').find(([id]) => /^Api/.test(id));
-    expect(JSON.stringify(api ?? '')).not.toContain('secretsmanager');
+    for (const f of ['Api', 'Dostarczenia']) {
+      const s = sekretyDla(f);
+      expect(s).toHaveLength(1);
+      expect(JSON.stringify(s[0].Resource)).toContain('secret:cognifly-test/github-odczyt/*');
+    }
+  });
+
+  test('dostarczenia: Lambda, reguła sygnałów z webhooka (poza potokiem zdarzeń) i harmonogram co 10 min', () => {
+    const [, f] = zasoby('AWS::Lambda::Function').find(([, r]) => r.Properties.FunctionName === 'cognifly-test-dostarczenia')!;
+    expect(f).toBeDefined();
+    t.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'cognifly-test-dostarczenia',
+      EventPattern: { source: ['dostarczenia.github'] },
+    });
+    t.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: 'cognifly-test-dostarczenia', ScheduleExpression: 'rate(10 minutes)',
+      FlexibleTimeWindow: { Mode: 'OFF' },
+    });
   });
 
   test('Cognito: odzyskiwanie konta tylko e-mailem', () => {

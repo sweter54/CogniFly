@@ -13,7 +13,7 @@ describe('nodeFromPr', () => {
   test('maps GitHub states onto the chain node', () => {
     expect(nodeFromPr(ref, pr(), { sha: 'h1', at: '2026-11-17T10:00:00Z' }, null)).toEqual({
       ref, open: true, merged: false, headSha: 'h1', mergeable: true, ci: 'success', reviewDecision: null,
-      changesRequestedAfterAcceptance: false, acceptedSha: 'h1', deps: [],
+      changesRequestedAfterAcceptance: false, acceptedSha: 'h1', deps: [], author: 'ania',
     });
   });
   test('CI rollup: none = success, pending/expected = pending, failure/error = failure; conflicts and unknown', () => {

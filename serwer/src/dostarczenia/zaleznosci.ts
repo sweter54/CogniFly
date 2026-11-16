@@ -9,6 +9,17 @@ const ITEM = /(?:^|[\s,;(])((?:[A-Za-z0-9][\w.-]*\/[\w.-]+)?)#(\d{1,7})\b/g;
 const REPO = /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9_.-]+$/;
 
 /**
+ * Checks an `owner/name` repository string.
+ *
+ * Call: `isRepo('o/r')`.
+ * Expects: any string.
+ * Output: true for GitHub-like `owner/name` without `..` segments.
+ */
+export function isRepo(repo: string): boolean {
+  return REPO.test(repo) && !repo.split('/').includes('..');
+}
+
+/**
  * Stable key of a PR reference.
  *
  * Call: `refKey({ repo: 'o/r', number: 12 })`.
@@ -34,7 +45,7 @@ export function parseDependsOn(body: string | null | undefined, self: PrRef): Pr
     for (const m of (line[1] ?? '').matchAll(ITEM)) {
       const repo = m[1] || self.repo;
       const number = Number(m[2]);
-      if (number < 1 || !REPO.test(repo) || repo.split('/').includes('..')) continue;
+      if (number < 1 || !isRepo(repo)) continue;
       const ref = { repo, number };
       if (refKey(ref) !== refKey(self) && !found.has(refKey(ref))) found.set(refKey(ref), ref);
     }
