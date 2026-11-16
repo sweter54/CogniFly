@@ -33,6 +33,7 @@
           "url": "https://cognito-idp.*.amazonaws.com/"
         }
       ]
-    }
+    },
+    "log:default"
   ]
 }

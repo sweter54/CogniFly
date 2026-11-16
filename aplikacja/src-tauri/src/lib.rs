@@ -27,6 +27,23 @@ fn hide_on_close(window: &tauri::Window, event: &WindowEvent) {
     }
 }
 
+/// Configures logging (stdout + log file in the app log directory).
+///
+/// Call: `log_plugin()` while building the app.
+/// Expects: nothing.
+/// Output: the official log plugin at `Info` level. Webview errors
+/// are forwarded here by the UI; tokens are never logged.
+fn log_plugin<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    use tauri_plugin_log::{Target, TargetKind};
+    tauri_plugin_log::Builder::new()
+        .level(log::LevelFilter::Info)
+        .targets([
+            Target::new(TargetKind::Stdout),
+            Target::new(TargetKind::LogDir { file_name: None }),
+        ])
+        .build()
+}
+
 /// Builds and runs the application.
 ///
 /// Call: `run()` from `main`.
@@ -36,6 +53,7 @@ fn hide_on_close(window: &tauri::Window, event: &WindowEvent) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(log_plugin())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
         .invoke_handler(tauri::generate_handler![

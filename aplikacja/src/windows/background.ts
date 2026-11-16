@@ -6,7 +6,21 @@ import { rpcServer } from '../logic/rpc.js';
 import { keychainVault, notify, pluginFetch, pushView, setupNotifications, showScreen } from './background/platform.js';
 import { createTray, type Tray } from './background/tray.js';
 import type { InboxView } from './protocol.js';
+import { installErrorLog, reportError, reportInfo } from './diagnostics.js';
 import { tauriBus } from './tauri-bus.js';
+
+/**
+ * Maps an rpc failure to its code; unexpected ones are logged.
+ *
+ * Call: as the `toCode` of `rpcServer`.
+ * Expects: anything thrown by a handler.
+ * Output: the stable code sent to the window.
+ */
+function codeAndLog(e: unknown): string {
+  const code = errorCode(e);
+  if (code === 'UNEXPECTED') reportError('rpc', e);
+  return code;
+}
 
 /**
  * Starts the background window.
@@ -14,7 +28,7 @@ import { tauriBus } from './tauri-bus.js';
  * Call: once, at module load.
  * Expects: to run in the hidden `background` window.
  * Output: none; polls every `POLL_INTERVAL_MS` until the app quits.
- * Errors are reported to the console as codes only (no tokens).
+ * Start errors go to the app log (no tokens).
  */
 async function main(): Promise<void> {
   let tray: Tray | null = null;
@@ -23,7 +37,7 @@ async function main(): Promise<void> {
     pushView(view);
   };
   const controller = new Controller({ store: localStorage, vault: keychainVault, fetch: pluginFetch, notify, render, showScreen });
-  await rpcServer(tauriBus(), controller.handlers(), errorCode);
+  await rpcServer(tauriBus(), controller.handlers(), codeAndLog);
   tray = await createTray({
     openInbox: () => void showScreen('inbox'),
     refresh: () => void controller.poll(),
@@ -36,4 +50,5 @@ async function main(): Promise<void> {
   setInterval(() => void controller.poll(), POLL_INTERVAL_MS);
 }
 
-main().catch((e) => console.error('CogniFly start failed:', errorCode(e)));
+installErrorLog('background');
+main().then(() => reportInfo('background started'), (e) => reportError('background.start', e));

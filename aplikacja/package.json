@@ -13,6 +13,7 @@
     "@cognifly/wspolne": "*",
     "@tauri-apps/api": "^2.12.5",
     "@tauri-apps/plugin-http": "^2.9.0",
+    "@tauri-apps/plugin-log": "^2.10.2",
     "@tauri-apps/plugin-notification": "^2.8.1"
   },
   "devDependencies": {

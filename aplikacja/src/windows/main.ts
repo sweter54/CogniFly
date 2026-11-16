@@ -5,6 +5,7 @@ import { INBOX_EVENT, SCREEN_EVENT, type InboxView, type Screen } from './protoc
 import { mountInbox } from './screens/inbox.js';
 import { mountLogin } from './screens/login.js';
 import { mountSettings } from './screens/settings.js';
+import { installErrorLog, reportError } from './diagnostics.js';
 import { tauriBus } from './tauri-bus.js';
 import { byId, connect, messageFor, setStatus } from './ui.js';
 
@@ -91,4 +92,8 @@ async function main(): Promise<void> {
   go(view.loggedIn ? 'inbox' : 'login');
 }
 
-main().catch((e) => setStatus(messageFor(e), 'error'));
+installErrorLog('main');
+main().catch((e) => {
+  reportError('main.start', e);
+  setStatus(messageFor(e), 'error');
+});

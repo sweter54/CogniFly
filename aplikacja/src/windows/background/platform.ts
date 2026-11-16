@@ -5,6 +5,7 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { fetch as httpFetch } from '@tauri-apps/plugin-http';
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import type { FetchFn } from '../../logic/http.js';
+import { reportError } from '../diagnostics.js';
 import type { Vault } from '../../logic/session.js';
 import { INBOX_EVENT, SCREEN_EVENT, WINDOWS, type InboxView, type Screen } from '../protocol.js';
 
@@ -15,8 +16,18 @@ export const keychainVault: Vault = {
   remove: () => invoke<void>('vault_delete'),
 };
 
-/** Fetch through the HTTP plugin (no CORS; URL scope in capabilities). */
-export const pluginFetch: FetchFn = (url, init) => httpFetch(url, init);
+/**
+ * Fetch through the HTTP plugin (no CORS; URL scope in capabilities).
+ *
+ * Call: as `FetchFn`.
+ * Expects: an https URL allowed by the capability scope.
+ * Output: the response. A rejection (offline, timeout, scope denied)
+ * is logged with the host only, then rethrown.
+ */
+export const pluginFetch: FetchFn = (url, init) => httpFetch(url, init).catch((e: unknown) => {
+  reportError(`http ${new URL(url).host}`, e);
+  throw e;
+});
 
 /**
  * Brings the main window to the front on a screen.
@@ -24,9 +35,9 @@ export const pluginFetch: FetchFn = (url, init) => httpFetch(url, init);
  * Call: `await showScreen('login')` from the tray, notification click
  * or the controller.
  * Expects: the `main` window declared in tauri.conf.json.
- * Output: none; never throws (a failure is logged as a short line,
- * so callers such as menu actions and startup keep working). The
- * screen request is sent first, so no stale screen flashes.
+ * Output: none; never throws, so menu actions and startup keep
+ * working; failures go to the app log. The screen request is sent
+ * first, so no stale screen flashes.
  */
 export async function showScreen(screen: Screen): Promise<void> {
   try {
@@ -37,7 +48,7 @@ export async function showScreen(screen: Screen): Promise<void> {
     await w.unminimize();
     await w.setFocus();
   } catch (e) {
-    console.error('showScreen failed:', String(e));
+    reportError(`showScreen(${screen})`, e);
   }
 }
 
