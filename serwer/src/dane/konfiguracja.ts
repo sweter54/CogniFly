@@ -1,4 +1,4 @@
-import { PutCommand, QueryCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
+import { PutCommand, QueryCommand, GetCommand, UpdateCommand } from '@aws-sdk/lib-dynamodb';
 import type { Regula } from '@cognifly/wspolne';
 import { klient, nazwaTabeli } from './tabela.js';
 
@@ -67,3 +67,27 @@ export const zapiszKontakt = (firma: string, osoba: string, k: { email?: string;
 
 export const zapiszOsobe = (firma: string, osoba: string, o: { email: string; rola: 'admin' | 'czlonek' }) =>
   wstaw(firma, `OSOBA#${osoba}`, { ...o });
+
+/*
+ * Tożsamość (indeks per użytkownik, celowo NIE w przestrzeni firmy): pk=OSOBA#<sub>, sk=PROFIL,
+ * firmy: { [firma]: osobaId }. Po rozwiązaniu firmy wszystko dalej jest firmowe.
+ */
+export async function zapiszTozsamosc(sub: string, firma: string, osobaId: string): Promise<void> {
+  const Key = { pk: `OSOBA#${sub}`, sk: 'PROFIL' };
+  const T = nazwaTabeli();
+  await klient().send(new UpdateCommand({
+    TableName: T, Key, UpdateExpression: 'SET firmy = if_not_exists(firmy, :pusta)', ExpressionAttributeValues: { ':pusta': {} },
+  }));
+  await klient().send(new UpdateCommand({
+    TableName: T, Key, UpdateExpression: 'SET firmy.#f = :o',
+    ExpressionAttributeNames: { '#f': firma }, ExpressionAttributeValues: { ':o': osobaId },
+  }));
+}
+
+/** Mapa firma -> osobaId użytkownika o danym `sub`; null gdy brak profilu. */
+export async function tozsamosc(sub: string): Promise<Record<string, string> | null> {
+  const r = await klient().send(
+    new GetCommand({ TableName: nazwaTabeli(), Key: { pk: `OSOBA#${sub}`, sk: 'PROFIL' }, ConsistentRead: true }),
+  );
+  return r.Item ? ((r.Item.firmy as Record<string, string> | undefined) ?? {}) : null;
+}
