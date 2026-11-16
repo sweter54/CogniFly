@@ -77,6 +77,7 @@
             <p class="meta"></p>
             <div class="actions">
               <button type="button" class="take">Biorę</button>
+              <button type="button" class="claude secondary">Pracuj w Claude</button>
               <select class="state" aria-label="Zmień stan">
                 <option value="">Zmień stan…</option>
                 <option value="w_trakcie">W trakcie</option>
@@ -96,6 +97,10 @@
           <label>Klient Cognito <input name="clientId" required /></label>
           <label>Region <input name="region" required /></label>
           <label>Firma <input name="company" /></label>
+          <label>Folder pracy dla Claude (opcjonalnie)
+            <input name="workFolder" placeholder="/Users/…/repozytorium" spellcheck="false" />
+          </label>
+          <p class="hint">W tym folderze „Pracuj w Claude” otworzy sesję Claude Code (np. klon repozytorium). Claude poprosi o potwierdzenie folderu.</p>
           <div class="actions">
             <button type="button" id="defaults" class="secondary">Przywróć domyślne</button>
             <button type="button" id="settings-back" class="secondary">Wróć</button>

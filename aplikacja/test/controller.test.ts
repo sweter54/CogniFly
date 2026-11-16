@@ -37,6 +37,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
     notify: vi.fn(async () => undefined),
     render: (v) => void views.push(v),
     showScreen: vi.fn(async () => undefined),
+    openUrl: vi.fn(async () => undefined),
     now: () => NOW,
   };
   return { c: new Controller(ports), ports, state, views };
@@ -157,5 +158,24 @@ describe('Controller', () => {
     const c = new Controller({ ...ports, vault: { read: async () => { throw 'VAULT_ERROR'; }, write: async () => undefined, remove: async () => undefined } });
     expect((await c.start()).loggedIn).toBe(false);
     expect(ports.showScreen).toHaveBeenCalledWith('login');
+  });
+
+  it('opens Claude with only the task id and the work folder', async () => {
+    const { c, ports } = setup();
+    await c.start();
+    const h = c.handlers();
+    const { config } = (await h['config.get']!({})) as { config: Record<string, string> };
+    await h['config.save']!({ config: { ...config, workFolder: '/Users/m/repo' } });
+    expect(await h['task.openInClaude']!({ id: id(1) })).toEqual({ ok: true });
+    const url = new URL((ports.openUrl as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string);
+    expect(url.searchParams.get('q')).toBe(`Pracuj nad zadaniem CogniFly ${id(1)}`);
+    expect(url.searchParams.get('folder')).toBe('/Users/m/repo');
+  });
+
+  it('reports CLAUDE_NOT_FOUND when the OS cannot open claude://', async () => {
+    const { ports } = setup();
+    const c = new Controller({ ...ports, openUrl: async () => { throw new Error('no handler'); } });
+    await expect(c.handlers()['task.openInClaude']!({ id: id(1) })).rejects.toMatchObject({ code: 'CLAUDE_NOT_FOUND' });
+    await expect(c.handlers()['task.openInClaude']!({ id: 'x&q=1' })).rejects.toMatchObject({ code: 'BAD_TASK_ID' });
   });
 });

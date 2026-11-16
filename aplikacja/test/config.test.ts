@@ -9,7 +9,12 @@ describe('config', () => {
       clientId: '67b7re8ou041svoosk3ukotqrq',
       region: 'eu-central-1',
       company: 'pilot',
+      workFolder: '',
     });
+  });
+
+  it('accepts an absolute work folder and strips its trailing slash', () => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, workFolder: ' /Users/m/repo/ ' })).toEqual({ ok: true, config: { ...DEFAULT_CONFIG, workFolder: '/Users/m/repo' } });
   });
 
   it('trims values and strips trailing slashes', () => {
@@ -24,6 +29,9 @@ describe('config', () => {
     ['clientId', 'abc-def'],
     ['region', 'Frankfurt'],
     ['company', 'Pilot!'],
+    ['workFolder', 'repo/wzgledny'],
+    ['workFolder', '/Users/m/../etc'],
+    ['workFolder', '/Users/m/\u0007'],
   ])('rejects bad %s %s', (field, value) => {
     expect(validateConfig({ ...DEFAULT_CONFIG, [field]: value })).toEqual({ ok: false, field });
   });

@@ -35,5 +35,6 @@ export interface Methods {
   'inbox.take': { params: { id: string }; result: { status: 'TAKEN' } | { status: 'BUSY'; owner: string } };
   'inbox.setState': { params: { id: string; state: UserSettableState }; result: { ok: true } };
   'session.logout': { params: Record<string, never>; result: { ok: true } };
+  'task.openInClaude': { params: { id: string }; result: { ok: true } };
 }
 export type Method = keyof Methods;

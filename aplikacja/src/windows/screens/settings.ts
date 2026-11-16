@@ -8,6 +8,7 @@ const FIELD_HINTS: Record<keyof AppConfig, string> = {
   clientId: 'Klient Cognito może zawierać tylko litery i cyfry.',
   region: 'Region ma postać np. eu-central-1.',
   company: 'Firma: małe litery, cyfry i myślniki.',
+  workFolder: 'Folder pracy: pełna ścieżka zaczynająca się od / (bez „..”), albo puste pole.',
 };
 
 /** Handle returned by `mountSettings`. */

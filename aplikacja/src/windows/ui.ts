@@ -39,6 +39,8 @@ const MESSAGES: Record<string, string> = {
   TIMEOUT: 'Aplikacja nie odpowiada. Spróbuj ponownie.',
   VAULT_ERROR: 'Brak dostępu do Pęku kluczy.',
   VAULT_UNAVAILABLE: 'Pęk kluczy jest niedostępny.',
+  CLAUDE_NOT_FOUND: 'Nie znaleziono aplikacji Claude. Zainstaluj Claude na Maca i spróbuj ponownie.',
+  BAD_TASK_ID: 'Nieprawidłowy identyfikator zadania.',
 };
 
 /**

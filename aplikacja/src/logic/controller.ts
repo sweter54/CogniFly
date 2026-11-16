@@ -6,7 +6,8 @@ import type { InboxView, Methods, Screen } from '../windows/protocol.js';
 import { ApiClient } from './api.js';
 import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, type PendingLogin } from './cognito.js';
 import { DEFAULT_CONFIG, loadConfig, saveConfig, type AppConfig } from './config.js';
-import { CognitoError, errorCode, LoginRequiredError } from './errors.js';
+import { claudeLink } from './claude-link.js';
+import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
 import type { FetchFn } from './http.js';
 import { clearSeen, loadSeen, notificationBody, notificationTitle, pickNew, saveSeen, waitingTasks } from './notify.js';
 import type { Handler } from './rpc.js';
@@ -27,6 +28,8 @@ export interface Ports {
   render(view: InboxView): void;
   /** Brings the main window to the front on the given screen. */
   showScreen(screen: Screen): Promise<void>;
+  /** Opens a URL with the OS (only `claude://` is allowed by scope). */
+  openUrl(url: string): Promise<void>;
   /** Writes a diagnostic line (counts and codes only, no task text). */
   log?(line: string): void;
   now?: () => number;
@@ -132,6 +135,7 @@ export class Controller {
       'inbox.refresh': () => this.poll(),
       'inbox.take': (p) => this.take(text(p, 'id')),
       'inbox.setState': (p) => this.setState(text(p, 'id'), text(p, 'state')),
+      'task.openInClaude': (p) => this.openInClaude(text(p, 'id')),
       'session.logout': async () => {
         await this.logout();
         return { ok: true };
@@ -281,6 +285,26 @@ export class Controller {
   private async setState(id: string, state: string): Promise<{ ok: true }> {
     await this.api().setState(id, state as UserSettableState);
     void this.poll();
+    return { ok: true };
+  }
+
+  /**
+   * Opens a Claude Code session for a task.
+   *
+   * Call: rpc `task.openInClaude`.
+   * Expects: a task id; the link holds only the id and the work folder.
+   * Output: `{ ok: true }` once the OS accepted the link.
+   * Throws: `AppError('BAD_TASK_ID')`, `AppError('CLAUDE_NOT_FOUND')`
+   * when no app handles `claude://` (the cause is logged).
+   */
+  private async openInClaude(id: string): Promise<{ ok: true }> {
+    const link = claudeLink(id, this.config.workFolder);
+    try {
+      await this.ports.openUrl(link);
+    } catch (e) {
+      this.ports.log?.(`open claude failed: ${String(e)}`);
+      throw new AppError('CLAUDE_NOT_FOUND');
+    }
     return { ok: true };
   }
 

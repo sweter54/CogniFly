@@ -55,6 +55,19 @@ export class ApiError extends Error {
   }
 }
 
+/** App-level failure with a stable code (e.g. `CLAUDE_NOT_FOUND`). */
+export class AppError extends Error {
+  /**
+   * Call: `new AppError(code)`.
+   * Expects: a stable, user-data-free code.
+   * Output: error whose `code` goes to the UI.
+   */
+  constructor(readonly code: string) {
+    super(code);
+    this.name = 'AppError';
+  }
+}
+
 /**
  * Maps any thrown value to a stable error code for the UI.
  *
@@ -67,6 +80,6 @@ export class ApiError extends Error {
 export function errorCode(e: unknown): string {
   if (typeof e === 'string' && /^VAULT_[A-Z_]+$/.test(e)) return e;
   if (e instanceof NetworkError || e instanceof LoginRequiredError) return e.message;
-  if (e instanceof CognitoError || e instanceof ApiError) return e.code;
+  if (e instanceof CognitoError || e instanceof ApiError || e instanceof AppError) return e.code;
   return 'UNEXPECTED';
 }

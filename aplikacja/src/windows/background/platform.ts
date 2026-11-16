@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { emitTo } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { fetch as httpFetch } from '@tauri-apps/plugin-http';
+import { openUrl as openWithOs } from '@tauri-apps/plugin-opener';
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import type { FetchFn } from '../../logic/http.js';
 import { reportError } from '../diagnostics.js';
@@ -86,4 +87,15 @@ export async function setupNotifications(onClick: () => void): Promise<boolean> 
  */
 export async function notify(title: string, body: string): Promise<void> {
   sendNotification({ title, body });
+}
+
+/**
+ * Opens a URL with the default handler of the OS.
+ *
+ * Call: as the controller's `openUrl` port.
+ * Expects: a `claude://` link; the capability scope refuses others.
+ * Output: none; rejects when the scope or the OS refuses.
+ */
+export async function openUrl(url: string): Promise<void> {
+  await openWithOs(url);
 }

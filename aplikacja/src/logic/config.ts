@@ -8,6 +8,8 @@ export interface AppConfig {
   clientId: string;
   region: string;
   company: string;
+  /** Optional absolute folder for Claude Code sessions (`''` = none). */
+  workFolder: string;
 }
 
 /** Pilot deployment (test account, eu-central-1). */
@@ -16,6 +18,7 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   clientId: '67b7re8ou041svoosk3ukotqrq',
   region: 'eu-central-1',
   company: 'pilot',
+  workFolder: '',
 });
 
 const STORE_KEY = 'cognifly.config';
@@ -37,7 +40,8 @@ export type ConfigCheck =
  * slashes, or `{ ok: false, field }` naming the first invalid field.
  * Rules: API URL must be https without credentials/query/fragment;
  * client id alphanumeric; region like `eu-central-1`; company
- * lowercase letters, digits and dashes (may be empty).
+ * lowercase letters, digits and dashes (may be empty); work folder
+ * empty or a safe absolute path (see `isSafeFolder`).
  */
 export function validateConfig(input: unknown): ConfigCheck {
   const config: AppConfig = {
@@ -45,11 +49,13 @@ export function validateConfig(input: unknown): ConfigCheck {
     clientId: trimmedField(input, 'clientId'),
     region: trimmedField(input, 'region'),
     company: trimmedField(input, 'company'),
+    workFolder: trimmedField(input, 'workFolder').replace(/(.)\/+$/, '$1'),
   };
   if (!isSafeHttpsUrl(config.apiUrl)) return { ok: false, field: 'apiUrl' };
   if (!CLIENT_ID.test(config.clientId)) return { ok: false, field: 'clientId' };
   if (!REGION.test(config.region)) return { ok: false, field: 'region' };
   if (!COMPANY.test(config.company)) return { ok: false, field: 'company' };
+  if (config.workFolder && !isSafeFolder(config.workFolder)) return { ok: false, field: 'workFolder' };
   return { ok: true, config };
 }
 
@@ -82,6 +88,20 @@ export function isSafeHttpsUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Checks a work folder path.
+ *
+ * Call: `isSafeFolder(path)`.
+ * Expects: a trimmed string.
+ * Output: `true` for an absolute path (`/…`) of at most 1024
+ * characters without `..` segments or control characters.
+ */
+export function isSafeFolder(path: string): boolean {
+  if (!path.startsWith('/') || path.length > 1024) return false;
+  if (/[\p{Cc}]/u.test(path)) return false;
+  return !path.split('/').includes('..');
 }
 
 /**

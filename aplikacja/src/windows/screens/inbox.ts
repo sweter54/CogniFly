@@ -69,6 +69,21 @@ async function changeState(call: Call, id: string, state: UserSettableState): Pr
   return { text: `Zmieniono stan na: ${STATE_NAMES[state]}.`, kind: 'ok' };
 }
 
+/** States in which the user works on a task (offer "Pracuj w Claude"). */
+const WORKING_STATES = ['wziete', 'w_trakcie', 'do_akceptacji'];
+
+/**
+ * Opens a Claude Code session for a task.
+ *
+ * Call: `await openInClaude(call, id)`.
+ * Expects: a task id.
+ * Output: the message to show.
+ */
+async function openInClaude(call: Call, id: string): Promise<Outcome> {
+  await call('task.openInClaude', { id });
+  return { text: 'Otwieram Claude — sprawdź polecenie i wyślij je w nowej sesji.', kind: 'ok' };
+}
+
 /**
  * Wires the inbox screen.
  *
@@ -78,18 +93,30 @@ async function changeState(call: Call, id: string, state: UserSettableState): Pr
  */
 export function mountInbox(call: Call): InboxScreen {
   /**
-   * Runs an action, reloads the list, then shows the outcome.
-   * Call: `await act(action)`. Expects: an rpc action.
+   * Runs an action and shows its outcome.
+   * Call: `await report(action)`. Expects: an rpc action.
    * Output: none; errors become Polish messages.
    */
-  async function act(action: () => Promise<Outcome>): Promise<void> {
+  async function report(action: () => Promise<Outcome>): Promise<void> {
     try {
       const outcome = await action();
-      render(await call('inbox.refresh', {}));
       setStatus(outcome.text, outcome.kind);
     } catch (e) {
       setStatus(messageFor(e), 'error');
     }
+  }
+
+  /**
+   * Runs an action that changes tasks, reloads the list, shows outcome.
+   * Call: `await act(action)`. Expects: an rpc action.
+   * Output: none; errors become Polish messages.
+   */
+  function act(action: () => Promise<Outcome>): Promise<void> {
+    return report(async () => {
+      const outcome = await action();
+      render(await call('inbox.refresh', {}));
+      return outcome;
+    });
   }
 
   /**
@@ -108,6 +135,9 @@ export function mountInbox(call: Call): InboxScreen {
     const state = li.querySelector('.state') as HTMLSelectElement;
     take.hidden = task.stan !== 'nowe' && task.stan !== 'eskalowane';
     state.hidden = !task.wlasciciel;
+    const claude = li.querySelector('.claude') as HTMLButtonElement;
+    claude.hidden = !WORKING_STATES.includes(task.stan);
+    claude.addEventListener('click', () => void report(() => openInClaude(call, task.id)));
     take.addEventListener('click', () => void act(() => takeTask(call, task.id)));
     state.addEventListener('change', () => {
       if (state.value) void act(() => changeState(call, task.id, state.value as UserSettableState));
