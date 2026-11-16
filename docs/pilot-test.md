@@ -1,3 +1,3 @@
 # Test pilota CogniFly
 
-Linia do recenzji.
+Linia po recenzji.
