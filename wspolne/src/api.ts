@@ -58,5 +58,8 @@ export interface EventSummary {
 /** `GET /zadania/{id}` → 200; `zdarzenie` is null once history expired. */
 export interface TaskDetailsResponse { zadanie: Task; zdarzenie: EventSummary | null }
 
+/** `GET /ja` → 200: the person's id in each company they belong to. */
+export interface MeResponse { firmy: { firma: string; osoba: string }[] }
+
 /** Any error response body. */
 export interface ErrorResponse { kod: string }

@@ -226,7 +226,7 @@ export class StosCogniFly extends Stack {
     for (const [metoda, sciezka] of [
       [HttpMethod.GET, '/zdarzenia'], [HttpMethod.GET, '/skrzynka'], [HttpMethod.GET, '/zadania/{id}'],
       [HttpMethod.POST, '/zadania/{id}/biore'], [HttpMethod.POST, '/zadania/{id}/stan'],
-      [HttpMethod.GET, '/podsumowanie'],
+      [HttpMethod.GET, '/podsumowanie'], [HttpMethod.GET, '/ja'],
     ] as const) {
       httpApi.addRoutes({ path: sciezka, methods: [metoda], integration: apiIntegracja, authorizer: autoryzator });
     }

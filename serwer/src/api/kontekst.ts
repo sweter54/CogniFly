@@ -21,12 +21,23 @@ export class HttpBlad extends Error {
   }
 }
 
-export async function kontekst(event: ZdarzenieApi): Promise<Kontekst> {
+/** `sub` z tokenu JWT (zweryfikowanego przez API Gateway); brak → 401. */
+export function subZTokenu(event: ZdarzenieApi): string {
   const sub = event.requestContext?.authorizer?.jwt?.claims?.sub;
   if (typeof sub !== 'string' || sub === '') throw new HttpBlad(401, 'BRAK_TOKENU');
+  return sub;
+}
 
+/** Firmy osoby z tokenu (firma → osobaId); nieznana osoba → 403. */
+export async function firmyZTokenu(event: ZdarzenieApi): Promise<{ sub: string; firmy: Record<string, string> }> {
+  const sub = subZTokenu(event);
   const firmy = await tozsamosc(sub);
   if (!firmy) throw new HttpBlad(403, 'BRAK_DOSTEPU');
+  return { sub, firmy };
+}
+
+export async function kontekst(event: ZdarzenieApi): Promise<Kontekst> {
+  const { sub, firmy } = await firmyZTokenu(event);
   const dostepne = Object.keys(firmy);
 
   const naglowek = event.headers?.['x-cognifly-firma'];

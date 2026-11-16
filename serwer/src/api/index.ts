@@ -1,5 +1,6 @@
 import { kontekst, HttpBlad, type Odpowiedz, type ZdarzenieApi } from './kontekst.js';
 import { podsumowanie, skrzynkaOsoby } from './skrzynka.js';
+import { ja } from './ja.js';
 import { biore, stan, szczegoly } from './zadania.js';
 import { zdarzenia } from './zdarzenia.js';
 
@@ -20,6 +21,7 @@ export async function handler(event: ZdarzenieApi) {
       'POST /zadania/{id}/stan': (k) => stan(k, event.pathParameters?.id, tresc(event)),
       'GET /podsumowanie': (k) => podsumowanie(k),
     };
+    if (event.routeKey === 'GET /ja') return odp(await ja(event)); // bez kontekstu firmy
     const trasa = Object.hasOwn(trasy, event.routeKey) ? trasy[event.routeKey] : undefined;
     if (!trasa) return odp({ status: 404, body: { kod: 'NIE_ZNALEZIONO' } });
     return odp(await trasa(await kontekst(event)));

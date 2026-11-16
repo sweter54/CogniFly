@@ -60,6 +60,14 @@ describe('tożsamość i kontekst', () => {
     expect(r).toMatchObject({ status: 400, body: { kod: 'BRAK_FIRMY' } });
     expect((await wywolaj('GET /skrzynka', { sub: 'sub-dwie', firma: 'f2' })).status).toBe(200);
   });
+  test('GET /ja: firmy z identyfikatorem osoby, także przy wielu firmach bez nagłówka', async () => {
+    expect(await wywolaj('GET /ja')).toMatchObject({ status: 200, body: { firmy: [{ firma: 'f1', osoba: 'michal' }] } });
+    expect(await wywolaj('GET /ja', { sub: 'sub-dwie' })).toMatchObject({
+      status: 200, body: { firmy: [{ firma: 'f1', osoba: 'dwie1' }, { firma: 'f2', osoba: 'dwie2' }] },
+    });
+    expect((await wywolaj('GET /ja', { sub: 'nikt' })).status).toBe(403);
+    expect((await wywolaj('GET /ja', { sub: null })).status).toBe(401);
+  });
   test('nieznana trasa → 404; content-type JSON', async () => {
     const r = await wywolaj('GET /cos');
     expect(r.status).toBe(404);
