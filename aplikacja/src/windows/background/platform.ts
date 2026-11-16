@@ -24,16 +24,21 @@ export const pluginFetch: FetchFn = (url, init) => httpFetch(url, init);
  * Call: `await showScreen('login')` from the tray, notification click
  * or the controller.
  * Expects: the `main` window declared in tauri.conf.json.
- * Output: none. The screen request is sent before showing, so the
- * window never flashes the previous screen.
+ * Output: none; never throws (a failure is logged as a short line,
+ * so callers such as menu actions and startup keep working). The
+ * screen request is sent first, so no stale screen flashes.
  */
 export async function showScreen(screen: Screen): Promise<void> {
-  await emitTo(WINDOWS.main, SCREEN_EVENT, { screen }).catch(() => undefined);
-  const w = await WebviewWindow.getByLabel(WINDOWS.main);
-  if (!w) return;
-  await w.show();
-  await w.unminimize();
-  await w.setFocus();
+  try {
+    await emitTo(WINDOWS.main, SCREEN_EVENT, { screen });
+    const w = await WebviewWindow.getByLabel(WINDOWS.main);
+    if (!w) throw new Error('main window missing');
+    await w.show();
+    await w.unminimize();
+    await w.setFocus();
+  } catch (e) {
+    console.error('showScreen failed:', String(e));
+  }
 }
 
 /**
