@@ -68,7 +68,9 @@ export async function cognito(endpoint, operacja, body, signal) {
     });
   } catch { throw new Stan('BLAD_SIECI'); }
   let json = {};
-  try { json = await r.json(); } catch {}
+  try { json = await r.json(); } catch {
+    if (r.ok) throw new Stan(signal?.aborted ? 'BLAD_SIECI' : 'BLAD', signal?.aborted ? {} : { kod: 'ZLA_ODPOWIEDZ' });
+  }
   if (!r.ok) {
     const typ = String(json.__type ?? '').split('#').pop();
     return { blad: typ || `HTTP_${r.status}` };
@@ -127,10 +129,14 @@ export async function odswiez({ kat, konf, endpoint, sesja, signal }) {
     AuthFlow: 'REFRESH_TOKEN_AUTH', ClientId: konf.klientCognito,
     AuthParameters: { REFRESH_TOKEN: sesja.refreshToken },
   }, signal);
-  if (r.blad || !r.ok.AuthenticationResult?.AccessToken) {
-    usun(kat, 'sesja.json');
-    throw new Stan('WYMAGA_LOGOWANIA');
+  if (r.blad) {
+    if (r.blad === 'NotAuthorizedException' || r.blad === 'UserNotFoundException') {
+      usun(kat, 'sesja.json');
+      throw new Stan('WYMAGA_LOGOWANIA');
+    }
+    throw new Stan('BLAD', { kod: r.blad });
   }
+  if (!r.ok.AuthenticationResult?.AccessToken) throw new Stan('BLAD', { kod: 'ZLA_ODPOWIEDZ' });
   const nowa = sesjaZWyniku(r.ok.AuthenticationResult, sesja);
   zapisz(kat, 'sesja.json', nowa);
   return nowa;

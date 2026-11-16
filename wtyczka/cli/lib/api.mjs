@@ -58,7 +58,9 @@ async function wywolaj(url, metoda, sesja, firma, body, signal) {
     r = await fetch(url, { method: metoda, headers: naglowki, body: body === undefined ? undefined : JSON.stringify(body), signal });
   } catch { throw new Stan('BLAD_SIECI'); }
   let json = {};
-  try { json = await r.json(); } catch {}
+  try { json = await r.json(); } catch {
+    if (r.status >= 200 && r.status < 300) throw new Stan(signal?.aborted ? 'BLAD_SIECI' : 'BLAD', signal?.aborted ? {} : { kod: 'ZLA_ODPOWIEDZ' });
+  }
   return { status: r.status, json };
 }
 

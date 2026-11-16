@@ -196,6 +196,51 @@ describe('odswiezanie tokenu', () => {
   });
 });
 
+describe('R16', () => {
+  beforeEach(() => { mkdirSync(kat, { mode: 0o700 }); });
+  it('200 z nie-JSON -> nie OK (API)', async () => {
+    zapiszSesje(Date.now() + 3_600_000);
+    const s = createServer((q, res) => { res.writeHead(200); res.end('<html>'); });
+    await new Promise((ok) => s.listen(0, '127.0.0.1', ok));
+    try {
+      for (const c of ['skrzynka', 'podsumowanie', 'zdarzenia']) {
+        const r = await cli([c], { COGNIFLY_ADRES_API: `http://127.0.0.1:${s.address().port}` });
+        expect(r.json).toEqual({ stan: 'BLAD', kod: 'ZLA_ODPOWIEDZ' });
+      }
+    } finally { s.close(); }
+  });
+  it('200 z nie-JSON z Cognito przy refresh -> sesja zostaje', async () => {
+    zapiszSesje(Date.now() - 1000);
+    const s = createServer((q, res) => { res.writeHead(200); res.end('nie json'); });
+    await new Promise((ok) => s.listen(0, '127.0.0.1', ok));
+    try {
+      const r = await cli(['skrzynka'], { COGNIFLY_COGNITO_ENDPOINT: `http://127.0.0.1:${s.address().port}` });
+      expect(r.json.stan).toBe('BLAD');
+      expect(existsSync(sesjaPlik())).toBe(true);
+    } finally { s.close(); }
+  });
+  it('refresh TooManyRequestsException -> sesja zostaje', async () => {
+    zapiszSesje(Date.now() - 1000);
+    cogHandler = () => ({ status: 400, body: { __type: 'TooManyRequestsException' } });
+    const r = await cli(['skrzynka']);
+    expect(r.json).toEqual({ stan: 'BLAD', kod: 'TooManyRequestsException' });
+    expect(existsSync(sesjaPlik())).toBe(true);
+  });
+  it('refresh 500 -> sesja zostaje', async () => {
+    zapiszSesje(Date.now() - 1000);
+    cogHandler = () => ({ status: 500, body: { __type: 'InternalErrorException' } });
+    const r = await cli(['skrzynka']);
+    expect(r.json.stan).not.toBe('WYMAGA_LOGOWANIA');
+    expect(existsSync(sesjaPlik())).toBe(true);
+  });
+  it('refresh NotAuthorizedException -> sesja usunieta', async () => {
+    zapiszSesje(Date.now() - 1000);
+    cogHandler = () => ({ status: 400, body: { __type: 'NotAuthorizedException' } });
+    expect((await cli(['skrzynka'])).json.stan).toBe('WYMAGA_LOGOWANIA');
+    expect(existsSync(sesjaPlik())).toBe(false);
+  });
+});
+
 describe('polecenia', () => {
   beforeEach(() => { mkdirSync(kat, { mode: 0o700 }); zapiszSesje(Date.now() + 3_600_000); });
 
