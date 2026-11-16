@@ -5,7 +5,7 @@ import type { Task, UserSettableState } from '@cognifly/wspolne/api';
 import type { InboxView, Methods, Screen } from '../windows/protocol.js';
 import { ApiClient } from './api.js';
 import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, type PendingLogin } from './cognito.js';
-import { DEFAULT_CONFIG, loadConfig, saveConfig, type AppConfig } from './config.js';
+import { DEFAULT_CONFIG, isSafeFolder, loadConfig, saveConfig, type AppConfig } from './config.js';
 import { claudeLink } from './claude-link.js';
 import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
 import type { FetchFn } from './http.js';
@@ -28,6 +28,8 @@ export interface Ports {
   render(view: InboxView): void;
   /** Brings the main window to the front on the given screen. */
   showScreen(screen: Screen): Promise<void>;
+  /** Shows the OS folder picker; resolves `null` when cancelled. */
+  pickFolder(startAt: string): Promise<string | null>;
   /** Opens a URL with the OS (only `claude://` is allowed by scope). */
   openUrl(url: string): Promise<void>;
   /** Writes a diagnostic line (counts and codes only, no task text). */
@@ -136,6 +138,7 @@ export class Controller {
       'inbox.take': (p) => this.take(text(p, 'id')),
       'inbox.setState': (p) => this.setState(text(p, 'id'), text(p, 'state')),
       'task.openInClaude': (p) => this.openInClaude(text(p, 'id')),
+      'config.pickFolder': (p) => this.pickFolder(text(p, 'current')),
       'session.logout': async () => {
         await this.logout();
         return { ok: true };
@@ -286,6 +289,24 @@ export class Controller {
     await this.api().setState(id, state as UserSettableState);
     void this.poll();
     return { ok: true };
+  }
+
+  /**
+   * Lets the user pick the work folder in the OS dialog.
+   *
+   * Call: rpc `config.pickFolder` from the settings screen.
+   * Expects: the folder currently in the form (dialog starts there
+   * when it is a safe path).
+   * Output: `{ path }` (not saved yet — the form saves it), or
+   * `{ path: null }` when cancelled.
+   * Throws: `AppError('BAD_FOLDER')` for a path the config would
+   * refuse (e.g. a network volume with `..`).
+   */
+  private async pickFolder(current: string): Promise<{ path: string | null }> {
+    const path = await this.ports.pickFolder(isSafeFolder(current) ? current : '');
+    if (path === null) return { path: null };
+    if (!isSafeFolder(path)) throw new AppError('BAD_FOLDER');
+    return { path };
   }
 
   /**

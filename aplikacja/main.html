@@ -97,9 +97,12 @@
           <label>Klient Cognito <input name="clientId" required /></label>
           <label>Region <input name="region" required /></label>
           <label>Firma <input name="company" /></label>
-          <label>Folder pracy dla Claude (opcjonalnie)
-            <input name="workFolder" placeholder="/Users/…/repozytorium" spellcheck="false" />
-          </label>
+          <label for="work-folder">Folder pracy dla Claude (opcjonalnie)</label>
+          <div class="folder-row">
+            <input id="work-folder" name="workFolder" placeholder="Nie wybrano folderu" spellcheck="false" />
+            <button type="button" id="pick-folder" class="secondary">Wybierz…</button>
+            <button type="button" id="clear-folder" class="secondary">Wyczyść</button>
+          </div>
           <p class="hint">W tym folderze „Pracuj w Claude” otworzy sesję Claude Code (np. klon repozytorium). Claude poprosi o potwierdzenie folderu.</p>
           <div class="actions">
             <button type="button" id="defaults" class="secondary">Przywróć domyślne</button>

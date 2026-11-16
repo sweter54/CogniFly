@@ -11,6 +11,9 @@ const FIELD_HINTS: Record<keyof AppConfig, string> = {
   workFolder: 'Folder pracy: pełna ścieżka zaczynająca się od / (bez „..”), albo puste pole.',
 };
 
+/** How long to wait for the user in the folder dialog. */
+const PICKER_WAIT_MS = 10 * 60_000;
+
 /** Handle returned by `mountSettings`. */
 export interface SettingsScreen { load(): Promise<void> }
 
@@ -49,6 +52,25 @@ async function save(call: Call, form: HTMLFormElement): Promise<void> {
 }
 
 /**
+ * Opens the folder picker and puts the choice into the form.
+ *
+ * Call: `await chooseFolder(call, input)` on "Wybierz…".
+ * Expects: the work-folder input.
+ * Output: none; the user still saves with "Zapisz". Cancel keeps
+ * the old value; errors become Polish messages.
+ */
+async function chooseFolder(call: Call, input: HTMLInputElement): Promise<void> {
+  try {
+    const { path } = await call('config.pickFolder', { current: input.value.trim() }, PICKER_WAIT_MS);
+    if (path === null) return;
+    input.value = path;
+    setStatus('Wybrano folder — kliknij „Zapisz”.', 'info');
+  } catch (e) {
+    setStatus(messageFor(e), 'error');
+  }
+}
+
+/**
  * Wires the settings screen.
  *
  * Call: `mountSettings(call, back)` once; `back` leaves the screen.
@@ -65,6 +87,11 @@ export function mountSettings(call: Call, back: () => void): SettingsScreen {
   });
   byId('defaults').addEventListener('click', () => defaults && fill(form, defaults));
   byId('settings-back').addEventListener('click', back);
+  const folder = byId<HTMLInputElement>('work-folder');
+  byId('pick-folder').addEventListener('click', () => void chooseFolder(call, folder));
+  byId('clear-folder').addEventListener('click', () => {
+    folder.value = '';
+  });
   return {
     async load() {
       const r = await call('config.get', {});

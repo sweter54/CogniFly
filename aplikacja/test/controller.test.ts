@@ -38,6 +38,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
     render: (v) => void views.push(v),
     showScreen: vi.fn(async () => undefined),
     openUrl: vi.fn(async () => undefined),
+    pickFolder: vi.fn(async (): Promise<string | null> => '/Users/m/repo'),
     now: () => NOW,
   };
   return { c: new Controller(ports), ports, state, views };
@@ -177,5 +178,17 @@ describe('Controller', () => {
     const c = new Controller({ ...ports, openUrl: async () => { throw new Error('no handler'); } });
     await expect(c.handlers()['task.openInClaude']!({ id: id(1) })).rejects.toMatchObject({ code: 'CLAUDE_NOT_FOUND' });
     await expect(c.handlers()['task.openInClaude']!({ id: 'x&q=1' })).rejects.toMatchObject({ code: 'BAD_TASK_ID' });
+  });
+
+  it('folder picker: returns the choice, null on cancel, refuses unsafe paths', async () => {
+    const { ports } = setup();
+    const c = new Controller(ports);
+    const pick = c.handlers()['config.pickFolder']!;
+    expect(await pick({ current: '../zle' })).toEqual({ path: '/Users/m/repo' });
+    expect(ports.pickFolder).toHaveBeenCalledWith('');
+    const cancelled = new Controller({ ...ports, pickFolder: async () => null });
+    expect(await cancelled.handlers()['config.pickFolder']!({ current: '/Users/m' })).toEqual({ path: null });
+    const unsafe = new Controller({ ...ports, pickFolder: async () => '/Volumes/x/../y' });
+    await expect(unsafe.handlers()['config.pickFolder']!({ current: '' })).rejects.toMatchObject({ code: 'BAD_FOLDER' });
   });
 });

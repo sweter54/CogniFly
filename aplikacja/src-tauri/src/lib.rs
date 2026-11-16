@@ -1,7 +1,7 @@
 //! Thin native layer of the CogniFly desktop app.
 //!
 //! Only wiring lives here: official plugins (HTTP, notifications, log,
-//! opener for `claude://` links only),
+//! opener for `claude://` links only, dialog for the folder picker),
 //! the keychain commands and window behaviour. All business logic is in
 //! the TypeScript UI (`aplikacja/src`).
 
@@ -123,6 +123,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             vault::vault_read,
             vault::vault_write,

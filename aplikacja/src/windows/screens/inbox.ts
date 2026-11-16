@@ -1,6 +1,7 @@
 // Inbox screen: the user's tasks with "biorę" and state changes.
 // Task text is inserted with textContent only (it is data).
 import type { Task, UserSettableState } from '@cognifly/wspolne/api';
+import { displayOrder, isFinished, selectValue } from '../../logic/inbox-view.js';
 import type { InboxView } from '../protocol.js';
 import { byId, messageFor, setStatus, type Call } from '../ui.js';
 
@@ -123,18 +124,21 @@ export function mountInbox(call: Call): InboxScreen {
    * Builds one list item from the template.
    * Call: `item(task)`. Expects: `#task-template`.
    * Output: the `<li>`; "biorę" only for waiting tasks, state change
-   * only for tasks with an owner.
+   * only for tasks with an owner, the select shows the current state,
+   * finished tasks are marked (`data-finished`).
    */
   function item(task: Task): HTMLLIElement {
     const tpl = byId<HTMLTemplateElement>('task-template');
     const li = (tpl.content.firstElementChild as HTMLLIElement).cloneNode(true) as HTMLLIElement;
     li.dataset.state = task.stan;
+    li.dataset.finished = String(isFinished(task));
     (li.querySelector('.desc') as HTMLElement).textContent = task.opis;
     (li.querySelector('.meta') as HTMLElement).textContent = metaText(task);
     const take = li.querySelector('.take') as HTMLButtonElement;
     const state = li.querySelector('.state') as HTMLSelectElement;
     take.hidden = task.stan !== 'nowe' && task.stan !== 'eskalowane';
     state.hidden = !task.wlasciciel;
+    state.value = selectValue(task);
     const claude = li.querySelector('.claude') as HTMLButtonElement;
     claude.hidden = !WORKING_STATES.includes(task.stan);
     claude.addEventListener('click', () => void report(() => openInClaude(call, task.id)));
@@ -148,10 +152,10 @@ export function mountInbox(call: Call): InboxScreen {
   /**
    * Redraws list and status.
    * Call: `render(view)`. Expects: a logged-in view.
-   * Output: none.
+   * Output: none; finished tasks are listed last.
    */
   function render(view: InboxView): void {
-    byId('list').replaceChildren(...view.tasks.map(item));
+    byId('list').replaceChildren(...displayOrder(view.tasks).map(item));
     setStatus(statusText(view), view.offline ? 'error' : 'info');
   }
 

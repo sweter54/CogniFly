@@ -7,7 +7,7 @@ import type { Method, Methods } from './protocol.js';
 import { currentLabel, tauriBus } from './tauri-bus.js';
 
 /** Typed call into the background window. */
-export type Call = <M extends Method>(method: M, params: Methods[M]['params']) => Promise<Methods[M]['result']>;
+export type Call = <M extends Method>(method: M, params: Methods[M]['params'], waitMs?: number) => Promise<Methods[M]['result']>;
 
 /**
  * Connects the current window to the background window.
@@ -18,7 +18,7 @@ export type Call = <M extends Method>(method: M, params: Methods[M]['params']) =
  */
 export async function connect(): Promise<Call> {
   const raw = await rpcClient(tauriBus(), currentLabel());
-  return ((method, params) => raw(method, params)) as Call;
+  return ((method, params, waitMs) => raw(method, params, waitMs)) as Call;
 }
 
 /** Polish messages for stable error codes. */
@@ -41,6 +41,7 @@ const MESSAGES: Record<string, string> = {
   VAULT_UNAVAILABLE: 'Pęk kluczy jest niedostępny.',
   CLAUDE_NOT_FOUND: 'Nie znaleziono aplikacji Claude. Zainstaluj Claude na Maca i spróbuj ponownie.',
   BAD_TASK_ID: 'Nieprawidłowy identyfikator zadania.',
+  BAD_FOLDER: 'Tego folderu nie można użyć. Wybierz folder na tym Macu (pełna ścieżka).',
 };
 
 /**

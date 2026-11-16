@@ -44,4 +44,12 @@ describe('rpc', () => {
     const call = await rpcClient(bus()('inbox'), 'inbox', 10);
     await expect(call('x')).rejects.toEqual(new RpcError('TIMEOUT'));
   });
+
+  it('honours a per-call wait longer than the default', async () => {
+    const b = bus();
+    await rpcServer(b('background'), { slow: () => new Promise((r) => setTimeout(() => r('ok'), 30)) }, () => 'X');
+    const call = await rpcClient(b('main'), 'main', 10);
+    await expect(call('slow')).rejects.toEqual(new RpcError('TIMEOUT'));
+    expect(await call('slow', {}, 200)).toBe('ok');
+  });
 });

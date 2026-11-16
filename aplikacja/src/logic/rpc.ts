@@ -42,11 +42,12 @@ export class RpcError extends Error {
  * Creates a function that calls the background window.
  *
  * Call: `const call = await rpcClient(bus, selfLabel)`, then
- * `await call('inbox.list', {})`.
+ * `await call('inbox.list', {})` or `call(m, p, waitMs)` for calls
+ * that wait for the user (e.g. a file dialog).
  * Expects: `selfLabel` = label of the calling window.
  * Output: the handler's value.
  * Throws: `RpcError(code)` on a server error, `RpcError('TIMEOUT')`
- * after `timeoutMs` (default 20 s) without reply.
+ * after the per-call or default `timeoutMs` (20 s) without reply.
  */
 export async function rpcClient(bus: Bus, selfLabel: string, timeoutMs = 20_000) {
   const pending = new Map<string, (r: RpcReply) => void>();
@@ -54,9 +55,9 @@ export async function rpcClient(bus: Bus, selfLabel: string, timeoutMs = 20_000)
     const reply = payload as RpcReply;
     pending.get(reply?.id)?.(reply);
   });
-  return (method: string, params: unknown = {}): Promise<unknown> => new Promise((resolve, reject) => {
+  return (method: string, params: unknown = {}, waitMs = timeoutMs): Promise<unknown> => new Promise((resolve, reject) => {
     const id = newId();
-    const timer = setTimeout(() => settle({ id, ok: false, error: 'TIMEOUT' }), timeoutMs);
+    const timer = setTimeout(() => settle({ id, ok: false, error: 'TIMEOUT' }), waitMs);
     /**
      * Finishes this call once (reply, timeout or transport error).
      * Call: `settle(reply)`. Expects: the reply for `id`.

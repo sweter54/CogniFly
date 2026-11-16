@@ -2,6 +2,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { emitTo } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { fetch as httpFetch } from '@tauri-apps/plugin-http';
 import { openUrl as openWithOs } from '@tauri-apps/plugin-opener';
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
@@ -98,4 +99,20 @@ export async function notify(title: string, body: string): Promise<void> {
  */
 export async function openUrl(url: string): Promise<void> {
   await openWithOs(url);
+}
+
+/**
+ * Shows the macOS folder picker.
+ *
+ * Call: as the controller's `pickFolder` port.
+ * Expects: a start folder or `''` (then the OS default).
+ * Output: the chosen absolute path, or `null` when cancelled. Picking
+ * grants no file access to the app (no fs plugin is registered).
+ */
+export async function pickFolder(startAt: string): Promise<string | null> {
+  const chosen = await openDialog({
+    directory: true, multiple: false, title: 'Wybierz folder pracy dla Claude',
+    ...(startAt ? { defaultPath: startAt } : {}),
+  });
+  return typeof chosen === 'string' ? chosen : null;
 }

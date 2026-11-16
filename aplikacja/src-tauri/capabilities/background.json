@@ -42,6 +42,7 @@
           "url": "claude://*"
         }
       ]
-    }
+    },
+    "dialog:allow-open"
   ]
 }
