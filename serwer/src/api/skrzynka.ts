@@ -31,7 +31,7 @@ function przytnij(s: string, maks: number): string {
 export function liniaPodsumowania(opisy: string[]): string {
   const n = opisy.length;
   if (n === 0) return '';
-  const glowa = `CogniFly: ${n} ${formaZadan(n)} ${n === 1 ? 'czeka' : 'czekają'}`;
+  const glowa = `CogniFly: ${n} ${formaZadan(n)} ${formaZadan(n) === 'zadania' ? 'czekają' : 'czeka'}`;
   const czyste = opisy.map(porzadek).filter((o) => o !== '');
   if (czyste.length === 0) return przytnij(glowa, 160);
   const lista = czyste.slice(0, 3).join(', ') + (czyste.length > 3 ? `, +${czyste.length - 3}` : '');

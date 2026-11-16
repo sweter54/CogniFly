@@ -152,11 +152,17 @@ describe('podsumowanie', () => {
     expect(r.body.linia).not.toContain('WZIETE');
     expect(r.body.linia).not.toMatch(/[\r\n]/);
   });
+  test('zgodność orzeczenia: 1/5/12/25 czeka, 2/22 czekają', () => {
+    const glowa = (n: number) => liniaPodsumowania(Array.from({ length: n }, () => 'x')).split(' (')[0];
+    expect([1, 2, 5, 12, 22, 25].map(glowa)).toEqual([
+      'CogniFly: 1 zadanie czeka', 'CogniFly: 2 zadania czekają', 'CogniFly: 5 zadań czeka',
+      'CogniFly: 12 zadań czeka', 'CogniFly: 22 zadania czekają', 'CogniFly: 25 zadań czeka']);
+  });
   test('liniaPodsumowania: długie opisy są obcinane do 160 z …, 1 zadanie czeka', () => {
     const l = liniaPodsumowania(Array.from({ length: 30 }, () => 'bardzo długi opis zadania '.repeat(5)));
     expect(l.length).toBeLessThanOrEqual(160);
     expect(l).toMatch(/…\)$/);
-    expect(l).toMatch(/^CogniFly: 30 zadań czekają/);
+    expect(l).toMatch(/^CogniFly: 30 zadań czeka /);
     expect(liniaPodsumowania(['a'])).toBe('CogniFly: 1 zadanie czeka (a)');
     expect(liniaPodsumowania([])).toBe('');
     expect(liniaPodsumowania(['😀'.repeat(200)]).length).toBeLessThanOrEqual(160);
