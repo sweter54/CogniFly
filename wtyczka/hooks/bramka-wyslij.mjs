@@ -9,20 +9,41 @@ import { readFileSync } from 'node:fs';
 
 const COMMAND_TAG = /<command-name>\/(?:cognifly:)?wyslij-komentarz<\/command-name>/;
 
+/** Where a shell command can start: line start, after ; & | ( $( or a quote (bash -c '…'). */
+const START = String.raw`(?:^|[\n;&|(]|\$\(|['"])\s*`;
+const SEND_SCRIPT = new RegExp(`${START}(?:node\\s+)?["']?[^\\s;&|]*cr\\.mjs["']?\\s+wyslij\\b`);
+const PR_REVIEW = new RegExp(`${START}gh\\s+pr\\s+review\\b`);
+const GH_API = new RegExp(`${START}gh\\s+api\\b`);
+const WRITE_FLAGS = /(-X\s*(POST|PUT|PATCH)|--method\s+(POST|PUT|PATCH)|\s-[fF]\s|--field|--raw-field|--input)/i;
+
+/**
+ * Removes the bodies of `cat … <<EOF` heredocs (text written to a file,
+ * e.g. a PR description); heredocs fed to shells are kept.
+ *
+ * Call: `withoutWrittenText(command)`.
+ * Expects: a Bash command string.
+ * Output: the command with those heredoc bodies removed.
+ */
+function withoutWrittenText(command) {
+  return command.replace(/\bcat\b[^\n]*<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\1(?=\n|$)/g, 'cat');
+}
+
 /**
  * Tells whether a shell command publishes a review.
  *
  * Call: `publishesReview(command)`.
  * Expects: the Bash command string.
- * Output: true for `cr.mjs wyslij`, `gh pr review`, GraphQL review
- * mutations and `gh api` writes to `…/reviews` (POST/PUT/fields/input).
+ * Output: true when a command (at a command position) is `cr.mjs
+ * wyslij`, `gh pr review`, a GraphQL review mutation or a `gh api`
+ * write to `…/reviews`. Text written to files via `cat <<EOF` and
+ * words inside messages (e.g. commit messages) do not count.
  */
 export function publishesReview(command) {
-  const c = String(command ?? '');
-  if (/cr\.mjs["']?\s+wyslij\b/.test(c)) return true;
-  if (/\bgh\s+pr\s+review\b/.test(c)) return true;
-  if (/\bgh\s+api\s+graphql\b/.test(c) && /(add|submit)PullRequestReview/i.test(c)) return true;
-  return /\bgh\s+api\b/.test(c) && /\/reviews\b/.test(c) && /(-X\s*(POST|PUT|PATCH)|--method\s+(POST|PUT|PATCH)|\s-[fF]\s|--field|--raw-field|--input)/i.test(c);
+  const c = withoutWrittenText(String(command ?? ''));
+  if (SEND_SCRIPT.test(c) || PR_REVIEW.test(c)) return true;
+  if (!GH_API.test(c)) return false;
+  if (/\bgraphql\b/.test(c) && /(add|submit)PullRequestReview/i.test(c)) return true;
+  return /\/reviews\b/.test(c) && WRITE_FLAGS.test(c);
 }
 
 /**

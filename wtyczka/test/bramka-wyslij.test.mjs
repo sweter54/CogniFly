@@ -71,4 +71,15 @@ describe('bramka wyślij', () => {
   it('does not block reading or grepping the script', async () => {
     expect((await run('grep -n wyslij wtyczka/skills/github/skrypty/cr.mjs', [user('x')])).code).toBe(0);
   });
+  it('does not treat text in a written file (cat heredoc) or in a quoted message as a command', async () => {
+    const pr = "cat > /tmp/opis.md <<'EOF'\nBramka blokuje `gh pr review` i `cr.mjs wyslij`.\nEOF\ngh pr create --body-file /tmp/opis.md";
+    expect((await run(pr, [user('x')])).code).toBe(0);
+    expect((await run('git commit -m "bramka: blokuje gh pr review"', [user('x')])).code).toBe(0);
+  });
+  it('still catches commands after separators, in subshells, bash -c and shell heredocs', async () => {
+    for (const c of ['ls && gh pr review 7 -c', 'x=$(gh pr review 7 --approve)', "bash -c 'gh pr review 7 --approve'",
+      'cd w; node wtyczka/skills/github/skrypty/cr.mjs wyslij --repo o/r --pr 7', "bash <<'EOF'\ngh pr review 7 --approve\nEOF"]) {
+      expect((await run(c, [user('x')])).code, c).toBe(2);
+    }
+  });
 });
