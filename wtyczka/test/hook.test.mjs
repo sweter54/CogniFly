@@ -126,7 +126,21 @@ describe('hook startu sesji', () => {
     expect(Object.keys(h.hooks)).toEqual(['SessionStart']);
     const cmd = h.hooks.SessionStart[0].hooks[0];
     expect(cmd.type).toBe('command');
-    expect(cmd.command).toBe('node "${CLAUDE_PLUGIN_ROOT}/hooks/start-sesji.mjs"');
+    expect(cmd.command).toBe('node "${CLAUDE_PLUGIN_ROOT}/hooks/start-sesji.mjs" 2>/dev/null || true');
     expect(cmd.timeout).toBeGreaterThan(1.5);
+  });
+
+  it('polecenie z hooks.json przy braku node w PATH: kod 0 i pusty stderr', async () => {
+    const h = JSON.parse(readFileSync(join(KORZEN, 'hooks', 'hooks.json'), 'utf8'));
+    const cmd = h.hooks.SessionStart[0].hooks[0].command;
+    const pusty = join(tmp, 'pusty'); mkdirSync(pusty);
+    const r = await new Promise((ok) => {
+      const p = spawn('/bin/sh', ['-c', cmd], { env: { PATH: pusty, CLAUDE_PLUGIN_ROOT: KORZEN } });
+      let out = '', err = '';
+      p.stdout.on('data', (c) => (out += c));
+      p.stderr.on('data', (c) => (err += c));
+      p.on('close', (code) => ok({ out, err, code }));
+    });
+    expect(r).toEqual({ out: '', err: '', code: 0 });
   });
 });

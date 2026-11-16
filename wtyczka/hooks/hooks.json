@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/start-sesji.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/start-sesji.mjs\" 2>/dev/null || true",
             "timeout": 3
           }
         ]

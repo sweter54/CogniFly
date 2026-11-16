@@ -43,29 +43,35 @@ if (poprawne) try {
   const recenzje = (await gh(`${baza}/reviews`, true))
     .filter((r) => r?.user?.login === rec && r.submitted_at && !Number.isNaN(czas(r.submitted_at)));
   if (recenzje.length === 0) { wypisz({ stan: 'BRAK_RECENZJI' }); throw new Koniec(); }
-  const dataRecenzji = Math.max(...recenzje.map((r) => czas(r.submitted_at)));
+  const ostatnia = recenzje.reduce((a, b) => (czas(b.submitted_at) >= czas(a.submitted_at) ? b : a));
+  const dataRecenzji = czas(ostatnia.submitted_at);
 
   const komentarze = (await gh(`${baza}/comments`, true))
     .filter((k) => k?.user?.login === rec)
     .map((k) => ({ plik: k.path ?? '', linia: k.line ?? k.original_line ?? null, tresc: String(k.body ?? '') }));
 
-  const commity = await gh(`${baza}/commits`, true);
-  const data = (c) => czas(c?.commit?.committer?.date ?? c?.commit?.author?.date);
-  const przed = commity.filter((c) => data(c) <= dataRecenzji);
-  const po = commity.filter((c) => data(c) > dataRecenzji);
+  const SHA = /^[0-9a-fA-F]{7,64}$/;
+  const head = (await gh(baza))?.head?.sha;
+  if (!SHA.test(head ?? '')) throw new BladGh('ZLA_ODPOWIEDZ');
+
+  // Baza: commit, który recenzent widział (commit_id recenzji). Podział po datach tylko awaryjnie.
+  let bazowy = SHA.test(ostatnia.commit_id ?? '') ? ostatnia.commit_id : undefined;
+  if (!bazowy) {
+    const commity = await gh(`${baza}/commits`, true);
+    const data = (c) => czas(c?.commit?.committer?.date ?? c?.commit?.author?.date);
+    const przed = commity.filter((c) => data(c) <= dataRecenzji);
+    bazowy = przed.length > 0 ? przed[przed.length - 1].sha : commity[0]?.parents?.[0]?.sha;
+    if (!SHA.test(bazowy ?? '')) bazowy = undefined;
+  }
 
   let diff = '', pliki = [];
-  if (po.length > 0) {
-    const head = commity[commity.length - 1].sha;
-    const bazowy = przed.length > 0 ? przed[przed.length - 1].sha : commity[0]?.parents?.[0]?.sha;
-    if (bazowy) {
-      const por = await gh(`repos/${repo}/compare/${bazowy}...${head}`);
-      const pl = Array.isArray(por?.files) ? por.files : [];
-      pliki = pl.map((f) => f.filename).filter(Boolean);
-      diff = pl.filter((f) => typeof f.patch === 'string')
-        .map((f) => `--- ${f.filename}\n${f.patch}`).join('\n');
-      if (diff.length > MAKS_DIFF) diff = diff.slice(0, MAKS_DIFF) + '\n[UCIĘTO: diff przekracza 200 KB]';
-    }
+  if (bazowy && bazowy !== head) {
+    const por = await gh(`repos/${repo}/compare/${bazowy}...${head}`);
+    const pl = Array.isArray(por?.files) ? por.files : [];
+    pliki = pl.map((f) => f.filename).filter(Boolean);
+    diff = pl.filter((f) => typeof f.patch === 'string')
+      .map((f) => `--- ${f.filename}\n${f.patch}`).join('\n');
+    if (diff.length > MAKS_DIFF) diff = diff.slice(0, MAKS_DIFF) + '\n[UCIĘTO: diff przekracza 200 KB]';
   }
   wypisz({ stan: 'OK', komentarze, diffPoRecenzji: diff, plikiZmienione: pliki });
 } catch (e) {
