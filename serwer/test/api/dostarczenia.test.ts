@@ -12,6 +12,9 @@ vi.mock('../../src/dostarczenia/github.js', async (orig) => ({
 }));
 
 const { handler } = await import('../../src/api/index.js');
+const { zapiszZdarzenie } = await import('../../src/dane/historia.js');
+const { idZdarzenia } = await import('@cognifly/wspolne');
+type Zdarzenie = import('@cognifly/wspolne').Zdarzenie;
 const { zapiszTozsamosc } = await import('../../src/dane/konfiguracja.js');
 const { utworzZadanie, wez } = await import('../../src/dane/kolejka.js');
 
@@ -42,6 +45,21 @@ describe('POST /dostarczenia', () => {
     const body = JSON.stringify({ repo: 'o/r', pr: 5, zadanieId: z.id, sha: SHA });
     expect((await wywolaj('POST /dostarczenia', { sub: 'sub-ania', body })).status).toBe(403);
     expect(await wywolaj('POST /dostarczenia', { body })).toMatchObject({ status: 200, body: { ocena: { ready: true, reasons: [] } } });
+  });
+  test('a task whose event names another repo/PR cannot start a watch (403 INNY_PR)', async () => {
+    github.prs.set('o/r#8', { ...prOk, number: 8 });
+    const zdarzenie: Zdarzenie = {
+      id: idZdarzenia('github', 'cr-inny-pr'), firma: 'f1', zrodlo: 'github', typ: 'github.pr.prosba_o_review',
+      czas: new Date(Date.now() - 5_000).toISOString(), podmiot: { repo: 'O/R', pr: 7 }, opis: 'CR', wymagaPracy: true,
+    };
+    await zapiszZdarzenie(zdarzenie);
+    const z = await utworzZadanie('f1', zdarzenie.id, ['michal'], { opis: 'CR' });
+    await wez('f1', z.id, 'michal');
+    const start = (repo: string, pr: number) => wywolaj('POST /dostarczenia', { body: JSON.stringify({ repo, pr, zadanieId: z.id, sha: SHA }) });
+    expect(await start('o/r', 8)).toMatchObject({ status: 403, body: { kod: 'INNY_PR' } });
+    expect(await start('o/inne', 7)).toMatchObject({ status: 403, body: { kod: 'INNY_PR' } });
+    github.prs.set('o/r#7', { ...prOk, number: 7 });
+    expect((await start('o/r', 7)).status).toBe(200);
   });
   test('rejects bad repo, PR number, sha and unknown task', async () => {
     const z = await utworzZadanie('f1', 'evt_' + '2'.repeat(24), ['michal'], { opis: 'CR' });

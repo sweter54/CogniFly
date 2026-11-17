@@ -16,10 +16,13 @@ export interface Watch {
   reviewer: string;
   acceptedSha: string;
   acceptedAt: string;
-  status: 'waiting' | 'ready' | 'delivered';
+  /** `delivered` (merged) and `closed` (closed unmerged) are final for the sweep. */
+  status: 'waiting' | 'ready' | 'delivered' | 'closed';
   reasons: string[];
   deliveryTaskId?: string;
   checkedAt?: string;
+  /** Repositories (lowercase) of the chain seen at the last assessment; GitHub signals from them wake this watch. */
+  repos?: string[];
 }
 
 const pk = (firma: string) => `FIRMA#${firma}#DOST`;
@@ -95,7 +98,8 @@ export async function watchOf(firma: string, repo: string, pr: number): Promise<
  * Output: none.
  */
 export async function updateWatch(
-  firma: string, repo: string, pr: number, patch: Pick<Watch, 'status' | 'reasons' | 'checkedAt'> & { deliveryTaskId?: string },
+  firma: string, repo: string, pr: number,
+  patch: Pick<Watch, 'status' | 'reasons' | 'checkedAt'> & { deliveryTaskId?: string; repos?: string[] },
 ): Promise<void> {
   const names: Record<string, string> = { '#s': 'status', '#r': 'reasons', '#c': 'checkedAt' };
   const values: Record<string, unknown> = { ':s': patch.status, ':r': patch.reasons, ':c': patch.checkedAt };
@@ -104,6 +108,11 @@ export async function updateWatch(
     names['#d'] = 'deliveryTaskId';
     values[':d'] = patch.deliveryTaskId;
     set += ', #d = :d';
+  }
+  if (patch.repos?.length) {
+    names['#p'] = 'repos';
+    values[':p'] = patch.repos;
+    set += ', #p = :p';
   }
   await klient().send(new UpdateCommand({
     TableName: nazwaTabeli(), Key: { pk: pk(firma), sk: watchKey(repo, pr) },

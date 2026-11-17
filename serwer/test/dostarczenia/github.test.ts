@@ -1,5 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
-import { buildGraph, MAX_CHAIN, nodeFromPr, type GithubPr } from '../../src/dostarczenia/github.js';
+import { buildGraph, graphql, MAX_CHAIN, nodeFromPr, type GithubAccessError, type GithubPr } from '../../src/dostarczenia/github.js';
 import { assessChain } from '../../src/dostarczenia/ocena.js';
 import { refKey } from '../../src/dostarczenia/zaleznosci.js';
 
@@ -9,7 +9,30 @@ const pr = (over: Partial<GithubPr> = {}): GithubPr => ({
   reviews: { nodes: [] }, commits: { nodes: [{ commit: { statusCheckRollup: { state: 'SUCCESS' } } }] }, ...over,
 });
 
+describe('graphql: token problems are not "PR invisible"', () => {
+  const answer = (status: number, headers: Record<string, string> = {}, body: unknown = {}) =>
+    (async () => new Response(JSON.stringify(body), { status, headers })) as unknown as typeof fetch;
+  test('404 → null (PR not visible); 401/403/429 → GithubAccessError with its reason', async () => {
+    expect(await graphql('t', 'q', {}, answer(404))).toBeNull();
+    const reason = (f: typeof fetch) => graphql('t', 'q', {}, f).then(() => null, (e: GithubAccessError) => e.reason);
+    expect(await reason(answer(401))).toBe('TOKEN_NIEWAZNY');
+    expect(await reason(answer(403))).toBe('TOKEN_BEZ_UPRAWNIEN');
+    expect(await reason(answer(403, { 'x-ratelimit-remaining': '0' }))).toBe('LIMIT_GITHUB');
+    expect(await reason(answer(403, { 'retry-after': '60' }))).toBe('LIMIT_GITHUB');
+    expect(await reason(answer(429))).toBe('LIMIT_GITHUB');
+    expect(await reason(answer(200, {}, { errors: [{ type: 'RATE_LIMITED' }] }))).toBe('LIMIT_GITHUB');
+    expect(await graphql('t', 'q', {}, answer(200, {}, { errors: [{ type: 'NOT_FOUND' }] }))).toBeNull();
+  });
+});
+
 describe('nodeFromPr', () => {
+  test('compares review and acceptance times as dates, not strings (milliseconds vs none)', () => {
+    const ref = { repo: 'o/r', number: 7 };
+    const reviews = { nodes: [{ submittedAt: '2026-11-17T10:00:00Z' }] };
+    expect(nodeFromPr(ref, pr({ reviews }), { sha: 'h1', at: '2026-11-17T10:00:00.123Z' }, null).changesRequestedAfterAcceptance).toBe(false);
+    const later = { nodes: [{ submittedAt: '2026-11-17T10:00:01Z' }] };
+    expect(nodeFromPr(ref, pr({ reviews: later }), { sha: 'h1', at: '2026-11-17T10:00:00.999Z' }, null).changesRequestedAfterAcceptance).toBe(true);
+  });
   const ref = { repo: 'o/r', number: 7 };
   test('maps GitHub states onto the chain node', () => {
     expect(nodeFromPr(ref, pr(), { sha: 'h1', at: '2026-11-17T10:00:00Z' }, null)).toEqual({

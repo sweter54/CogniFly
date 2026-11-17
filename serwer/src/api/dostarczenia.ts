@@ -1,5 +1,6 @@
 // API of delivery watches: start a watch after an accepted CR, and
 // assess any PR on demand (CR context in Claude).
+import { zdarzenieZadania } from '../dane/historia.js';
 import { pobierzZadanie } from '../dane/kolejka.js';
 import { assessPr, startWatch } from '../dostarczenia/obsluz.js';
 import { isRepo } from '../dostarczenia/zaleznosci.js';
@@ -36,12 +37,28 @@ function repoName(value: unknown): string {
 }
 
 /**
+ * Whether the task's event concerns this PR.
+ *
+ * Call: `zgodnyPr(podmiot, repo, pr)`.
+ * Expects: the event `podmiot` (or undefined when the event expired).
+ * Output: false when the event names a different repo (case-insensitive)
+ * or PR number; true when it matches or names neither.
+ */
+function zgodnyPr(podmiot: { repo?: unknown; pr?: unknown } | undefined, repo: string, pr: number): boolean {
+  if (typeof podmiot?.repo === 'string' && podmiot.repo.toLowerCase() !== repo.toLowerCase()) return false;
+  if (podmiot?.pr !== undefined && Number(podmiot.pr) !== pr) return false;
+  return true;
+}
+
+/**
  * `POST /dostarczenia {repo, pr, zadanieId, sha}`: CR accepted.
  *
  * Call: by the plugin after an accepting review was sent.
- * Expects: the caller owns the CR task; `sha` = reviewed head commit.
+ * Expects: the caller owns the CR task; `sha` = reviewed head commit;
+ * when the task's event names a repo/PR, it must be this one.
  * Output: 200 `{ ocena }` with the first assessment; 400 for bad
- * input, 404 unknown task, 403 not the owner.
+ * input, 404 unknown task, 403 not the owner (`BRAK_DOSTEPU`) or a task
+ * of another PR (`INNY_PR`).
  */
 export async function rozpocznij(k: Kontekst, surowe: string | null | undefined): Promise<Odpowiedz> {
   const b = obiektJson(surowe);
@@ -51,6 +68,9 @@ export async function rozpocznij(k: Kontekst, surowe: string | null | undefined)
   const task = await pobierzZadanie(k.firma, sprawdzId(typeof b.zadanieId === 'string' ? b.zadanieId : undefined));
   if (!task) throw new HttpBlad(404, 'NIE_ZNALEZIONO');
   if (task.wlasciciel !== k.osoba) throw new HttpBlad(403, 'BRAK_DOSTEPU');
+  const podmiot = (await zdarzenieZadania(k.firma, task.zdarzenieId, task.utworzono))?.podmiot as
+    { repo?: unknown; pr?: unknown } | undefined;
+  if (!zgodnyPr(podmiot, repo, pr)) throw new HttpBlad(403, 'INNY_PR');
   const ocena = await startWatch({ firma: k.firma, repo, pr, reviewTaskId: task.id, reviewer: k.osoba, acceptedSha: b.sha });
   return { status: 200, body: { ocena } };
 }

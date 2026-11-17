@@ -3,20 +3,27 @@ import type { GithubPr } from '../../src/dostarczenia/github.js';
 import { ustawTabeleTestowa } from '../dane/pomocnik.js';
 
 // GitHub replaced by an in-memory map; the Secrets Manager token by a flag.
-const github = vi.hoisted(() => ({ prs: new Map<string, unknown>(), token: 'tok' as string | null }));
+const github = vi.hoisted(() => ({
+  prs: new Map<string, unknown>(), token: 'tok' as string | null, fail: null as null | (() => Error), reads: [] as string[],
+}));
 vi.mock('../../src/dostarczenia/github.js', async (orig) => {
   const real = await orig<typeof import('../../src/dostarczenia/github.js')>();
   return {
     ...real,
     readToken: async () => github.token,
     githubFetchers: () => ({
-      fetchPr: async (r: { repo: string; number: number }) => github.prs.get(`${r.repo}#${r.number}`) ?? null,
+      fetchPr: async (r: { repo: string; number: number }) => {
+        if (github.fail) throw github.fail();
+        github.reads.push(`${r.repo}#${r.number}`);
+        return github.prs.get(`${r.repo}#${r.number}`) ?? null;
+      },
       fetchStacked: async () => null,
     }),
   };
 });
 
-const { evaluateCompany, startWatch } = await import('../../src/dostarczenia/obsluz.js');
+const { evaluateCompany, handler, shouldEvaluate, startWatch } = await import('../../src/dostarczenia/obsluz.js');
+const { GithubAccessError } = await import('../../src/dostarczenia/github.js');
 const { watchesOf } = await import('../../src/dane/dostarczenia.js');
 const { skrzynka } = await import('../../src/dane/kolejka.js');
 const { zapiszLoginGithub } = await import('../../src/dane/konfiguracja.js');
@@ -30,6 +37,8 @@ afterAll(() => tabela.usun());
 beforeEach(() => {
   github.prs.clear();
   github.token = 'tok';
+  github.fail = null;
+  github.reads = [];
 });
 
 const pr = (number: number, over: Partial<GithubPr> = {}): GithubPr => ({
@@ -70,5 +79,46 @@ describe('delivery watch', () => {
     expect((await watchesOf('f1')).find((w) => w.pr === 30)?.status).toBe('delivered');
     github.token = null;
     expect(await accept(31)).toMatchObject({ ready: false, reasons: ['BRAK_TOKENU'] });
+  });
+
+  test('rejected or rate-limited token gives its own reason, not ZALEZNOSC_NIEDOSTEPNA', async () => {
+    github.fail = () => new GithubAccessError('TOKEN_NIEWAZNY');
+    expect(await accept(32)).toMatchObject({ ready: false, reasons: ['TOKEN_NIEWAZNY'] });
+    github.fail = () => new GithubAccessError('LIMIT_GITHUB');
+    expect(await accept(33)).toMatchObject({ ready: false, reasons: ['LIMIT_GITHUB'] });
+  });
+
+  test('PR closed without merging ends the sweep; a signal from its repo revives it after reopening', async () => {
+    github.prs.set('o/r#40', pr(40, { state: 'CLOSED' }));
+    expect(await accept(40)).toMatchObject({ ready: false, reasons: ['ZAMKNIETY'] });
+    expect((await watchesOf('f1')).find((w) => w.pr === 40)?.status).toBe('closed');
+    github.reads = [];
+    await evaluateCompany('f1');
+    expect(github.reads).not.toContain('o/r#40');
+    github.prs.set('o/r#40', pr(40));
+    await handler({ detail: { firma: 'f1', repo: 'o/r' } });
+    expect((await watchesOf('f1')).find((w) => w.pr === 40)?.status).toBe('ready');
+  });
+
+  test('a GitHub signal re-assesses only watches whose chain touches its repo', async () => {
+    github.prs.set('o/r#50', pr(50, { body: 'Zależy od: inna/lib#3' }));
+    github.prs.set('inna/lib#3', pr(3));
+    await accept(50);
+    expect((await watchesOf('f1')).find((w) => w.pr === 50)?.repos).toEqual(['o/r', 'inna/lib']);
+    github.reads = [];
+    await handler({ detail: { firma: 'f1', repo: 'zupelnie/obce' } });
+    expect(github.reads).toEqual([]);
+    await handler({ detail: { firma: 'f1', repo: 'inna/lib' } });
+    expect(github.reads).toContain('o/r#50');
+  });
+
+  test('shouldEvaluate: delivered never, closed only on own repo, unknown chain always', () => {
+    const w = { firma: 'f1', repo: 'O/R', pr: 1, reviewTaskId: 'z', reviewer: 'm', acceptedSha: 's', acceptedAt: 'a', reasons: [] };
+    expect(shouldEvaluate({ ...w, status: 'delivered' })).toBe(false);
+    expect(shouldEvaluate({ ...w, status: 'closed' })).toBe(false);
+    expect(shouldEvaluate({ ...w, status: 'closed' }, 'o/r')).toBe(true);
+    expect(shouldEvaluate({ ...w, status: 'waiting' }, 'x/y')).toBe(true);
+    expect(shouldEvaluate({ ...w, status: 'waiting', repos: ['o/r'] }, 'x/y')).toBe(false);
+    expect(shouldEvaluate({ ...w, status: 'waiting', repos: ['o/r'] })).toBe(true);
   });
 });

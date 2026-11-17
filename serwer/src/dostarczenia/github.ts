@@ -57,7 +57,7 @@ export function nodeFromPr(ref: PrRef, pr: GithubPr, acceptance: Acceptance | nu
     ci: ciState(rollup),
     reviewDecision: pr.reviewDecision,
     changesRequestedAfterAcceptance: acceptance !== null
-      && pr.reviews.nodes.some((r) => r.submittedAt !== null && r.submittedAt > acceptance.at),
+      && pr.reviews.nodes.some((r) => r.submittedAt !== null && Date.parse(r.submittedAt) > Date.parse(acceptance.at)),
     acceptedSha: acceptance?.sha ?? null,
     deps,
     author: pr.author?.login ?? null,
@@ -111,14 +111,44 @@ export async function buildGraph(
   return { graph, truncated: false };
 }
 
+/** Why the token as a whole cannot be used right now (not one PR). */
+export type GithubAccessReason = 'TOKEN_NIEWAZNY' | 'TOKEN_BEZ_UPRAWNIEN' | 'LIMIT_GITHUB';
+
+/**
+ * The read token is rejected or rate limited — the assessment reports
+ * `reason` instead of treating every PR as invisible.
+ */
+export class GithubAccessError extends Error {
+  constructor(readonly reason: GithubAccessReason) {
+    super(`GitHub: ${reason}`);
+    this.name = 'GithubAccessError';
+  }
+}
+
+/**
+ * Classifies a 401/403/429 answer.
+ *
+ * Call: `accessReason(response)`.
+ * Expects: a GitHub HTTP response with one of those statuses.
+ * Output: 401 → `TOKEN_NIEWAZNY`; 429, or 403 with an exhausted limit or
+ * `retry-after` → `LIMIT_GITHUB`; other 403 → `TOKEN_BEZ_UPRAWNIEN`.
+ */
+function accessReason(r: Response): GithubAccessReason {
+  if (r.status === 401) return 'TOKEN_NIEWAZNY';
+  if (r.status === 429 || r.headers.get('x-ratelimit-remaining') === '0' || r.headers.has('retry-after')) return 'LIMIT_GITHUB';
+  return 'TOKEN_BEZ_UPRAWNIEN';
+}
+
 /**
  * Sends one GraphQL query.
  *
  * Call: `await graphql(token, query, variables, fetchFn)`.
  * Expects: a read token.
  * Output: the `data` object, or null when GitHub reports the object
- * missing or not visible to the token (NOT_FOUND / FORBIDDEN / 401/403).
- * Throws: on network errors and other GitHub errors (retried later).
+ * missing or not visible to the token (HTTP 404, NOT_FOUND / FORBIDDEN).
+ * Throws: `GithubAccessError` for 401/403/429 and RATE_LIMITED (the
+ * token itself is unusable); `Error` on network and other GitHub errors
+ * (retried later).
  */
 export async function graphql(token: string, query: string, variables: Record<string, unknown>, fetchFn: typeof fetch = fetch): Promise<Record<string, unknown> | null> {
   const r = await fetchFn('https://api.github.com/graphql', {
@@ -127,9 +157,11 @@ export async function graphql(token: string, query: string, variables: Record<st
     body: JSON.stringify({ query, variables }),
     signal: AbortSignal.timeout(10_000),
   });
-  if (r.status === 401 || r.status === 403 || r.status === 404) return null;
+  if (r.status === 404) return null;
+  if (r.status === 401 || r.status === 403 || r.status === 429) throw new GithubAccessError(accessReason(r));
   if (!r.ok) throw new Error(`GitHub GraphQL HTTP ${r.status}`);
   const json = (await r.json()) as { data?: Record<string, unknown>; errors?: { type?: string }[] };
+  if (json.errors?.some((e) => e.type === 'RATE_LIMITED')) throw new GithubAccessError('LIMIT_GITHUB');
   if (json.errors?.some((e) => e.type === 'NOT_FOUND' || e.type === 'FORBIDDEN')) return null;
   if (json.errors?.length) throw new Error(`GitHub GraphQL: ${json.errors.map((e) => e.type ?? '?').join(',')}`);
   return json.data ?? null;
@@ -183,4 +215,16 @@ export async function readToken(firma: string): Promise<string | null> {
   }
   if (value) tokens.set(firma, value);
   return value;
+}
+
+/**
+ * Drops a cached token (after GitHub rejected it, so a rotated secret
+ * is picked up on the next assessment).
+ *
+ * Call: `forgetToken(firma)`.
+ * Expects: a company id.
+ * Output: none.
+ */
+export function forgetToken(firma: string): void {
+  tokens.delete(firma);
 }

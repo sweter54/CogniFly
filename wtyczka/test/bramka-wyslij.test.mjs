@@ -76,6 +76,34 @@ describe('bramka wyślij', () => {
     expect((await run(pr, [user('x')])).code).toBe(0);
     expect((await run('git commit -m "bramka: blokuje gh pr review"', [user('x')])).code).toBe(0);
   });
+  it('catches cr.mjs wyslij behind a quoted path with spaces, env prefix or a variable', async () => {
+    for (const c of [
+      'node "/Users/m/Library/Application Support/Claude/plug/skills/github/skrypty/cr.mjs" wyslij --repo o/r --pr 7',
+      "node '/Users/m/Library/Application Support/x/cr.mjs' wyslij --repo o/r --pr 7",
+      'env NODE_OPTIONS= node "/a b/cr.mjs" wyslij --repo o/r --pr 7',
+      'S="/a b/skrypty/cr.mjs"; node "$S" wyslij --repo o/r --pr 7',
+      'S="/a b/skrypty/cr.mjs"; node ${S} "wyslij" --repo o/r --pr 7',
+      'env gh pr review 7 --approve',
+      '/opt/homebrew/bin/gh pr review 7 --approve',
+    ]) {
+      expect((await run(c, [user('x')])).code, c).toBe(2);
+    }
+  });
+  it('does not block dodaj/werdykt whose text quotes a send command', async () => {
+    const dodaj = 'node "/a b/cr.mjs" dodaj --repo o/r --pr 7 --plik x --linia 3 --tresc "przykład: node \\"$P/cr.mjs\\" wyslij --pr 7 i gh pr review"';
+    expect((await run(dodaj, [user('x')])).code).toBe(0);
+    const werdykt = "node cr.mjs werdykt --repo o/r --pr 7 --zmiany --podsumowanie 'popraw cr.mjs wyslij'";
+    expect((await run(werdykt, [user('x')])).code).toBe(0);
+  });
+  it('keeps auto-memory usable while still guarding transcripts', async () => {
+    const mem = '/Users/m/.claude/projects/-Users-m-x/memory/notatka.md';
+    expect((await run('', [user('x')], { tool_name: 'Write', tool_input: { file_path: mem, content: 'x' } })).code).toBe(0);
+    expect((await run('', [user('x')], { tool_name: 'Edit', tool_input: { file_path: mem } })).code).toBe(0);
+    expect((await run(`cat "${mem}"`, [user('x')])).code).toBe(0);
+    expect((await run('node cr.mjs dodaj --tresc "blokuje ~/.claude/projects" --pr 7', [user('x')])).code).toBe(0);
+    expect((await run('cd ~/.claude/projects/a && echo x >> b.jsonl', [user('x')])).code).toBe(2);
+    expect((await run('ls ~/.claude/projects', [user('x')])).code).toBe(2);
+  });
   it('still catches commands after separators, in subshells, bash -c and shell heredocs', async () => {
     for (const c of ['ls && gh pr review 7 -c', 'x=$(gh pr review 7 --approve)', "bash -c 'gh pr review 7 --approve'",
       'cd w; node wtyczka/skills/github/skrypty/cr.mjs wyslij --repo o/r --pr 7', "bash <<'EOF'\ngh pr review 7 --approve\nEOF"]) {

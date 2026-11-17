@@ -70,7 +70,8 @@ Szkic recenzji zapisuje się lokalnie; skrypt **mechanicznie** pilnuje zasad pon
    autora, gałąź docelową i **jej CI** (`ci.galazDocelowa` — czerwona gałąź docelowa to ryzyko integracji),
    **CI zmian** (`ci.glowa`), stan scalania (`pr.scalanie`, np. konflikty) i **łańcuch dostarczeń**
    (`dostarczenie.ocena`: `reasons` np. `CZEKA_NA o/r#12`, `order` — kolejność dostarczania zależnych PR;
-   `BRAK_TOKENU` = serwer nie ma jeszcze dostępu do GitHuba). Te fakty wpływają na werdykt i na to, kiedy zmiana
+   `BRAK_TOKENU` = serwer nie ma jeszcze dostępu do GitHuba; `TOKEN_NIEWAZNY` / `TOKEN_BEZ_UPRAWNIEN` = token
+   serwera odrzucony; `LIMIT_GITHUB` = limit zapytań, ocena wróci później). Te fakty wpływają na werdykt i na to, kiedy zmiana
    może wejść.
 2. **Ocena:** przejrzyj diff (`R12 +` dodana, `L4 -` usunięta, `R13   ` kontekst), dodaj propozycje komentarzy.
 3. **Omówienie:** zasada 2 — dla każdego komentarza osobno. `szkic` pokazuje, co jeszcze nie omówione.

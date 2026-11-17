@@ -9,11 +9,22 @@ import { readFileSync } from 'node:fs';
 
 const COMMAND_TAG = /<command-name>\/(?:cognifly:)?wyslij-komentarz<\/command-name>/;
 
-/** Where a shell command can start: line start, after ; & | ( $( or a quote (bash -c '…'). */
-const START = String.raw`(?:^|[\n;&|(]|\$\(|['"])\s*`;
-const SEND_SCRIPT = new RegExp(`${START}(?:node\\s+)?["']?[^\\s;&|]*cr\\.mjs["']?\\s+wyslij\\b`);
-const PR_REVIEW = new RegExp(`${START}gh\\s+pr\\s+review\\b`);
-const GH_API = new RegExp(`${START}gh\\s+api\\b`);
+/**
+ * Where a shell command can start: line start, after ; & | ( $( or a quote
+ * (bash -c '…'), optionally behind wrappers (`env`, `command`, `exec`,
+ * `nohup`, `time`, with their flags) and variable assignments (`A=1`).
+ */
+const START = String.raw`(?:^|[\n;&|(]|\$\(|['"])\s*(?:(?:env|command|exec|nohup|time)\b(?:\s+-\S+)*\s+)*(?:\w+=\S*\s+)*`;
+/**
+ * `cr.mjs wyslij` anywhere in the command: the path may be quoted and
+ * contain spaces ("~/Library/Application Support/…/cr.mjs") or sit behind
+ * any prefix. Fail closed: a literal "cr.mjs wyslij" elsewhere also blocks.
+ */
+const SEND_SCRIPT = /cr\.mjs["']?\s+["']?wyslij\b/;
+/** `"$VAR" wyslij` — the script path kept in a variable (checked only when the command names cr.mjs). */
+const SEND_VIA_VAR = /\$\{?\w+\}?["']?\s+["']?wyslij\b/;
+const PR_REVIEW = new RegExp(`${START}(?:\\S*/)?gh\\s+pr\\s+review\\b`);
+const GH_API = new RegExp(`${START}(?:\\S*/)?gh\\s+api\\b`);
 const WRITE_FLAGS = /(-X\s*(POST|PUT|PATCH)|--method\s+(POST|PUT|PATCH)|\s-[fF]\s|--field|--raw-field|--input)/i;
 
 /**
@@ -29,18 +40,33 @@ function withoutWrittenText(command) {
 }
 
 /**
+ * Empties quoted values of the cr.mjs text flags (`--tresc`,
+ * `--podsumowanie`), so a review comment that quotes a send command does
+ * not block `dodaj`/`omow`/`werdykt`.
+ *
+ * Call: `withoutTextFlags(command)`.
+ * Expects: a Bash command string.
+ * Output: the command with those quoted values replaced by "".
+ */
+function withoutTextFlags(command) {
+  return command.replace(/(--(?:tresc|podsumowanie)(?:=|\s+))(?:"(?:[^"\\]|\\.)*"|'[^']*')/g, '$1""');
+}
+
+/**
  * Tells whether a shell command publishes a review.
  *
  * Call: `publishesReview(command)`.
  * Expects: the Bash command string.
- * Output: true when a command (at a command position) is `cr.mjs
- * wyslij`, `gh pr review`, a GraphQL review mutation or a `gh api`
- * write to `…/reviews`. Text written to files via `cat <<EOF` and
- * words inside messages (e.g. commit messages) do not count.
+ * Output: true for `cr.mjs wyslij` (anywhere, also via a path in a
+ * variable), and — at a command position — `gh pr review`, a GraphQL
+ * review mutation or a `gh api` write to `…/reviews`. Text written to
+ * files via `cat <<EOF`, values of `--tresc`/`--podsumowanie` and words
+ * inside messages (e.g. commit messages) do not count.
  */
 export function publishesReview(command) {
-  const c = withoutWrittenText(String(command ?? ''));
+  const c = withoutTextFlags(withoutWrittenText(String(command ?? '')));
   if (SEND_SCRIPT.test(c) || PR_REVIEW.test(c)) return true;
+  if (/cr\.mjs/.test(c) && SEND_VIA_VAR.test(c)) return true;
   if (!GH_API.test(c)) return false;
   if (/\bgraphql\b/.test(c) && /(add|submit)PullRequestReview/i.test(c)) return true;
   return /\/reviews\b/.test(c) && WRITE_FLAGS.test(c);
@@ -51,17 +77,23 @@ export function publishesReview(command) {
  *
  * Call: `touchesTranscript(toolName, toolInput, transcriptPath)`.
  * Expects: the PreToolUse input.
- * Output: true for Bash commands mentioning the transcript path or
- * `.claude/projects`, and for file tools writing inside them.
+ * Output: true for file tools writing a `*.jsonl` file in the Claude
+ * projects directory (or the transcript itself), and for Bash commands
+ * naming the transcript path, or naming that directory together with
+ * "jsonl" or without pointing into a `memory` folder. Auto-memory
+ * (`<projekt>/memory/*.md`) stays usable; `--tresc`/`--podsumowanie`
+ * values are ignored.
  */
 export function touchesTranscript(toolName, toolInput, transcriptPath) {
-  const projects = /\.claude\/projects\b/;
+  const transcripts = /\.claude\/projects\/[^\s'";&|]*\.jsonl\b/;
   if (toolName === 'Bash') {
-    const c = String(toolInput?.command ?? '');
-    return projects.test(c) || (!!transcriptPath && c.includes(transcriptPath));
+    const c = withoutTextFlags(String(toolInput?.command ?? ''));
+    if (!!transcriptPath && c.includes(transcriptPath)) return true;
+    if (!/\.claude\/projects\b/.test(c)) return false;
+    return /jsonl/i.test(c) || !/\.claude\/projects\/[^\s'";&|]+\/memory\b/.test(c);
   }
   const file = String(toolInput?.file_path ?? toolInput?.notebook_path ?? '');
-  return !!file && (projects.test(file) || file === transcriptPath);
+  return !!file && (transcripts.test(file) || file === transcriptPath);
 }
 
 /**
