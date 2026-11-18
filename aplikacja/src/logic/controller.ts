@@ -163,7 +163,9 @@ export class Controller {
       'inbox.get': async () => this.view,
       'inbox.refresh': () => this.poll(),
       'inbox.take': (p) => this.take(text(p, 'id')),
-      'inbox.setState': (p) => this.setState(text(p, 'id'), text(p, 'state')),
+      'inbox.setState': (p) => this.change(() => this.api().setState(text(p, 'id'), text(p, 'state') as UserSettableState, optionalText(p, 'acceptor'))),
+      'task.accept': (p) => this.change(() => this.api().accept(text(p, 'id'))),
+      'task.sendBack': (p) => this.change(() => this.api().sendBack(text(p, 'id'), text(p, 'reason'))),
       'task.openInClaude': (p) => this.openInClaude(text(p, 'id'), field(p, 'newThread') === true),
       'task.reject': (p) => this.change(() => this.api().reject(text(p, 'id'), text(p, 'reason'))),
       'task.remove': (p) => this.change(() => this.api().remove(text(p, 'id'))),
@@ -195,7 +197,7 @@ export class Controller {
       const tasks = await this.api().inbox();
       if (this.session.epoch() !== epoch || !this.view.loggedIn) return this.view; // logged out meanwhile
       const fresh = await this.announce(tasks);
-      this.ports.log?.(`poll ok: tasks=${tasks.length} waiting=${waitingTasks(tasks).length} new=${fresh}`);
+      this.ports.log?.(`poll ok: tasks=${tasks.length} waiting=${waitingTasks(tasks, this.view.osoba).length} new=${fresh}`);
       this.update({ offline: false, tasks, updatedAt: new Date(this.time()).toISOString() });
     } catch (e) {
       await this.pollFailed(e);
@@ -232,7 +234,7 @@ export class Controller {
    * skipped (the tray count still shows the task); seen set saved.
    */
   private async announce(tasks: Task[]): Promise<number> {
-    const { fresh, seen } = pickNew(tasks, loadSeen(this.ports.store));
+    const { fresh, seen } = pickNew(tasks, loadSeen(this.ports.store), this.view.osoba);
     saveSeen(this.ports.store, seen);
     for (const t of fresh) {
       await this.ports.notify(notificationTitle(t), notificationBody(t.opis))
@@ -328,18 +330,6 @@ export class Controller {
     const r = await this.api().take(id);
     void this.poll();
     return r.status === 'TAKEN' ? { status: 'TAKEN' } : r;
-  }
-
-  /**
-   * Changes a task's state and refreshes the inbox.
-   *
-   * Call: rpc `inbox.setState`.
-   * Expects: id and state; `ApiClient.setState` rejects states
-   * outside `USER_SETTABLE_STATES` before any request.
-   * Output: `{ ok: true }`.
-   */
-  private async setState(id: string, state: string): Promise<{ ok: true }> {
-    return this.change(() => this.api().setState(id, state as UserSettableState));
   }
 
   /**
@@ -500,7 +490,7 @@ export class Controller {
  * Output: number of `nowe`/`eskalowane` tasks.
  */
 export function waitingCount(view: InboxView): number {
-  return waitingTasks(view.tasks).length;
+  return waitingTasks(view.tasks, view.osoba).length;
 }
 
 /**
@@ -512,6 +502,18 @@ export function waitingCount(view: InboxView): number {
  */
 function field(params: unknown, name: string): unknown {
   return typeof params === 'object' && params !== null ? (params as Record<string, unknown>)[name] : undefined;
+}
+
+/**
+ * Reads an optional string field of rpc params.
+ *
+ * Call: `optionalText(params, 'acceptor')`.
+ * Expects: anything as params.
+ * Output: the string, or undefined when missing or not a string.
+ */
+function optionalText(params: unknown, name: string): string | undefined {
+  const v = field(params, name);
+  return typeof v === 'string' ? v : undefined;
 }
 
 /**

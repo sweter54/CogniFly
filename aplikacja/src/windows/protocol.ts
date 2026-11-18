@@ -39,7 +39,9 @@ export interface Methods {
   'inbox.get': { params: Record<string, never>; result: InboxView };
   'inbox.refresh': { params: Record<string, never>; result: InboxView };
   'inbox.take': { params: { id: string }; result: { status: 'TAKEN' } | { status: 'BUSY'; owner: string } };
-  'inbox.setState': { params: { id: string; state: UserSettableState }; result: { ok: true } };
+  'inbox.setState': { params: { id: string; state: UserSettableState; acceptor?: string }; result: { ok: true } };
+  'task.accept': { params: { id: string }; result: { ok: true } };
+  'task.sendBack': { params: { id: string; reason: string }; result: { ok: true } };
   'session.logout': { params: Record<string, never>; result: { ok: true } };
   'task.openInClaude': { params: { id: string; newThread?: boolean }; result: { ok: true } };
   'task.reject': { params: { id: string; reason: string }; result: { ok: true } };

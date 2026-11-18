@@ -67,5 +67,5 @@ h2 { font-size: 14px; margin: 18px 0 6px; }
 .card h2 { margin-top: 0; }
 fieldset { border: 1px solid var(--line); border-radius: 6px; display: grid; gap: 6px; }
 fieldset label { display: flex; gap: 8px; align-items: center; font-weight: 400; }
-.reject-form { margin-top: 8px; }
-.reject-form .reason { flex: 1; min-width: 0; }
+.reject-form, .fix-form, .accept-form { margin-top: 8px; }
+.task form .reason { flex: 1; min-width: 0; }

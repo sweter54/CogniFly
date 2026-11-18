@@ -2,10 +2,10 @@
 // Task text is inserted with textContent only (it is data).
 import type { Person, Task, UserSettableState } from '@cognifly/wspolne/api';
 import { onRender, requestHighlight, type Highlight } from '../../logic/highlight.js';
-import { displayOrder, isFinished, selectValue } from '../../logic/inbox-view.js';
+import { displayOrder, isFinished, selectValue, taskNote } from '../../logic/inbox-view.js';
 import type { InboxView } from '../protocol.js';
 import { byId, messageFor, setStatus, type Call } from '../ui.js';
-import { wireReject, wireReturned, wireThread, type Outcome } from './task-actions.js';
+import { acceptorFormOpen, askAcceptor, wireAcceptor, wireReject, wireReturned, wireThread, type Outcome } from './task-actions.js';
 
 /** Polish names of task states. */
 const STATE_NAMES: Record<string, string> = {
@@ -152,7 +152,7 @@ export function mountInbox(call: Call): InboxScreen {
     badge.dataset.state = task.stan;
     badge.textContent = BADGES[task.stan] ?? task.stan;
     (li.querySelector('.desc') as HTMLElement).textContent = task.opis;
-    (li.querySelector('.progress') as HTMLElement).textContent = task.postep ? `Postęp: ${task.postep}` : '';
+    (li.querySelector('.progress') as HTMLElement).textContent = taskNote(task) || (task.postep ? `Postęp: ${task.postep}` : '');
     (li.querySelector('.meta') as HTMLElement).textContent = metaText(task);
     const take = li.querySelector('.take') as HTMLButtonElement;
     const state = li.querySelector('.state') as HTMLSelectElement;
@@ -162,11 +162,17 @@ export function mountInbox(call: Call): InboxScreen {
     state.value = selectValue(task);
     wireThread(li, task, mine && WORKING_STATES.includes(task.stan), call, report);
     wireReject(li, task, me, call, act);
+    wireAcceptor(li, task, me, call, act);
     wireReturned(li, task, mine, people, call, act);
     take.addEventListener('click', () => void act(() => takeTask(call, task.id)));
     state.addEventListener('change', () => {
-      if (state.value) void act(() => changeState(call, task.id, state.value as UserSettableState));
+      if (state.value === 'do_akceptacji') askAcceptor(li, task, people, call, act, () => (state.value = selectValue(task)));
+      else if (state.value) void act(() => changeState(call, task.id, state.value as UserSettableState));
     });
+    if (mine && acceptorFormOpen(task.id)) {
+      state.value = 'do_akceptacji';
+      askAcceptor(li, task, people, call, act, () => (state.value = selectValue(task)));
+    }
     return li;
   }
 
@@ -180,9 +186,10 @@ export function mountInbox(call: Call): InboxScreen {
     me = view.osoba;
     const ordered = displayOrder(view.tasks);
     const done = ordered.filter(isFinished);
-    const typing = document.activeElement?.matches('.reason') ? (document.activeElement.closest('.task') as HTMLElement | null)?.dataset.id : undefined;
+    const active = document.activeElement?.matches('.reason') ? document.activeElement : null;
+    const typing = active ? { id: (active.closest('.task') as HTMLElement | null)?.dataset.id, form: active.closest('form')?.classList[0] } : null;
     byId('list').replaceChildren(...ordered.filter((t) => !isFinished(t)).map(item));
-    if (typing) taskElement(typing)?.querySelector<HTMLInputElement>('.reason')?.focus(); // keep typing a reason
+    if (typing?.id && typing.form) taskElement(typing.id)?.querySelector<HTMLInputElement>(`.${typing.form} .reason`)?.focus(); // keep typing
     byId('done-list').replaceChildren(...done.map(item));
     const title = byId('done-title');
     title.hidden = done.length === 0;

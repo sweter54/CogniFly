@@ -1,6 +1,6 @@
 import type { Task } from '@cognifly/wspolne/api';
 import { describe, expect, it } from 'vitest';
-import { canReject, displayOrder, isFinished, rejectionText, selectValue } from '../src/logic/inbox-view.js';
+import { canReject, displayOrder, isAcceptor, isFinished, rejectionText, selectValue, taskNote } from '../src/logic/inbox-view.js';
 
 const t = (n: number, stan: Task['stan']): Task => ({
   id: `zad_${String(n).padStart(12, '0')}`, firma: 'pilot', zdarzenieId: 'e', kandydaci: [], stan, utworzono: '', opis: `Zadanie ${n}`,
@@ -58,5 +58,20 @@ describe('rejection rules', () => {
       .toBe('Odrzucone przez ania: „Nie mój obszar”');
     expect(rejectionText(t(1, 'nowe'))).toBe('');
     expect(rejectionText(sent('w_trakcie', { odrzucenie: { osoba: 'ania', powod: 'x' } }))).toBe('');
+  });
+});
+
+describe('acceptance view', () => {
+  const t2 = (stan: Task['stan'], extra: Partial<Task> = {}): Task => ({ ...t(2, stan), wlasciciel: 'ania', kandydaci: ['ania', 'bartek'], ...extra });
+  it('only the named acceptor of a waiting task decides', () => {
+    expect(isAcceptor(t2('do_akceptacji', { akceptujacy: 'bartek' }), 'bartek')).toBe(true);
+    expect(isAcceptor(t2('do_akceptacji', { akceptujacy: 'bartek' }), 'ania')).toBe(false);
+    expect(isAcceptor(t2('w_trakcie', { akceptujacy: 'bartek' }), 'bartek')).toBe(false);
+  });
+  it('notes who checks it, what to fix, or why it was rejected', () => {
+    expect(taskNote(t2('do_akceptacji', { akceptujacy: 'bartek' }))).toBe('Czeka na akceptację: bartek');
+    expect(taskNote(t2('w_trakcie', { uwagi: { osoba: 'bartek', powod: 'Brak\ttestów' } }))).toBe('Do poprawy (bartek): „Brak testów”');
+    expect(taskNote(t2('odrzucone', { odrzucenie: { osoba: 'x', powod: 'y' } }))).toBe(rejectionText(t2('odrzucone', { odrzucenie: { osoba: 'x', powod: 'y' } })));
+    expect(taskNote(t2('w_trakcie'))).toBe('');
   });
 });

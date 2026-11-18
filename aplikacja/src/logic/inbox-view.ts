@@ -67,6 +67,40 @@ export function canReject(task: Task, me: string | null): boolean {
 export function rejectionText(task: Task): string {
   const r = task.odrzucenie;
   if (!r || task.stan !== 'odrzucone') return '';
-  const reason = r.powod.replace(/[\p{Cc}\p{Zl}\p{Zp}\s]+/gu, ' ').trim();
-  return `Odrzucone przez ${r.osoba}: „${reason}”`;
+  return `Odrzucone przez ${r.osoba}: „${oneLine(r.powod)}”`;
+}
+
+/**
+ * Tells whether the user is asked to accept a task now.
+ *
+ * Call: `isAcceptor(task, me)`.
+ * Expects: a task and the user's person id.
+ * Output: true for a `do_akceptacji` task naming the user.
+ */
+export function isAcceptor(task: Task, me: string | null): boolean {
+  return me !== null && task.stan === 'do_akceptacji' && task.akceptujacy === me;
+}
+
+/**
+ * Makes a person's text one line.
+ * Call: `oneLine(text)`. Expects: any string.
+ * Output: whitespace and control characters collapsed, trimmed.
+ */
+function oneLine(text: string): string {
+  return text.replace(/[\p{Cc}\p{Zl}\p{Zp}\s]+/gu, ' ').trim();
+}
+
+/**
+ * Note shown under a task instead of plain progress.
+ *
+ * Call: `taskNote(task)`.
+ * Expects: a task (reasons are a person's text: quoted data).
+ * Output: who rejected it and why, who should accept it, or what
+ * the acceptor wants fixed; `''` when none applies.
+ */
+export function taskNote(task: Task): string {
+  if (task.stan === 'odrzucone') return rejectionText(task);
+  if (task.stan === 'do_akceptacji' && task.akceptujacy) return `Czeka na akceptację: ${task.akceptujacy}`;
+  if (task.stan === 'w_trakcie' && task.uwagi) return `Do poprawy (${task.uwagi.osoba}): „${oneLine(task.uwagi.powod)}”`;
+  return '';
 }

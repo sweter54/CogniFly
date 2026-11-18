@@ -48,6 +48,26 @@ describe('returned tasks', () => {
   });
 });
 
+describe('acceptance', () => {
+  const base = { id: 'zad_000000000002', firma: 'f', zdarzenieId: 'e', kandydaci: ['ania', 'bartek'], utworzono: '', opis: 'Zrób X', wlasciciel: 'ania' };
+  it('a task waiting for my acceptance notifies me, not the owner', async () => {
+    const { pickNew, notificationTitle, waitingTasks } = await import('../src/logic/notify.js');
+    const t = { ...base, stan: 'do_akceptacji' as const, akceptujacy: 'bartek' };
+    expect(waitingTasks([t], 'bartek')).toHaveLength(1);
+    expect(waitingTasks([t], 'ania')).toHaveLength(0);
+    expect(pickNew([t], new Set(), 'bartek').fresh).toHaveLength(1);
+    expect(notificationTitle(t)).toBe('CogniFly — do akceptacji');
+  });
+  it('a task sent back for fixes notifies its owner', async () => {
+    const { pickNew, notificationTitle, waitingTasks } = await import('../src/logic/notify.js');
+    const t = { ...base, stan: 'w_trakcie' as const, uwagi: { osoba: 'bartek', powod: 'Brak testów' } };
+    expect(waitingTasks([t], 'ania')).toHaveLength(1);
+    expect(waitingTasks([t], 'bartek')).toHaveLength(0);
+    expect(pickNew([t], new Set(), 'ania').fresh).toHaveLength(1);
+    expect(notificationTitle(t)).toBe('CogniFly — do poprawy');
+  });
+});
+
 describe('notificationBody', () => {
   it('collapses line breaks and control characters into one line', () => {
     expect(notificationBody('Review\nPR #1 \u0007 teraz')).toBe('Review PR #1 teraz');

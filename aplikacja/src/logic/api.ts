@@ -111,15 +111,41 @@ export class ApiClient {
   /**
    * Changes the state of the user's task.
    *
-   * Call: `await api.setState(id, state)` (`POST /zadania/{id}/stan`).
-   * Expects: a valid id and one of `USER_SETTABLE_STATES`.
+   * Call: `await api.setState(id, state, acceptor?)` (`POST .../stan`).
+   * Expects: a valid id and one of `USER_SETTABLE_STATES`; for
+   * `do_akceptacji` optionally the person who should accept it.
    * Output: the updated task.
    * Throws: `ApiError('ZLY_STAN')` locally for other states; API and
    * session errors as in `take`.
    */
-  async setState(id: string, state: UserSettableState): Promise<Task> {
+  async setState(id: string, state: UserSettableState, acceptor?: string): Promise<Task> {
     if (!(USER_SETTABLE_STATES as readonly string[]).includes(state)) throw new ApiError(400, 'ZLY_STAN');
-    return this.taskAction(id, 'stan', { stan: state });
+    const extra = acceptor !== undefined && state === 'do_akceptacji' ? { akceptujacy: checkedPerson(acceptor) } : {};
+    return this.taskAction(id, 'stan', { stan: state, ...extra });
+  }
+
+  /**
+   * Accepts a task the user was asked to check.
+   *
+   * Call: `await api.accept(id)` (`POST /zadania/{id}/akceptuj`).
+   * Expects: a valid id of a `do_akceptacji` task naming the user.
+   * Output: the task, now `zrobione`.
+   * Throws: API errors (`KONFLIKT`, `BRAK_DOSTEPU`), session errors.
+   */
+  async accept(id: string): Promise<Task> {
+    return this.taskAction(id, 'akceptuj');
+  }
+
+  /**
+   * Sends a task the user checked back to its owner for fixes.
+   *
+   * Call: `await api.sendBack(id, reason)` (`POST .../do-poprawy`).
+   * Expects: a valid id and what to fix (1–200 characters).
+   * Output: the task, now `w_trakcie` with `uwagi`.
+   * Throws: `ApiError('ZLY_POWOD')` locally; API and session errors.
+   */
+  async sendBack(id: string, reason: string): Promise<Task> {
+    return this.taskAction(id, 'do-poprawy', { powod: checkedReason(reason) });
   }
 
   /**
@@ -133,9 +159,7 @@ export class ApiClient {
    * (`BRAK_NADAWCY`, `KONFLIKT`, `BRAK_DOSTEPU`) and session errors.
    */
   async reject(id: string, reason: string): Promise<Task> {
-    const powod = reason.trim();
-    if (!powod || powod.length > 200 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(powod)) throw new ApiError(400, 'ZLY_POWOD');
-    return this.taskAction(id, 'odrzuc', { powod });
+    return this.taskAction(id, 'odrzuc', { powod: checkedReason(reason) });
   }
 
   /**
@@ -160,8 +184,7 @@ export class ApiClient {
    * (`BRAK_OSOBY`, `BRAK_DOSTEPU`, `KONFLIKT`), session errors.
    */
   async handOver(id: string, person: string): Promise<Task> {
-    if (!/^[A-Za-z0-9._-]{1,64}$/.test(person)) throw new ApiError(400, 'ZLA_OSOBA');
-    return this.taskAction(id, 'przekaz', { doOsoby: person });
+    return this.taskAction(id, 'przekaz', { doOsoby: checkedPerson(person) });
   }
 
   /**
@@ -220,6 +243,33 @@ export class ApiClient {
 function checkedId(id: string): string {
   if (!TASK_ID_PATTERN.test(id)) throw new ApiError(404, 'NIE_ZNALEZIONO');
   return id;
+}
+
+/**
+ * Validates a person's free-text reason before sending it.
+ *
+ * Call: `checkedReason(text)`.
+ * Expects: any string from a form.
+ * Output: the trimmed text (1–200 characters, no control chars).
+ * Throws: `ApiError(400, 'ZLY_POWOD')`.
+ */
+function checkedReason(text: string): string {
+  const t = text.trim();
+  if (!t || t.length > 200 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(t)) throw new ApiError(400, 'ZLY_POWOD');
+  return t;
+}
+
+/**
+ * Validates a person id before sending it.
+ *
+ * Call: `checkedPerson(id)`.
+ * Expects: a value from `GET /osoby`.
+ * Output: the same id.
+ * Throws: `ApiError(400, 'ZLA_OSOBA')` for anything else.
+ */
+function checkedPerson(person: string): string {
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(person)) throw new ApiError(400, 'ZLA_OSOBA');
+  return person;
 }
 
 /**

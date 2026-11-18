@@ -109,6 +109,8 @@
               <button type="button" class="take">Biorę</button>
               <button type="button" class="thread">Wróć do wątku w Claude</button>
               <button type="button" class="claude secondary">Pracuj w Claude</button>
+              <button type="button" class="approve">Akceptuj</button>
+              <button type="button" class="fix secondary">Do poprawy</button>
               <button type="button" class="reject secondary">Odrzuć</button>
               <button type="button" class="remove secondary">Usuń</button>
               <select class="person" aria-label="Przekaż innej osobie">
@@ -125,6 +127,16 @@
             <form class="reject-form actions" hidden>
               <input class="reason" maxlength="200" required placeholder="Powód odrzucenia" aria-label="Powód odrzucenia">
               <button type="submit">Odrzuć</button>
+              <button type="button" class="cancel secondary">Anuluj</button>
+            </form>
+            <form class="fix-form actions" hidden>
+              <input class="reason" maxlength="200" required placeholder="Co poprawić" aria-label="Co poprawić">
+              <button type="submit">Wyślij do poprawy</button>
+              <button type="button" class="cancel secondary">Anuluj</button>
+            </form>
+            <form class="accept-form actions" hidden>
+              <label>Kto akceptuje: <select class="acceptor" required><option value="">Wybierz osobę…</option></select></label>
+              <button type="submit">Wyślij do akceptacji</button>
               <button type="button" class="cancel secondary">Anuluj</button>
             </form>
           </li>

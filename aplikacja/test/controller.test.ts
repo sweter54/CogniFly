@@ -31,7 +31,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
     if (url.endsWith('/recenzje')) return json(200, { zadanie: task(9) });
     if (url.endsWith('/skrzynka')) return json(200, { zadania: state.inbox });
     if (url.endsWith('/biore')) return json(409, { kod: 'ZAJETE', wlasciciel: 'szymon' });
-    if (/\/(odrzuc|usun|przekaz)$/.test(url)) return json(200, { zadanie: task(1, 'odrzucone') });
+    if (/\/(odrzuc|usun|przekaz|akceptuj|do-poprawy|stan)$/.test(url)) return json(200, { zadanie: task(1, 'odrzucone') });
     return json(404, { kod: 'NIE_ZNALEZIONO' });
   });
   const views: InboxView[] = [];
@@ -291,5 +291,24 @@ describe('Controller', () => {
     expect(opened()[0]).toBe(`claude://code/continue?session=${w}`);
     expect(opened()[1]).toMatch(/^claude:\/\/code\/new\?/);
     expect(opened()[2]).toMatch(/^claude:\/\/code\/new\?/);
+  });
+
+  it('acceptance: state with an acceptor, accept and send back call the API', async () => {
+    const { c, ports } = setup({ inbox: [task(1, 'w_trakcie')] });
+    await c.start();
+    const h = c.handlers();
+    await h['inbox.setState']!({ id: id(1), state: 'do_akceptacji', acceptor: 'bartek' });
+    await h['task.accept']!({ id: id(1) });
+    await h['task.sendBack']!({ id: id(1), reason: 'Brak testów' });
+    const posted = (ports.fetch as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([u]) => /\/(stan|akceptuj|do-poprawy)$/.test(String(u)))
+      .map(([u, i]) => [String(u).replace(/^.*\/zadania\/[^/]+/, ''), (i as RequestInit).body ? JSON.parse(String((i as RequestInit).body)) : undefined]);
+    expect(posted).toEqual([
+      ['/stan', { stan: 'do_akceptacji', akceptujacy: 'bartek' }],
+      ['/akceptuj', undefined],
+      ['/do-poprawy', { powod: 'Brak testów' }],
+    ]);
+    await expect(h['task.sendBack']!({ id: id(1), reason: '' })).rejects.toMatchObject({ code: 'ZLY_POWOD' });
+    await expect(h['inbox.setState']!({ id: id(1), state: 'do_akceptacji', acceptor: 'a b' })).rejects.toMatchObject({ code: 'ZLA_OSOBA' });
   });
 });
