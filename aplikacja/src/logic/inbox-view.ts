@@ -61,11 +61,12 @@ export function canReject(task: Task, me: string | null): boolean {
  * Call: `rejectionText(task)`.
  * Expects: a task (the reason is a person's free text: shown as
  * quoted data, never interpreted).
- * Output: `Odrzucone przez <osoba>: „<powód>”`, or `''`.
+ * Output: `Odrzucone przez <osoba>: „<powód>”` for a rejected
+ * task, otherwise `''`.
  */
 export function rejectionText(task: Task): string {
   const r = task.odrzucenie;
-  if (!r) return '';
+  if (!r || task.stan !== 'odrzucone') return '';
   const reason = r.powod.replace(/[\p{Cc}\p{Zl}\p{Zp}\s]+/gu, ' ').trim();
   return `Odrzucone przez ${r.osoba}: „${reason}”`;
 }

@@ -116,6 +116,46 @@ describe('after a rejection', () => {
   });
 });
 
+describe('review fixes', () => {
+  test('a deleted task stays deleted: no state change, no hand-over', async () => {
+    const z = await zglos(['ania']);
+    await odrzuc(z.id, 'ania');
+    await wywolaj('POST /zadania/{id}/usun', { id: z.id });
+    expect((await wywolaj('POST /zadania/{id}/stan', { id: z.id, body: { stan: 'w_trakcie' } })).status).toBe(403);
+    expect((await wywolaj('POST /zadania/{id}/przekaz', { id: z.id, body: { doOsoby: 'bartek' } })).status).toBe(409);
+    expect((await pobierzZadanie('f1', z.id))!.stan).toBe('usuniete');
+  });
+
+  test('a rejected task cannot get a normal state; only delete or hand over', async () => {
+    const z = await zglos(['ania']);
+    await odrzuc(z.id, 'ania');
+    expect((await wywolaj('POST /zadania/{id}/stan', { id: z.id, body: { stan: 'w_trakcie' } })).status).toBe(403);
+  });
+
+  test('the owner cannot reject a finished task; outsiders always get BRAK_DOSTEPU', async () => {
+    const z = await zglos(['ania']);
+    await wywolaj('POST /zadania/{id}/biore', { id: z.id, sub: 'ania' });
+    await wywolaj('POST /zadania/{id}/stan', { id: z.id, sub: 'ania', body: { stan: 'zrobione' } });
+    expect(await odrzuc(z.id, 'ania')).toMatchObject({ status: 409, body: { kod: 'KONFLIKT' } });
+    const y = await zglos(['ania']);
+    await odrzuc(y.id, 'ania');
+    expect(await odrzuc(y.id, 'bartek')).toMatchObject({ status: 403, body: { kod: 'BRAK_DOSTEPU' } });
+  });
+
+  test('hand-over to oneself is refused', async () => {
+    const z = await zglos(['ania']);
+    await odrzuc(z.id, 'ania');
+    expect(await wywolaj('POST /zadania/{id}/przekaz', { id: z.id, body: { doOsoby: 'michal' } }))
+      .toMatchObject({ status: 400, body: { kod: 'ZLA_OSOBA' } });
+  });
+
+  test('a person who dropped out of the candidates cannot take the task', async () => {
+    const z = await zglos(['ania', 'bartek']);
+    await odrzuc(z.id, 'ania');
+    expect(await wywolaj('POST /zadania/{id}/biore', { id: z.id, sub: 'ania' })).toMatchObject({ status: 403 });
+  });
+});
+
 describe('POST /zadania/{id}/watek', () => {
   const W = 'local_1fb5034c-8723-4c40-85c5-981eca105464';
   test('remembers the Claude thread per person and returns it only in their inbox', async () => {

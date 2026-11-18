@@ -293,10 +293,7 @@ export async function wykonaj(argv, env = process.env) {
       }
       case 'odrzuc': {
         const r = await zSesja(ctx, 'POST', `/zadania/${id}/odrzuc`, { powod });
-        if (r.status === 200) {
-          await pokazWAplikacji(id, env);
-          return { stan: 'ODRZUCONE', zadanie: r.json.zadanie };
-        }
+        if (r.status === 200) return { stan: 'ODRZUCONE', zadanie: r.json.zadanie }; // zadanie wyszło ze skrzynki — nie otwieramy aplikacji
         if (['BRAK_NADAWCY', 'KONFLIKT', 'ZLY_POWOD'].includes(r.json?.kod)) return { stan: r.json.kod };
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };

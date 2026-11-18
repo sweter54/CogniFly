@@ -412,7 +412,7 @@ describe('polecenia', () => {
     expect((await cli(['przekaz', id, '--do-osoby', 'zła osoba'])).json.stan).toBe('ZLE_PARAMETRY');
     expect(api.log.length).toBe(0);
   });
-  it('odrzuc: wysyła powód i pokazuje zadanie w aplikacji; zły powód lokalnie; kody serwera', async () => {
+  it('odrzuc: wysyła powód, nie otwiera aplikacji (zadanie wyszło ze skrzynki); zły powód lokalnie; kody serwera', async () => {
     const id = 'zad_0123456789ab';
     const zapis = join(kat, 'otwarte.txt');
     const otwieracz = join(kat, 'otwieracz.sh');
@@ -421,7 +421,7 @@ describe('polecenia', () => {
     expect((await cli(['odrzuc', id, '--powod', 'Nie mój obszar'], { COGNIFLY_OTWIERACZ: otwieracz })).json)
       .toEqual({ stan: 'ODRZUCONE', zadanie: { id, stan: 'odrzucone' } });
     expect(api.log[0]).toMatchObject({ method: 'POST', url: `/zadania/${id}/odrzuc`, body: { powod: 'Nie mój obszar' } });
-    expect(readFileSync(zapis, 'utf8').trim()).toBe(`cognifly://zadanie/${id}`);
+    expect(existsSync(zapis)).toBe(false);
     api.log.length = 0;
     expect((await cli(['odrzuc', id])).json.stan).toBe('ZLY_POWOD');
     expect((await cli(['odrzuc', id, '--powod', 'x'.repeat(201)])).json.stan).toBe('ZLY_POWOD');

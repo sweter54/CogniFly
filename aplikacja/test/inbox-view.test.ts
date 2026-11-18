@@ -57,5 +57,6 @@ describe('rejection rules', () => {
     expect(rejectionText(sent('odrzucone', { odrzucenie: { osoba: 'ania', powod: 'Nie\nmój obszar' } })))
       .toBe('Odrzucone przez ania: „Nie mój obszar”');
     expect(rejectionText(t(1, 'nowe'))).toBe('');
+    expect(rejectionText(sent('w_trakcie', { odrzucenie: { osoba: 'ania', powod: 'x' } }))).toBe('');
   });
 });

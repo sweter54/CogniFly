@@ -116,8 +116,8 @@ export async function wez(firma: string, idZadania: string, osoba: string): Prom
     if (!z.kandydaci.includes(osoba)) return { ok: false, kod: 'BRAK_DOSTEPU' };
     const ok = await zmien(
       z, 'wziete',
-      '#stan = :nowe OR #stan = :eskal',
-      { '#stan': 'stan', '#wl': 'wlasciciel' },
+      '(#stan = :nowe OR #stan = :eskal) AND contains(#kan, :osoba)',
+      { '#stan': 'stan', '#wl': 'wlasciciel', '#kan': 'kandydaci' },
       { ':nowe': 'nowe', ':eskal': 'eskalowane' },
       '#stan = :wziete, #wl = :osoba',
       { ':wziete': 'wziete', ':osoba': osoba },
@@ -130,16 +130,19 @@ export async function wez(firma: string, idZadania: string, osoba: string): Prom
   throw new Error(`wez: nie udało się rozstrzygnąć zadania ${idZadania}`);
 }
 
+/** Stany, z których zwykła zmiana stanu jest niedozwolona (tylko usuń/przekaż albo koniec). */
+const ZAMKNIETE_DLA_STANU: readonly string[] = ['odrzucone', 'usuniete'];
+
 export async function ustawStan(
   firma: string, idZadania: string, osoba: string, stan: StanZadania, postep?: string,
 ): Promise<boolean> {
   const z = await pobierzZadanie(firma, idZadania);
-  if (!z || z.wlasciciel !== osoba) return false;
+  if (!z || z.wlasciciel !== osoba || ZAMKNIETE_DLA_STANU.includes(z.stan)) return false;
   return zmien(
     z, stan,
-    '#wl = :osoba',
+    '#wl = :osoba AND #stan <> :odrz AND #stan <> :usun',
     { '#wl': 'wlasciciel', '#stan': 'stan', ...(postep !== undefined ? { '#po': 'postep' } : {}) },
-    { ':osoba': osoba },
+    { ':osoba': osoba, ':odrz': 'odrzucone', ':usun': 'usuniete' },
     postep !== undefined ? '#stan = :stan, #po = :po' : '#stan = :stan',
     { ':stan': stan, ...(postep !== undefined ? { ':po': postep } : {}) },
   );
@@ -185,6 +188,7 @@ async function przeniesDo(z: Zadanie, p: Przeniesienie, w: Warunek): Promise<Zad
     nazwy[`#r${i}`] = k;
     return `#r${i}`;
   });
+  if (z.kandydaci.length > 98) throw new Error('Za wielu kandydatów do przeniesienia (maks. 98)'); // limit 100 elementów
   const wynik = await transakcja([
     {
       Update: {
@@ -216,8 +220,10 @@ const warunekWlasciciela = (osoba: string): Warunek => ({ wyr: '#wl = :os', nazw
  */
 export async function przekaz(firma: string, idZadania: string, odOsoby: string, doOsoby: string, postep: string): Promise<Zadanie | null> {
   const z = await pobierzZadanie(firma, idZadania);
-  if (!z || z.wlasciciel !== odOsoby) return null;
-  return przeniesDo(z, { cel: doOsoby, stan: 'nowe', pola: { postep, nadawca: odOsoby }, usun: ['odrzucenie'] }, warunekWlasciciela(odOsoby));
+  if (!z || z.wlasciciel !== odOsoby || z.stan === 'usuniete') return null;
+  const w = warunekWlasciciela(odOsoby);
+  return przeniesDo(z, { cel: doOsoby, stan: 'nowe', pola: { postep, nadawca: odOsoby }, usun: ['odrzucenie'] },
+    { wyr: `${w.wyr} AND #st <> :usun`, nazwy: { ...w.nazwy, '#st': 'stan' }, wartosci: { ...w.wartosci, ':usun': 'usuniete' } });
 }
 
 export type WynikOdrzuc =
@@ -225,6 +231,8 @@ export type WynikOdrzuc =
   | { ok: false; kod: 'NIE_ZNALEZIONO' | 'BRAK_DOSTEPU' | 'BRAK_NADAWCY' | 'KONFLIKT' };
 
 const OCZEKUJACE: readonly string[] = ['nowe', 'eskalowane'];
+/** Stany wziętego zadania, które właściciel może jeszcze odrzucić. */
+const W_PRACY: readonly string[] = ['wziete', 'w_trakcie', 'do_akceptacji'];
 
 /**
  * Odrzucenie zadania przez kandydata (niewzięte) lub właściciela.
@@ -240,13 +248,11 @@ export async function odrzuc(firma: string, idZadania: string, osoba: string, po
   if (!z) return { ok: false, kod: 'NIE_ZNALEZIONO' };
   if (!z.nadawca) return { ok: false, kod: 'BRAK_NADAWCY' };
   const czeka = !z.wlasciciel && OCZEKUJACE.includes(z.stan);
-  if (z.wlasciciel !== osoba && !(czeka && z.kandydaci.includes(osoba))) {
-    return { ok: false, kod: z.stan === 'odrzucone' || z.stan === 'usuniete' ? 'KONFLIKT' : 'BRAK_DOSTEPU' };
-  }
-  if (z.stan === 'odrzucone' || z.stan === 'usuniete') return { ok: false, kod: 'KONFLIKT' };
+  if (z.wlasciciel !== osoba && !(czeka && z.kandydaci.includes(osoba))) return { ok: false, kod: 'BRAK_DOSTEPU' };
+  if (!czeka && !W_PRACY.includes(z.stan)) return { ok: false, kod: 'KONFLIKT' };
   const warunek: Warunek = czeka
     ? { wyr: '#st = :st AND attribute_not_exists(#wl) AND size(#kan) = :n', nazwy: { '#st': 'stan', '#wl': 'wlasciciel', '#kan': 'kandydaci' }, wartosci: { ':st': z.stan, ':n': z.kandydaci.length } }
-    : warunekWlasciciela(osoba);
+    : { wyr: '#wl = :os AND #st = :st', nazwy: { '#wl': 'wlasciciel', '#st': 'stan' }, wartosci: { ':os': osoba, ':st': z.stan } };
   const zadanie = czeka && z.kandydaci.length > 1
     ? await odejdzKandydat(z, osoba, warunek)
     : await przeniesDo(z, {

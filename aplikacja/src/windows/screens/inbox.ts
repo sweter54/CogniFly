@@ -227,7 +227,7 @@ export function mountInbox(call: Call): InboxScreen {
     li.classList.add('flash');
     if (flash !== 'start') return;
     li.tabIndex = -1;
-    li.focus({ preventScroll: true });
+    if (!document.activeElement?.matches('input, textarea, select')) li.focus({ preventScroll: true }); // don't steal typing
     li.scrollIntoView({ block: 'center', behavior: 'smooth' });
     clearTimeout(endTimer);
     endTimer = setTimeout(endHighlight, (next?.until ?? Date.now()) - Date.now());

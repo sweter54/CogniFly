@@ -62,8 +62,10 @@ export function wireReject(li: HTMLElement, task: Task, me: string | null, call:
   const toggle = (open: boolean) => {
     form.hidden = !open;
     button.hidden = open || !canReject(task, me);
-    if (open) reason.focus();
-    else drafts.delete(task.id);
+    if (open) {
+      drafts.set(task.id, reason.value); // the open form survives redraws
+      reason.focus();
+    } else drafts.delete(task.id);
   };
   if (drafts.has(task.id) && canReject(task, me)) {
     reason.value = drafts.get(task.id) ?? '';
@@ -90,8 +92,8 @@ export function wireReject(li: HTMLElement, task: Task, me: string | null, call:
  * Call: `wireReturned(li, task, mine, people, call, act)`.
  * Expects: `mine` = the user owns the task; `people` resolves to the
  * company members (fetched once per window).
- * Output: none; shows who rejected and why, "Usuń" and a person
- * select that hands the task over.
+ * Output: none; shows who rejected and why, "Usuń" (asks twice) and
+ * a person select with a "Przekaż: <osoba>" button.
  */
 export function wireReturned(
   li: HTMLElement, task: Task, mine: boolean, people: () => Promise<Person[]>, call: Call, act: Act,
@@ -101,22 +103,55 @@ export function wireReturned(
   const handover = part<HTMLSelectElement>(li, '.person');
   remove.hidden = !returned;
   handover.hidden = !returned;
+  part<HTMLButtonElement>(li, '.handover').hidden = true;
   const why = rejectionText(task);
   if (why) part<HTMLElement>(li, '.progress').textContent = why;
   if (!returned) return;
   void people().then((list) => {
     for (const p of list.filter((x) => x.osoba !== task.wlasciciel)) handover.add(new Option(p.osoba, p.osoba));
   }).catch(() => undefined);
-  remove.addEventListener('click', () => void act(async () => {
+  armed(remove, 'Na pewno usunąć?', () => act(async () => {
     await call('task.remove', { id: task.id });
     return { text: 'Zadanie usunięte.', kind: 'ok' };
   }));
+  const confirm = part<HTMLButtonElement>(li, '.handover');
   handover.addEventListener('change', () => {
+    confirm.hidden = !handover.value;
+    confirm.textContent = `Przekaż: ${handover.value}`;
+  });
+  confirm.addEventListener('click', () => {
     const person = handover.value;
     if (!person) return;
     void act(async () => {
       await call('task.handOver', { id: task.id, person });
       return { text: `Przekazano: ${person}.`, kind: 'ok' };
     });
+  });
+}
+
+/**
+ * Makes a button ask for a second click before a final action.
+ *
+ * Call: `armed(button, 'Na pewno…?', action)`.
+ * Expects: a visible button.
+ * Output: none; the first click changes the label for 5 s, a second
+ * click in that time runs the action.
+ */
+function armed(button: HTMLButtonElement, question: string, action: () => Promise<void>): void {
+  const label = button.textContent ?? '';
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  button.addEventListener('click', () => {
+    if (timer === undefined) {
+      button.textContent = question;
+      timer = setTimeout(() => {
+        button.textContent = label;
+        timer = undefined;
+      }, 5_000);
+      return;
+    }
+    clearTimeout(timer);
+    timer = undefined;
+    button.textContent = label;
+    void action();
   });
 }

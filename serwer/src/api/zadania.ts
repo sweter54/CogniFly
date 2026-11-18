@@ -77,6 +77,7 @@ export async function przekaz(k: Kontekst, id: string | undefined, surowe: strin
   if (!z) throw new HttpBlad(404, 'NIE_ZNALEZIONO');
   if (z.wlasciciel !== k.osoba) throw new HttpBlad(403, 'BRAK_DOSTEPU');
   const cel = await adresat(k.firma, b);
+  if (cel.osoba === k.osoba) throw new HttpBlad(400, 'ZLA_OSOBA');
   const zadanie = await przekazZadanie(k.firma, zid, k.osoba, cel.osoba, cel.postep);
   if (!zadanie) throw new HttpBlad(409, 'KONFLIKT');
   return { status: 200, body: { zadanie } };
