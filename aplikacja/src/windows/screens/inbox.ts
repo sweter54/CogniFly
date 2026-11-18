@@ -1,6 +1,7 @@
 // Inbox screen: the user's tasks with "biorę" and state changes.
 // Task text is inserted with textContent only (it is data).
 import type { Task, UserSettableState } from '@cognifly/wspolne/api';
+import { onRender, requestHighlight, type Highlight } from '../../logic/highlight.js';
 import { displayOrder, isFinished, selectValue } from '../../logic/inbox-view.js';
 import type { InboxView } from '../protocol.js';
 import { byId, messageFor, setStatus, type Call } from '../ui.js';
@@ -185,6 +186,7 @@ export function mountInbox(call: Call): InboxScreen {
     title.hidden = done.length === 0;
     title.textContent = `Zakończone (${done.length})`;
     setStatus(statusText(view), view.offline ? 'error' : 'info');
+    applyHighlight();
   }
 
   /**
@@ -196,20 +198,61 @@ export function mountInbox(call: Call): InboxScreen {
     call('inbox.refresh', {}).then(render).catch((e) => setStatus(messageFor(e), 'error'));
   }
 
+  let pending: Highlight | null = null;
+  let endTimer: ReturnType<typeof setTimeout> | undefined;
+
   /**
-   * Draws attention to one task.
-   * Call: `highlight(id)` after the list was rendered.
-   * Expects: a task id (a missing task is ignored).
-   * Output: none; the task scrolls into view and flashes for ~4 s.
+   * Finds the list element of a task.
+   * Call: `taskElement(id)`. Expects: a task id.
+   * Output: the element or undefined when it is not on the list.
+   */
+  function taskElement(taskId: string): HTMLElement | undefined {
+    return Array.from(document.querySelectorAll<HTMLElement>('.task')).find((el) => el.dataset.id === taskId);
+  }
+
+  /**
+   * Applies the pending highlight to the current list.
+   * Call: after every render and when a highlight is requested.
+   * Expects: nothing. Output: none; on start the task scrolls into
+   * view, gets focus and flashes; redraws keep the flash until it
+   * ends (redraws replace the elements).
+   */
+  function applyHighlight(): void {
+    const li = pending ? taskElement(pending.id) : undefined;
+    const { next, flash } = onRender(pending, li !== undefined, Date.now());
+    pending = next;
+    if (!li || flash === 'none') return;
+    li.classList.add('flash');
+    if (flash !== 'start') return;
+    li.tabIndex = -1;
+    li.focus({ preventScroll: true });
+    li.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    clearTimeout(endTimer);
+    endTimer = setTimeout(endHighlight, (next?.until ?? Date.now()) - Date.now());
+  }
+
+  /**
+   * Ends the flash on whatever element shows the task now.
+   * Call: by the timer. Expects: nothing. Output: none.
+   */
+  function endHighlight(): void {
+    const id = pending?.id;
+    pending = onRender(pending, false, Date.now()).next;
+    if (id && !pending) taskElement(id)?.classList.remove('flash');
+  }
+
+  /**
+   * Draws attention to one task for 5 s.
+   * Call: `highlight(id)` when the app was opened on a task.
+   * Expects: a task id; a task not on the list yet is highlighted
+   * when it appears (up to 15 s; the inbox is fetched at once).
+   * Output: none.
    */
   function highlight(taskId: string): void {
-    const li = Array.from(document.querySelectorAll<HTMLElement>('.task')).find((el) => el.dataset.id === taskId);
-    if (!li) return;
-    li.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    li.classList.remove('flash');
-    void li.offsetWidth; // restart the animation
-    li.classList.add('flash');
-    setTimeout(() => li.classList.remove('flash'), 4_000);
+    for (const el of Array.from(document.querySelectorAll('.task.flash'))) el.classList.remove('flash');
+    pending = requestHighlight(taskId, Date.now());
+    applyHighlight();
+    if (pending && pending.until === undefined) refresh();
   }
 
   byId('refresh').addEventListener('click', refresh);
