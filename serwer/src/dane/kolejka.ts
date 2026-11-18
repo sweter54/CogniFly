@@ -223,7 +223,7 @@ export async function przekaz(firma: string, idZadania: string, odOsoby: string,
   const z = await pobierzZadanie(firma, idZadania);
   if (!z || z.wlasciciel !== odOsoby || z.stan === 'usuniete') return null;
   const w = warunekWlasciciela(odOsoby);
-  return przeniesDo(z, { cel: doOsoby, stan: 'nowe', pola: { postep, nadawca: odOsoby }, usun: ['odrzucenie'] },
+  return przeniesDo(z, { cel: doOsoby, stan: 'nowe', pola: { postep, nadawca: odOsoby }, usun: ['odrzucenie', 'uwagi', 'akceptujacy', 'oddano'] },
     { wyr: `${w.wyr} AND #st <> :usun`, nazwy: { ...w.nazwy, '#st': 'stan' }, wartosci: { ...w.wartosci, ':usun': 'usuniete' } });
 }
 
@@ -258,7 +258,7 @@ export async function odrzuc(firma: string, idZadania: string, osoba: string, po
     ? await odejdzKandydat(z, osoba, warunek)
     : await przeniesDo(z, {
       cel: z.nadawca, stan: 'odrzucone', wlasciciel: z.nadawca,
-      pola: { postep: `Odrzucone przez ${osoba}`, odrzucenie: { osoba, powod } }, usun: [],
+      pola: { postep: `Odrzucone przez ${osoba}`, odrzucenie: { osoba, powod } }, usun: ['uwagi', 'akceptujacy', 'oddano'],
     }, warunek);
   return zadanie ? { ok: true, zadanie } : { ok: false, kod: 'KONFLIKT' };
 }
@@ -312,24 +312,34 @@ export type WynikAkceptacji =
  *
  * Wywołanie: `await doAkceptacji(firma, id, wlasciciel, akceptujacy)`.
  * Oczekuje: sprawdzonego akceptującego (członek firmy, nie właściciel).
- * Wynik: zadanie `do_akceptacji` z `akceptujacy`, ta osoba w
- * kandydatach (wpis w skrzynce), bez dawnych `uwagi`; kody błędów.
+ * Wynik: zadanie `do_akceptacji` z `akceptujacy` i `oddano` (znacznik
+ * rundy), ta osoba w kandydatach (wpis w skrzynce), bez dawnych
+ * `uwagi`; opcjonalny postęp; kody błędów.
  */
-export async function doAkceptacji(firma: string, idZadania: string, osoba: string, akceptujacy: string): Promise<WynikAkceptacji> {
+export async function doAkceptacji(firma: string, idZadania: string, osoba: string, akceptujacy: string, postep?: string): Promise<WynikAkceptacji> {
   const z = await pobierzZadanie(firma, idZadania);
   if (!z) return { ok: false, kod: 'NIE_ZNALEZIONO' };
   if (z.wlasciciel !== osoba) return { ok: false, kod: 'BRAK_DOSTEPU' };
   if (!W_PRACY.includes(z.stan)) return { ok: false, kod: 'KONFLIKT' };
   const kandydaci = z.kandydaci.includes(akceptujacy) ? z.kandydaci : [...z.kandydaci, akceptujacy];
+  if (kandydaci.length > 99) return { ok: false, kod: 'KONFLIKT' }; // limit transakcji: 100 elementów
+  const oddano = new Date().toISOString();
   const T = nazwaTabeli();
   const wynik = await transakcja([
     {
       Update: {
         TableName: T, Key: { pk: pkZad(firma), sk: z.id },
-        ConditionExpression: '#wl = :os AND #st = :byl',
-        UpdateExpression: 'SET #st = :dak, #ak = :ak, #kan = :kan REMOVE #uw',
-        ExpressionAttributeNames: { '#wl': 'wlasciciel', '#st': 'stan', '#ak': 'akceptujacy', '#kan': 'kandydaci', '#uw': 'uwagi' },
-        ExpressionAttributeValues: { ':os': osoba, ':byl': z.stan, ':dak': 'do_akceptacji', ':ak': akceptujacy, ':kan': kandydaci },
+        // size(#kan): równoległe wskazanie innej osoby nie zostawi osieroconego wpisu skrzynki
+        ConditionExpression: '#wl = :os AND #st = :byl AND size(#kan) = :n',
+        UpdateExpression: `SET #st = :dak, #ak = :ak, #kan = :kan, #od = :od${postep !== undefined ? ', #po = :po' : ''} REMOVE #uw`,
+        ExpressionAttributeNames: {
+          '#wl': 'wlasciciel', '#st': 'stan', '#ak': 'akceptujacy', '#kan': 'kandydaci', '#uw': 'uwagi', '#od': 'oddano',
+          ...(postep !== undefined ? { '#po': 'postep' } : {}),
+        },
+        ExpressionAttributeValues: {
+          ':os': osoba, ':byl': z.stan, ':n': z.kandydaci.length, ':dak': 'do_akceptacji', ':ak': akceptujacy, ':kan': kandydaci, ':od': oddano,
+          ...(postep !== undefined ? { ':po': postep } : {}),
+        },
       },
     },
     ...kandydaci.map((o) => ({
@@ -338,7 +348,7 @@ export async function doAkceptacji(firma: string, idZadania: string, osoba: stri
   ]);
   if (wynik !== 'OK') return { ok: false, kod: 'KONFLIKT' };
   const { uwagi: _uw, ...reszta } = z;
-  return { ok: true, zadanie: { ...reszta, stan: 'do_akceptacji', akceptujacy, kandydaci } };
+  return { ok: true, zadanie: { ...reszta, stan: 'do_akceptacji', akceptujacy, kandydaci, oddano, ...(postep !== undefined ? { postep } : {}) } };
 }
 
 /**
@@ -359,16 +369,17 @@ export async function rozstrzygnij(firma: string, idZadania: string, osoba: stri
   if (z.akceptujacy !== osoba) return { ok: false, kod: 'BRAK_DOSTEPU' };
   const stan: StanZadania = powod === undefined ? 'zrobione' : 'w_trakcie';
   const postep = powod === undefined ? `Zaakceptowane przez ${osoba}` : `Do poprawy (${osoba})`;
+  const uwagi = powod === undefined ? undefined : { osoba, powod, czas: new Date().toISOString() };
   const ok = await zmien(
     z, stan, '#st = :dak AND #ak = :os',
     { '#st': 'stan', '#ak': 'akceptujacy', '#po': 'postep', ...(powod !== undefined ? { '#uw': 'uwagi' } : {}) },
     { ':dak': 'do_akceptacji', ':os': osoba },
     `#st = :nowy, #po = :po${powod !== undefined ? ', #uw = :uw' : ''} REMOVE #ak`,
-    { ':nowy': stan, ':po': postep, ...(powod !== undefined ? { ':uw': { osoba, powod } } : {}) },
+    { ':nowy': stan, ':po': postep, ...(uwagi ? { ':uw': uwagi } : {}) },
   );
   if (!ok) return { ok: false, kod: 'KONFLIKT' };
   const { akceptujacy: _ak, ...reszta } = z;
-  return { ok: true, zadanie: { ...reszta, stan, postep, ...(powod !== undefined ? { uwagi: { osoba, powod } } : {}) } };
+  return { ok: true, zadanie: { ...reszta, stan, postep, ...(uwagi ? { uwagi } : {}) } };
 }
 
 /** Tylko z stanu `nowe`. false (bez wyjątku), gdy ktoś już wziął lub zadanie nie istnieje. */

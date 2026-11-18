@@ -90,4 +90,16 @@ describe('do akceptacji przez wskazaną osobę', () => {
     expect(r.body.zadanie.akceptujacy).toBeUndefined();
     expect(await wywolaj('POST /zadania/{id}/akceptuj', { id, sub: 'bartek' })).toMatchObject({ status: 409 });
   });
+
+  test('review fixes: hand-over drops old feedback; each round is stamped; progress text kept', async () => {
+    const id = await wziete('michal');
+    const first = (await wywolaj('POST /zadania/{id}/stan', { id, sub: 'ania', body: { stan: 'do_akceptacji', akceptujacy: 'bartek', postep: 'Gotowe do sprawdzenia' } })).body.zadanie;
+    expect(first).toMatchObject({ postep: 'Gotowe do sprawdzenia', akceptujacy: 'bartek' });
+    expect(typeof first.oddano).toBe('string');
+    const back = (await wywolaj('POST /zadania/{id}/do-poprawy', { id, sub: 'bartek', body: { powod: 'Brak testów' } })).body.zadanie;
+    expect(typeof back.uwagi.czas).toBe('string');
+    const r = await wywolaj('POST /zadania/{id}/przekaz', { id, sub: 'ania', body: { doOsoby: 'bartek' } });
+    expect(r.body.zadanie.uwagi).toBeUndefined();
+    expect(r.body.zadanie.akceptujacy).toBeUndefined();
+  });
 });

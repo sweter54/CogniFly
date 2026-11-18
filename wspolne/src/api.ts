@@ -22,7 +22,7 @@ export const RETURNED_STATES = ['odrzucone'] as const;
 export const THREAD_PATTERN = /^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** Who rejected a task and why (the reason is a person's free text: data). */
-export interface Rejection { osoba: string; powod: string }
+export interface Rejection { osoba: string; powod: string; /** When it was written (ISO). */ czas?: string }
 
 /** Escalation target of a task. */
 export interface Escalation { osoba: string; kanaly: Kanal[] }
@@ -46,6 +46,8 @@ export interface Task {
   odrzucenie?: Rejection;
   /** Who should accept the task while it is `do_akceptacji`. */
   akceptujacy?: string;
+  /** When the task was last handed for acceptance (ISO). */
+  oddano?: string;
   /** Last "send back for fixes" from the acceptor (a person's text: data). */
   uwagi?: Rejection;
   /** The caller's own Claude Desktop thread for this task (inbox only). */

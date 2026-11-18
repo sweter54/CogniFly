@@ -26,7 +26,7 @@ export async function stan(k: Kontekst, id: string | undefined, surowe: string |
   const { stan: s, postep, akceptujacy } = obiektJson(surowe);
   if (typeof s !== 'string' || !(DOZWOLONE as readonly string[]).includes(s)) throw new HttpBlad(400, 'ZLY_STAN');
   if (postep !== undefined && (typeof postep !== 'string' || postep.length > 200)) throw new HttpBlad(400, 'ZLY_POSTEP');
-  if (s === 'do_akceptacji') return oddajDoAkceptacji(k, zid, akceptujacy);
+  if (s === 'do_akceptacji') return oddajDoAkceptacji(k, zid, akceptujacy, postep as string | undefined);
   if (!(await ustawStan(k.firma, zid, k.osoba, s as StanZadania, postep))) throw new HttpBlad(403, 'BRAK_DOSTEPU');
   return { status: 200, body: { zadanie: await pobierzZadanie(k.firma, zid) } };
 }
@@ -137,12 +137,13 @@ export async function watek(k: Kontekst, id: string | undefined, surowe: string 
  * Hands the caller's task to a person for acceptance.
  *
  * Call: from `stan` for `do_akceptacji`.
- * Expects: `akceptujacy` from the body (optional: the sender then).
+ * Expects: `akceptujacy` from the body (optional: the sender then)
+ * and an already checked `postep`.
  * Output: 200 `{zadanie}`.
  * Throws: 400 `BRAK_AKCEPTUJACEGO` / `ZLY_AKCEPTUJACY` (not a member,
  * or the owner), 403/404/409 from the queue.
  */
-async function oddajDoAkceptacji(k: Kontekst, zid: string, wskazany: unknown): Promise<Odpowiedz> {
+async function oddajDoAkceptacji(k: Kontekst, zid: string, wskazany: unknown, postep?: string): Promise<Odpowiedz> {
   const z = await pobierzZadanie(k.firma, zid);
   if (!z) throw new HttpBlad(404, 'NIE_ZNALEZIONO');
   if (z.wlasciciel !== k.osoba) throw new HttpBlad(403, 'BRAK_DOSTEPU');
@@ -150,7 +151,7 @@ async function oddajDoAkceptacji(k: Kontekst, zid: string, wskazany: unknown): P
   if (kto === undefined) throw new HttpBlad(400, 'BRAK_AKCEPTUJACEGO');
   const czlonek = typeof kto === 'string' && (await osobyFirmy(k.firma)).some((o) => o.osoba === kto);
   if (!czlonek || kto === k.osoba) throw new HttpBlad(400, 'ZLY_AKCEPTUJACY');
-  return odpowiedzZadania(await doAkceptacji(k.firma, zid, k.osoba, kto as string));
+  return odpowiedzZadania(await doAkceptacji(k.firma, zid, k.osoba, kto as string, postep));
 }
 
 /** POST /zadania/{id}/akceptuj: akceptujący zatwierdza zadanie (→ zrobione). */

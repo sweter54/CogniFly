@@ -68,6 +68,21 @@ describe('acceptance', () => {
   });
 });
 
+describe('repeated acceptance rounds', () => {
+  it('a new round of fixes or a new submission notifies again', async () => {
+    const { pickNew } = await import('../src/logic/notify.js');
+    const base = { id: 'zad_000000000003', firma: 'f', zdarzenieId: 'e', kandydaci: ['ania', 'bartek'], utworzono: '', opis: 'X', wlasciciel: 'ania' };
+    const fix1 = { ...base, stan: 'w_trakcie' as const, uwagi: { osoba: 'bartek', powod: 'a', czas: '2026-11-18T10:00:00Z' } };
+    const fix2 = { ...fix1, uwagi: { ...fix1.uwagi, czas: '2026-11-18T11:00:00Z' } };
+    const seen = pickNew([fix1], new Set(), 'ania').seen;
+    expect(pickNew([fix2], seen, 'ania').fresh).toHaveLength(1);
+    const sub1 = { ...base, stan: 'do_akceptacji' as const, akceptujacy: 'bartek', oddano: '2026-11-18T10:00:00Z' };
+    const seenB = pickNew([sub1], new Set(), 'bartek').seen;
+    expect(pickNew([{ ...sub1, oddano: '2026-11-18T12:00:00Z' }], seenB, 'bartek').fresh).toHaveLength(1);
+    expect(pickNew([sub1], seenB, 'bartek').fresh).toHaveLength(0);
+  });
+});
+
 describe('notificationBody', () => {
   it('collapses line breaks and control characters into one line', () => {
     expect(notificationBody('Review\nPR #1 \u0007 teraz')).toBe('Review PR #1 teraz');

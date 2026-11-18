@@ -122,13 +122,14 @@ export function wireReject(li: HTMLElement, task: Task, me: string | null, call:
  * Call: `wireAcceptor(li, task, me, call, act)`.
  * Expects: the user's person id.
  * Output: none; both show only for the named acceptor of a
- * `do_akceptacji` task; "Do poprawy" asks what to fix.
+ * `do_akceptacji` task; "Akceptuj" asks twice, "Do poprawy" asks
+ * what to fix.
  */
 export function wireAcceptor(li: HTMLElement, task: Task, me: string | null, call: Call, act: Act): void {
   const show = isAcceptor(task, me);
   const approve = part<HTMLButtonElement>(li, '.approve');
   approve.hidden = !show;
-  approve.addEventListener('click', () => void act(async () => {
+  armed(approve, 'Na pewno zaakceptować?', () => act(async () => {
     await call('task.accept', { id: task.id });
     return { text: 'Zaakceptowano — zadanie zrobione.', kind: 'ok' };
   }));
@@ -258,4 +259,14 @@ function armed(button: HTMLButtonElement, question: string, action: () => Promis
  */
 export function acceptorFormOpen(taskId: string): boolean {
   return drafts.has(`.accept-form:${taskId}`);
+}
+
+/**
+ * Closes the "who accepts it" form and forgets it.
+ * Call: `closeAcceptorForm(li, id)` when another state is picked.
+ * Expects: a task item. Output: none.
+ */
+export function closeAcceptorForm(li: HTMLElement, taskId: string): void {
+  drafts.delete(`.accept-form:${taskId}`);
+  part<HTMLFormElement>(li, '.accept-form').hidden = true;
 }

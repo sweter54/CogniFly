@@ -23,5 +23,10 @@ i może wysłać do poprawy”.
   z polem powodu; powiadomienia „CogniFly — do akceptacji” (akceptujący) i „CogniFly — do poprawy” (właściciel);
   oba liczą się do licznika, dopóki ktoś nie zareaguje.
 
+## Decyzje po przeglądzie
+- Akceptujący zostaje kandydatem po decyzji: widzi zadanie w „Zakończonych” (jak inni kandydaci po „biorę”).
+- Każda runda ma znacznik (`oddano`, `uwagi.czas`), żeby powiadomienie przyszło przy każdej kolejnej rundzie.
+- Przekazanie i odrzucenie czyszczą `uwagi` i `akceptujacy`. Właściciel może pominąć akceptację, wybierając inny stan.
+
 ## Zostawione budowniczemu
 Wygląd, teksty komunikatów.

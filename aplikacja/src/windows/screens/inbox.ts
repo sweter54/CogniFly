@@ -5,7 +5,7 @@ import { onRender, requestHighlight, type Highlight } from '../../logic/highligh
 import { displayOrder, isFinished, selectValue, taskNote } from '../../logic/inbox-view.js';
 import type { InboxView } from '../protocol.js';
 import { byId, messageFor, setStatus, type Call } from '../ui.js';
-import { acceptorFormOpen, askAcceptor, wireAcceptor, wireReject, wireReturned, wireThread, type Outcome } from './task-actions.js';
+import { acceptorFormOpen, askAcceptor, closeAcceptorForm, wireAcceptor, wireReject, wireReturned, wireThread, type Outcome } from './task-actions.js';
 
 /** Polish names of task states. */
 const STATE_NAMES: Record<string, string> = {
@@ -166,10 +166,11 @@ export function mountInbox(call: Call): InboxScreen {
     wireReturned(li, task, mine, people, call, act);
     take.addEventListener('click', () => void act(() => takeTask(call, task.id)));
     state.addEventListener('change', () => {
-      if (state.value === 'do_akceptacji') askAcceptor(li, task, people, call, act, () => (state.value = selectValue(task)));
-      else if (state.value) void act(() => changeState(call, task.id, state.value as UserSettableState));
+      if (state.value === 'do_akceptacji') return askAcceptor(li, task, people, call, act, () => (state.value = selectValue(task)));
+      closeAcceptorForm(li, task.id);
+      if (state.value) void act(() => changeState(call, task.id, state.value as UserSettableState));
     });
-    if (mine && acceptorFormOpen(task.id)) {
+    if (mine && WORKING_STATES.includes(task.stan) && acceptorFormOpen(task.id)) {
       state.value = 'do_akceptacji';
       askAcceptor(li, task, people, call, act, () => (state.value = selectValue(task)));
     }

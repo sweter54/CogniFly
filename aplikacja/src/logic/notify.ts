@@ -40,14 +40,17 @@ export function waitingTasks(tasks: readonly Task[], me: string | null = null): 
 }
 
 /**
- * Deduplication key: the same task notifies again when it escalates.
+ * Deduplication key: the same task notifies again when it escalates
+ * or starts a new acceptance round.
  *
  * Call: `seenKey(task)`.
  * Expects: a task.
- * Output: `<id>#<stan>`.
+ * Output: `<id>#<stan>`, plus the round stamp for acceptance and
+ * fixes, so each new round notifies again.
  */
 export function seenKey(task: Task): string {
-  return `${task.id}#${task.stan}`;
+  const round = task.stan === 'do_akceptacji' ? task.oddano : task.stan === 'w_trakcie' ? task.uwagi?.czas : undefined;
+  return round ? `${task.id}#${task.stan}#${round}` : `${task.id}#${task.stan}`;
 }
 
 /**
