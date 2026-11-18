@@ -190,7 +190,7 @@ export async function wykonaj(argv, env = process.env) {
   try {
     if (polecenie === 'wyloguj') return wyloguj(kat);
     if (polecenie === 'konfiguruj') return konfiguruj(kat, opcje);
-    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'zadanie', 'biore', 'stan', 'przekaz', 'odrzuc', 'usun', 'ocena-dostarczenia', 'dostarczenie', 'osoby', 'zglos-cr', 'podsumowanie'];
+    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'zadanie', 'biore', 'stan', 'przekaz', 'odrzuc', 'usun', 'akceptuj', 'do-poprawy', 'ocena-dostarczenia', 'dostarczenie', 'osoby', 'zglos-cr', 'podsumowanie'];
     if (!komendy.includes(polecenie)) throw new Stan('BLAD', { kod: 'NIEZNANE_POLECENIE' });
 
     // walidacje lokalne przed siecią i konfiguracją
@@ -202,13 +202,14 @@ export async function wykonaj(argv, env = process.env) {
       if (opcje.typ) q.set('typ', opcje.typ);
       zapytanie = `?${q}`;
     }
-    if (['zadanie', 'biore', 'stan', 'przekaz', 'odrzuc', 'usun'].includes(polecenie)) {
+    if (['zadanie', 'biore', 'stan', 'przekaz', 'odrzuc', 'usun', 'akceptuj', 'do-poprawy'].includes(polecenie)) {
       id = poz[1];
       if (!ID_ZADANIA.test(id ?? '')) throw new Stan('NIE_ZNALEZIONO');
     }
     if (polecenie === 'stan' && !STANY.includes(poz[2])) throw new Stan('ZLY_STAN');
     const adresat = polecenie === 'przekaz' ? adresatPrzekazania(opcje) : undefined;
-    const powod = polecenie === 'odrzuc' ? powodOdrzucenia(opcje.powod) : undefined;
+    const powod = ['odrzuc', 'do-poprawy'].includes(polecenie) ? powodOdrzucenia(opcje.powod) : undefined;
+    if (opcje.akceptujacy !== undefined && !/^[A-Za-z0-9._-]{1,64}$/.test(String(opcje.akceptujacy))) throw new Stan('ZLE_PARAMETRY');
     let dostawa;
     let recenzenci;
     if (polecenie === 'zglos-cr') {
@@ -272,13 +273,18 @@ export async function wykonaj(argv, env = process.env) {
         return blad(r);
       }
       case 'stan': {
-        const body = { stan: poz[2], ...(opcje.postep !== undefined ? { postep: opcje.postep } : {}) };
+        const body = {
+          stan: poz[2],
+          ...(opcje.postep !== undefined ? { postep: opcje.postep } : {}),
+          ...(opcje.akceptujacy !== undefined ? { akceptujacy: opcje.akceptujacy } : {}),
+        };
         const r = await zSesja(ctx, 'POST', `/zadania/${id}/stan`, body);
         if (r.status === 200) {
           await zapamietajWatek(ctx, id, env);
           await pokazWAplikacji(id, env);
           return { stan: 'OK', zadanie: r.json.zadanie };
         }
+        if (['BRAK_AKCEPTUJACEGO', 'ZLY_AKCEPTUJACY'].includes(r.json?.kod)) return { stan: r.json.kod };
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
         return blad(r);
@@ -302,6 +308,16 @@ export async function wykonaj(argv, env = process.env) {
       case 'usun': {
         const r = await zSesja(ctx, 'POST', `/zadania/${id}/usun`);
         if (r.status === 200) return { stan: 'USUNIETE', zadanie: r.json.zadanie };
+        if (r.json?.kod === 'KONFLIKT') return { stan: 'KONFLIKT' };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
+        return blad(r);
+      }
+      case 'akceptuj':
+      case 'do-poprawy': {
+        const akcept = polecenie === 'akceptuj';
+        const r = await zSesja(ctx, 'POST', `/zadania/${id}/${polecenie}`, akcept ? undefined : { powod });
+        if (r.status === 200) return { stan: akcept ? 'ZAAKCEPTOWANE' : 'DO_POPRAWY', zadanie: r.json.zadanie };
         if (r.json?.kod === 'KONFLIKT') return { stan: 'KONFLIKT' };
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };

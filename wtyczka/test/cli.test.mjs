@@ -454,6 +454,30 @@ describe('polecenia', () => {
     await cli(['zadanie', id], { CLAUDE_CODE_HOST_SESSION_ID: 'local_zly&q=1' });
     expect(api.log.filter((x) => x.url.endsWith('/watek'))).toHaveLength(0);
   });
+  it('stan do_akceptacji --akceptujacy: wysyła osobę; zła osoba lokalnie; błędy serwera', async () => {
+    const id = 'zad_0123456789ab';
+    apiHandler = () => ({ status: 200, body: { zadanie: { id, stan: 'do_akceptacji' } } });
+    await cli(['stan', id, 'do_akceptacji', '--akceptujacy', 'bartek']);
+    expect(api.log[0]).toMatchObject({ url: `/zadania/${id}/stan`, body: { stan: 'do_akceptacji', akceptujacy: 'bartek' } });
+    api.log.length = 0;
+    expect((await cli(['stan', id, 'do_akceptacji', '--akceptujacy', 'zła osoba'])).json.stan).toBe('ZLE_PARAMETRY');
+    expect(api.log.length).toBe(0);
+    for (const kod of ['BRAK_AKCEPTUJACEGO', 'ZLY_AKCEPTUJACY']) {
+      apiHandler = () => ({ status: 400, body: { kod } });
+      expect((await cli(['stan', id, 'do_akceptacji'])).json).toEqual({ stan: kod });
+    }
+  });
+  it('akceptuj i do-poprawy: wywołują API; powód sprawdzany lokalnie', async () => {
+    const id = 'zad_0123456789ab';
+    apiHandler = () => ({ status: 200, body: { zadanie: { id, stan: 'zrobione' } } });
+    expect((await cli(['akceptuj', id])).json).toEqual({ stan: 'ZAAKCEPTOWANE', zadanie: { id, stan: 'zrobione' } });
+    apiHandler = () => ({ status: 200, body: { zadanie: { id, stan: 'w_trakcie' } } });
+    expect((await cli(['do-poprawy', id, '--powod', 'Brak testów'])).json.stan).toBe('DO_POPRAWY');
+    expect(api.log.map((x) => [x.url, x.body])).toEqual([[`/zadania/${id}/akceptuj`, undefined], [`/zadania/${id}/do-poprawy`, { powod: 'Brak testów' }]]);
+    expect((await cli(['do-poprawy', id])).json.stan).toBe('ZLY_POWOD');
+    apiHandler = () => ({ status: 409, body: { kod: 'KONFLIKT' } });
+    expect((await cli(['akceptuj', id])).json).toEqual({ stan: 'KONFLIKT' });
+  });
   it('ocena-dostarczenia i dostarczenie: przekazują repo/PR/sha i zwracają ocenę', async () => {
     const ocena = { ready: false, reasons: ['CI_W_TOKU'], order: [] };
     apiHandler = () => ({ status: 200, body: { ocena } });

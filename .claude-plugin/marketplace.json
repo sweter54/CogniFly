@@ -8,7 +8,7 @@
       "name": "cognifly",
       "source": "./wtyczka",
       "description": "CogniFly: zdarzenia z GitHuba i skrzynka zadań w Claude Code, bez przerywania pracy.",
-      "version": "0.5.0"
+      "version": "0.6.0"
     }
   ],
   "metadata": {
