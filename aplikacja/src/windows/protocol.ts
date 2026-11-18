@@ -41,7 +41,10 @@ export interface Methods {
   'inbox.take': { params: { id: string }; result: { status: 'TAKEN' } | { status: 'BUSY'; owner: string } };
   'inbox.setState': { params: { id: string; state: UserSettableState }; result: { ok: true } };
   'session.logout': { params: Record<string, never>; result: { ok: true } };
-  'task.openInClaude': { params: { id: string }; result: { ok: true } };
+  'task.openInClaude': { params: { id: string; newThread?: boolean }; result: { ok: true } };
+  'task.reject': { params: { id: string; reason: string }; result: { ok: true } };
+  'task.remove': { params: { id: string }; result: { ok: true } };
+  'task.handOver': { params: { id: string; person: string }; result: { ok: true } };
   'config.pickFolder': { params: { current: string }; result: { path: string | null } };
   'config.setWorkFolder': { params: { path: string }; result: { ok: true } };
   'people.list': { params: Record<string, never>; result: { people: { osoba: string; github?: string }[] } };

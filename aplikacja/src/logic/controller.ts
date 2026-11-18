@@ -1,12 +1,12 @@
 // Brain of the background window: owns config, session, polling,
 // notifications and the rpc handlers. Platform effects are injected
 // as ports, so the whole flow is unit-tested without Tauri.
-import type { Task, UserSettableState } from '@cognifly/wspolne/api';
+import { THREAD_PATTERN, type Task, type UserSettableState } from '@cognifly/wspolne/api';
 import type { InboxView, Methods, Screen } from '../windows/protocol.js';
 import { ApiClient, type Membership } from './api.js';
 import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, type PendingLogin } from './cognito.js';
 import { isSafeFolder, loadConfig, saveChoices, type AppConfig, type UserChoices } from './config.js';
-import { claudeLink } from './claude-link.js';
+import { claudeLink, threadLink } from './claude-link.js';
 import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
 import type { FetchFn } from './http.js';
 import { clearSeen, loadSeen, notificationBody, notificationTitle, pickNew, saveSeen, waitingTasks } from './notify.js';
@@ -164,7 +164,10 @@ export class Controller {
       'inbox.refresh': () => this.poll(),
       'inbox.take': (p) => this.take(text(p, 'id')),
       'inbox.setState': (p) => this.setState(text(p, 'id'), text(p, 'state')),
-      'task.openInClaude': (p) => this.openInClaude(text(p, 'id')),
+      'task.openInClaude': (p) => this.openInClaude(text(p, 'id'), field(p, 'newThread') === true),
+      'task.reject': (p) => this.change(() => this.api().reject(text(p, 'id'), text(p, 'reason'))),
+      'task.remove': (p) => this.change(() => this.api().remove(text(p, 'id'))),
+      'task.handOver': (p) => this.change(() => this.api().handOver(text(p, 'id'), text(p, 'person'))),
       'config.pickFolder': (p) => this.pickFolder(text(p, 'current')),
       'config.setWorkFolder': (p) => this.setWorkFolder(text(p, 'path')),
       'people.list': async () => ({ people: await this.api().people() }),
@@ -336,7 +339,18 @@ export class Controller {
    * Output: `{ ok: true }`.
    */
   private async setState(id: string, state: string): Promise<{ ok: true }> {
-    await this.api().setState(id, state as UserSettableState);
+    return this.change(() => this.api().setState(id, state as UserSettableState));
+  }
+
+  /**
+   * Runs one change of a task and refreshes the inbox.
+   *
+   * Call: `this.change(() => api.reject(...))` from rpc handlers.
+   * Expects: an API call that validates its own input.
+   * Output: `{ ok: true }`; errors of the call propagate to the UI.
+   */
+  private async change(op: () => Promise<unknown>): Promise<{ ok: true }> {
+    await op();
     void this.poll();
     return { ok: true };
   }
@@ -405,21 +419,24 @@ export class Controller {
   }
 
   /**
-   * Opens a Claude Code session for a task.
+   * Opens Claude Code for a task: the remembered thread, or a new one.
    *
-   * Call: rpc `task.openInClaude`.
-   * Expects: a task id; the link holds only the id and the work folder.
+   * Call: rpc `task.openInClaude` (`newThread: true` forces a new one).
+   * Expects: a task id; a new-session link holds only the id and the
+   * work folder; a thread comes from the last fetched inbox and must
+   * be a Claude Desktop session id.
    * Output: `{ ok: true }` once the OS accepted the link.
    * Throws: `AppError('NO_WORK_FOLDER')` before setup is finished,
    * `AppError('BAD_TASK_ID')`, `AppError('CLAUDE_NOT_FOUND')` when no
    * app handles `claude://` (the cause is logged).
    */
-  private async openInClaude(id: string): Promise<{ ok: true }> {
+  private async openInClaude(id: string, newThread: boolean): Promise<{ ok: true }> {
     if (!this.config.workFolder) {
       await this.ports.showScreen('login');
       throw new AppError('NO_WORK_FOLDER');
     }
-    const link = claudeLink(id, this.config.workFolder);
+    const thread = newThread ? undefined : this.view.tasks.find((t) => t.id === id)?.watek;
+    const link = thread && THREAD_PATTERN.test(thread) ? threadLink(thread) : claudeLink(id, this.config.workFolder);
     try {
       await this.ports.openUrl(link);
     } catch (e) {

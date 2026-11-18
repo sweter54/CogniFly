@@ -31,6 +31,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
     if (url.endsWith('/recenzje')) return json(200, { zadanie: task(9) });
     if (url.endsWith('/skrzynka')) return json(200, { zadania: state.inbox });
     if (url.endsWith('/biore')) return json(409, { kod: 'ZAJETE', wlasciciel: 'szymon' });
+    if (/\/(odrzuc|usun|przekaz)$/.test(url)) return json(200, { zadanie: task(1, 'odrzucone') });
     return json(404, { kod: 'NIE_ZNALEZIONO' });
   });
   const views: InboxView[] = [];
@@ -254,5 +255,41 @@ describe('Controller', () => {
     expect(await h['people.list']!({})).toEqual({ people: [{ osoba: 'ania' }, { osoba: 'michal' }] });
     expect(await h['review.request']!({ repo: 'o/r', pr: 4, reviewers: ['ania'] })).toEqual({ taskId: id(9) });
     await expect(h['review.request']!({ repo: 'o/r', pr: 'x', reviewers: ['ania'] })).rejects.toMatchObject({ code: 'ZLY_PR' });
+  });
+
+  it('reject, delete and hand over call the API with checked input and refresh the inbox', async () => {
+    const { c, ports } = setup({ inbox: [task(1)] });
+    await c.start();
+    const h = c.handlers();
+    const calls = () => (ports.fetch as ReturnType<typeof vi.fn>).mock.calls.map(([u, i]) => [String(u).replace(/^.*amazonaws\.com/, ''), (i as RequestInit).body]);
+    expect(await h['task.reject']!({ id: id(1), reason: '  Nie mój obszar ' })).toEqual({ ok: true });
+    expect(await h['task.remove']!({ id: id(1) })).toEqual({ ok: true });
+    expect(await h['task.handOver']!({ id: id(1), person: 'bartek' })).toEqual({ ok: true });
+    const posted = calls().filter(([u]) => /odrzuc|usun|przekaz/.test(u as string));
+    expect(posted.map(([u]) => String(u).replace(/^.*\/zadania/, ''))).toEqual([`/${id(1)}/odrzuc`, `/${id(1)}/usun`, `/${id(1)}/przekaz`]);
+    expect(JSON.parse(posted[0]![1] as string)).toEqual({ powod: 'Nie mój obszar' });
+    expect(JSON.parse(posted[2]![1] as string)).toEqual({ doOsoby: 'bartek' });
+    const before = calls().length;
+    await expect(h['task.reject']!({ id: id(1), reason: ' ' })).rejects.toMatchObject({ code: 'ZLY_POWOD' });
+    await expect(h['task.reject']!({ id: id(1), reason: 'x'.repeat(201) })).rejects.toMatchObject({ code: 'ZLY_POWOD' });
+    await expect(h['task.handOver']!({ id: id(1), person: 'a b' })).rejects.toMatchObject({ code: 'ZLA_OSOBA' });
+    expect(calls().filter(([u]) => /odrzuc|usun|przekaz/.test(u as string)).length).toBe(3);
+    expect(calls().length).toBeGreaterThanOrEqual(before);
+  });
+
+  it('openInClaude returns to the remembered thread unless a new one is asked for', async () => {
+    const w = 'local_1fb5034c-8723-4c40-85c5-981eca105464';
+    const { ports } = setup({ inbox: [{ ...task(1, 'wziete'), watek: w }, { ...task(2, 'wziete'), watek: 'zly' }] });
+    ports.store.setItem('cognifly.config', JSON.stringify({ ...DEFAULT_CONFIG, workFolder: '/Users/m' }));
+    const c = new Controller(ports);
+    await c.start();
+    const h = c.handlers();
+    const opened = () => (ports.openUrl as ReturnType<typeof vi.fn>).mock.calls.map(([u]) => String(u));
+    await h['task.openInClaude']!({ id: id(1) });
+    await h['task.openInClaude']!({ id: id(1), newThread: true });
+    await h['task.openInClaude']!({ id: id(2) });
+    expect(opened()[0]).toBe(`claude://code/continue?session=${w}`);
+    expect(opened()[1]).toMatch(/^claude:\/\/code\/new\?/);
+    expect(opened()[2]).toMatch(/^claude:\/\/code\/new\?/);
   });
 });

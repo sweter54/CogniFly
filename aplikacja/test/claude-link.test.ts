@@ -22,3 +22,17 @@ describe('claudeLink', () => {
     expect(() => claudeLink(id, '')).toThrow('BAD_TASK_ID');
   });
 });
+
+describe('threadLink', () => {
+  it('opens an existing Claude Desktop thread', async () => {
+    const { threadLink } = await import('../src/logic/claude-link.js');
+    const w = 'local_1fb5034c-8723-4c40-85c5-981eca105464';
+    expect(threadLink(w)).toBe(`claude://code/continue?session=${w}`);
+  });
+  it('refuses anything that is not a session id', async () => {
+    const { threadLink } = await import('../src/logic/claude-link.js');
+    for (const bad of ['', 'last', 'local_x', 'local_1fb5034c-8723-4c40-85c5-981eca105464&q=1']) {
+      expect(() => threadLink(bad)).toThrow(expect.objectContaining({ code: 'BAD_THREAD' }));
+    }
+  });
+});

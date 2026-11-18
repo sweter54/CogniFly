@@ -35,6 +35,19 @@ describe('pickNew', () => {
   });
 });
 
+describe('returned tasks', () => {
+  it('a task rejected back to me notifies once and counts as waiting', async () => {
+    const { pickNew, notificationTitle, waitingTasks } = await import('../src/logic/notify.js');
+    const back = { id: 'zad_000000000001', firma: 'f', zdarzenieId: 'e', kandydaci: ['m'], stan: 'odrzucone' as const, utworzono: '', opis: 'X' };
+    const first = pickNew([back], new Set());
+    expect(first.fresh).toHaveLength(1);
+    expect(pickNew([back], first.seen).fresh).toHaveLength(0);
+    expect(waitingTasks([back])).toHaveLength(1);
+    expect(notificationTitle(back)).toBe('CogniFly — zadanie odrzucone');
+    expect(waitingTasks([{ ...back, stan: 'usuniete' }])).toHaveLength(0);
+  });
+});
+
 describe('notificationBody', () => {
   it('collapses line breaks and control characters into one line', () => {
     expect(notificationBody('Review\nPR #1 \u0007 teraz')).toBe('Review PR #1 teraz');

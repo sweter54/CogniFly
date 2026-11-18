@@ -1,21 +1,26 @@
 // What to notify about and what the tray shows. Only the server-built
 // `opis` ever reaches a notification (other task text is data).
-import { WAITING_STATES, type Task } from '@cognifly/wspolne/api';
+import { RETURNED_STATES, WAITING_STATES, type Task } from '@cognifly/wspolne/api';
 import { readJson, writeJson, type KeyValueStore } from './storage.js';
 
 /** Maximum notification body length (characters). */
 export const MAX_BODY_CHARS = 200;
 const SEEN_KEY = 'cognifly.seen';
 
+/** States that wait for the user: to take, or a rejection to decide on. */
+const ATTENTION_STATES: readonly string[] = [...WAITING_STATES, ...RETURNED_STATES];
+
 /**
- * Filters tasks that wait for someone to take them.
+ * Filters tasks that wait for the user.
  *
  * Call: `waitingTasks(tasks)`.
- * Expects: tasks from `/skrzynka`.
- * Output: tasks in state `nowe` or `eskalowane`, in input order.
+ * Expects: tasks from `/skrzynka` (a rejected task is only in the
+ * sender's inbox).
+ * Output: tasks in state `nowe`, `eskalowane` or `odrzucone`, in
+ * input order.
  */
 export function waitingTasks(tasks: readonly Task[]): Task[] {
-  return tasks.filter((t) => (WAITING_STATES as readonly string[]).includes(t.stan));
+  return tasks.filter((t) => ATTENTION_STATES.includes(t.stan));
 }
 
 /**
@@ -49,9 +54,10 @@ export function pickNew(tasks: readonly Task[], seen: ReadonlySet<string> | null
  *
  * Call: `notificationTitle(task)`.
  * Expects: a waiting task.
- * Output: Polish title; escalations are marked.
+ * Output: Polish title; escalations and rejections are marked.
  */
 export function notificationTitle(task: Task): string {
+  if (task.stan === 'odrzucone') return 'CogniFly — zadanie odrzucone';
   return task.stan === 'eskalowane' ? 'CogniFly — eskalacja' : 'CogniFly — nowe zadanie';
 }
 

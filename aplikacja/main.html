@@ -107,7 +107,13 @@
             <p class="meta"></p>
             <div class="actions">
               <button type="button" class="take">Biorę</button>
+              <button type="button" class="thread">Wróć do wątku w Claude</button>
               <button type="button" class="claude secondary">Pracuj w Claude</button>
+              <button type="button" class="reject secondary">Odrzuć</button>
+              <button type="button" class="remove secondary">Usuń</button>
+              <select class="person" aria-label="Przekaż innej osobie">
+                <option value="">Przekaż…</option>
+              </select>
               <select class="state" aria-label="Zmień stan">
                 <option value="">Zmień stan…</option>
                 <option value="w_trakcie">W trakcie</option>
@@ -115,6 +121,11 @@
                 <option value="zrobione">Zrobione</option>
               </select>
             </div>
+            <form class="reject-form actions" hidden>
+              <input class="reason" maxlength="200" required placeholder="Powód odrzucenia" aria-label="Powód odrzucenia">
+              <button type="submit">Odrzuć</button>
+              <button type="button" class="cancel secondary">Anuluj</button>
+            </form>
           </li>
         </template>
       </section>

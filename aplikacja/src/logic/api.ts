@@ -119,7 +119,61 @@ export class ApiClient {
    */
   async setState(id: string, state: UserSettableState): Promise<Task> {
     if (!(USER_SETTABLE_STATES as readonly string[]).includes(state)) throw new ApiError(400, 'ZLY_STAN');
-    const r = await this.call('POST', `/zadania/${checkedId(id)}/stan`, { stan: state });
+    return this.taskAction(id, 'stan', { stan: state });
+  }
+
+  /**
+   * Rejects a task back to its sender.
+   *
+   * Call: `await api.reject(id, reason)` (`POST /zadania/{id}/odrzuc`).
+   * Expects: a valid id and the user's reason (1–200 characters
+   * after trimming, no control characters).
+   * Output: the task after the rejection.
+   * Throws: `ApiError('ZLY_POWOD')` locally; API errors
+   * (`BRAK_NADAWCY`, `KONFLIKT`, `BRAK_DOSTEPU`) and session errors.
+   */
+  async reject(id: string, reason: string): Promise<Task> {
+    const powod = reason.trim();
+    if (!powod || powod.length > 200 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(powod)) throw new ApiError(400, 'ZLY_POWOD');
+    return this.taskAction(id, 'odrzuc', { powod });
+  }
+
+  /**
+   * Deletes a task that was rejected back to the user.
+   *
+   * Call: `await api.remove(id)` (`POST /zadania/{id}/usun`).
+   * Expects: a valid id of an `odrzucone` task the user owns.
+   * Output: the task in state `usuniete`.
+   * Throws: API errors (`KONFLIKT`, `BRAK_DOSTEPU`), session errors.
+   */
+  async remove(id: string): Promise<Task> {
+    return this.taskAction(id, 'usun');
+  }
+
+  /**
+   * Hands the user's task to another person of the company.
+   *
+   * Call: `await api.handOver(id, person)` (`POST .../przekaz`).
+   * Expects: a valid id and a person id from `GET /osoby`.
+   * Output: the task, now new for that person.
+   * Throws: `ApiError('ZLA_OSOBA')` locally; API errors
+   * (`BRAK_OSOBY`, `BRAK_DOSTEPU`, `KONFLIKT`), session errors.
+   */
+  async handOver(id: string, person: string): Promise<Task> {
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(person)) throw new ApiError(400, 'ZLA_OSOBA');
+    return this.taskAction(id, 'przekaz', { doOsoby: person });
+  }
+
+  /**
+   * Posts one action on a task and returns the task.
+   *
+   * Call: `await this.taskAction(id, 'stan', body?)`.
+   * Expects: an action path segment; any id (checked here).
+   * Output: the task from a 200 response.
+   * Throws: `ApiError` for an invalid id or a non-200 answer.
+   */
+  private async taskAction(id: string, action: string, body?: unknown): Promise<Task> {
+    const r = await this.call('POST', `/zadania/${checkedId(id)}/${action}`, body);
     if (r.status !== 200) throw apiError(r);
     return taskFrom(r);
   }

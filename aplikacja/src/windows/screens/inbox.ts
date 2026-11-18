@@ -1,25 +1,23 @@
 // Inbox screen: the user's tasks with "biorę" and state changes.
 // Task text is inserted with textContent only (it is data).
-import type { Task, UserSettableState } from '@cognifly/wspolne/api';
+import type { Person, Task, UserSettableState } from '@cognifly/wspolne/api';
 import { onRender, requestHighlight, type Highlight } from '../../logic/highlight.js';
 import { displayOrder, isFinished, selectValue } from '../../logic/inbox-view.js';
 import type { InboxView } from '../protocol.js';
 import { byId, messageFor, setStatus, type Call } from '../ui.js';
+import { wireReject, wireReturned, wireThread, type Outcome } from './task-actions.js';
 
 /** Polish names of task states. */
 const STATE_NAMES: Record<string, string> = {
   nowe: 'nowe', eskalowane: 'eskalowane', wziete: 'wzięte', w_trakcie: 'w trakcie',
-  do_akceptacji: 'do akceptacji', zrobione: 'zrobione',
+  do_akceptacji: 'do akceptacji', zrobione: 'zrobione', odrzucone: 'odrzucone', usuniete: 'usunięte',
 };
 
 /** Badge text per state (what the user sees first). */
 const BADGES: Record<string, string> = {
   nowe: 'Nowe', eskalowane: 'Eskalacja', wziete: 'Wzięte', w_trakcie: 'W trakcie',
-  do_akceptacji: 'Do akceptacji', zrobione: 'Zrobione ✓',
+  do_akceptacji: 'Do akceptacji', zrobione: 'Zrobione ✓', odrzucone: 'Odrzucone', usuniete: 'Usunięte',
 };
-
-/** Outcome message of a user action. */
-type Outcome = { text: string; kind: 'ok' | 'error' };
 
 /** Handle returned by `mountInbox`. */
 export interface InboxScreen {
@@ -88,18 +86,6 @@ async function changeState(call: Call, id: string, state: UserSettableState): Pr
 const WORKING_STATES = ['wziete', 'w_trakcie', 'do_akceptacji'];
 
 /**
- * Opens a Claude Code session for a task.
- *
- * Call: `await openInClaude(call, id)`.
- * Expects: a task id.
- * Output: the message to show.
- */
-async function openInClaude(call: Call, id: string): Promise<Outcome> {
-  await call('task.openInClaude', { id });
-  return { text: 'Otwieram Claude — sprawdź polecenie i wyślij je w nowej sesji.', kind: 'ok' };
-}
-
-/**
  * Wires the inbox screen.
  *
  * Call: `mountInbox(call)` once at window start.
@@ -108,6 +94,20 @@ async function openInClaude(call: Call, id: string): Promise<Outcome> {
  */
 export function mountInbox(call: Call): InboxScreen {
   let me: string | null = null;
+  let peopleList: Promise<Person[]> | null = null;
+
+  /**
+   * Company members for the hand-over select, fetched once.
+   * Call: `people()`. Expects: nothing.
+   * Output: the list (a failed fetch is retried next time).
+   */
+  function people(): Promise<Person[]> {
+    peopleList ??= call('people.list', {}).then((r) => r.people).catch((e) => {
+      peopleList = null;
+      throw e;
+    });
+    return peopleList;
+  }
   /**
    * Runs an action and shows its outcome.
    * Call: `await report(action)`. Expects: an rpc action.
@@ -158,11 +158,11 @@ export function mountInbox(call: Call): InboxScreen {
     const state = li.querySelector('.state') as HTMLSelectElement;
     const mine = me !== null && task.wlasciciel === me;
     take.hidden = task.stan !== 'nowe' && task.stan !== 'eskalowane';
-    state.hidden = !mine;
+    state.hidden = !mine || task.stan === 'odrzucone';
     state.value = selectValue(task);
-    const claude = li.querySelector('.claude') as HTMLButtonElement;
-    claude.hidden = !mine || !WORKING_STATES.includes(task.stan);
-    claude.addEventListener('click', () => void report(() => openInClaude(call, task.id)));
+    wireThread(li, task, mine && WORKING_STATES.includes(task.stan), call, report);
+    wireReject(li, task, me, call, act);
+    wireReturned(li, task, mine, people, call, act);
     take.addEventListener('click', () => void act(() => takeTask(call, task.id)));
     state.addEventListener('change', () => {
       if (state.value) void act(() => changeState(call, task.id, state.value as UserSettableState));
@@ -180,7 +180,9 @@ export function mountInbox(call: Call): InboxScreen {
     me = view.osoba;
     const ordered = displayOrder(view.tasks);
     const done = ordered.filter(isFinished);
+    const typing = document.activeElement?.matches('.reason') ? (document.activeElement.closest('.task') as HTMLElement | null)?.dataset.id : undefined;
     byId('list').replaceChildren(...ordered.filter((t) => !isFinished(t)).map(item));
+    if (typing) taskElement(typing)?.querySelector<HTMLInputElement>('.reason')?.focus(); // keep typing a reason
     byId('done-list').replaceChildren(...done.map(item));
     const title = byId('done-title');
     title.hidden = done.length === 0;
