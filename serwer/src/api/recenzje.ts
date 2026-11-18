@@ -80,6 +80,6 @@ export async function zglos(k: Kontekst, surowe: string | null | undefined): Pro
     wymagaPracy: true,
   };
   await zapiszZdarzenie(event);
-  const zadanie = await utworzZadanie(k.firma, event.id, kandydaci, { id: `zad_${event.id.slice('evt_'.length)}`, opis: event.opis });
+  const zadanie = await utworzZadanie(k.firma, event.id, kandydaci, { id: `zad_${event.id.slice('evt_'.length)}`, opis: event.opis, nadawca: k.osoba });
   return { status: 200, body: { zadanie } };
 }

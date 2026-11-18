@@ -5,7 +5,8 @@ import type { Kanal } from './reguly.js';
 
 /** Lifecycle state of a task, as stored by the server. */
 export type TaskState =
-  | 'nowe' | 'wziete' | 'w_trakcie' | 'do_akceptacji' | 'zrobione' | 'eskalowane';
+  | 'nowe' | 'wziete' | 'w_trakcie' | 'do_akceptacji' | 'zrobione' | 'eskalowane'
+  | 'odrzucone' | 'usuniete';
 
 /** States a user may set via `POST /zadania/{id}/stan`. */
 export const USER_SETTABLE_STATES = ['w_trakcie', 'do_akceptacji', 'zrobione'] as const;
@@ -13,6 +14,15 @@ export type UserSettableState = (typeof USER_SETTABLE_STATES)[number];
 
 /** States that mean "waiting for someone to take it". */
 export const WAITING_STATES = ['nowe', 'eskalowane'] as const;
+
+/** States that need the sender's decision (a rejected task came back). */
+export const RETURNED_STATES = ['odrzucone'] as const;
+
+/** Claude Desktop session id (`CLAUDE_CODE_HOST_SESSION_ID`). */
+export const THREAD_PATTERN = /^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Who rejected a task and why (the reason is a person's free text: data). */
+export interface Rejection { osoba: string; powod: string }
 
 /** Escalation target of a task. */
 export interface Escalation { osoba: string; kanaly: Kanal[] }
@@ -30,6 +40,12 @@ export interface Task {
   /** Server-built, structured description; the only text shown to users. */
   opis: string;
   eskalujDo?: Escalation[];
+  /** Who handed the task over or asked for it; only such tasks can be rejected. */
+  nadawca?: string;
+  /** Set while the task is `odrzucone`. */
+  odrzucenie?: Rejection;
+  /** The caller's own Claude Desktop thread for this task (inbox only). */
+  watek?: string;
 }
 
 /** Task id format accepted by the API (12 or 24 hex digits). */

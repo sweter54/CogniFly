@@ -36,7 +36,7 @@ export async function utworzZadanie(
   firma: string,
   zdarzenieId: string,
   kandydaci: string[],
-  extra?: { opis: string; eskalujDo?: Eskalacja[]; id?: string },
+  extra?: { opis: string; eskalujDo?: Eskalacja[]; id?: string; nadawca?: string },
 ): Promise<Zadanie> {
   // `id` podane przez wołającego = tworzenie idempotentne: istniejące zadanie o tym id jest zwracane bez zmian.
   const id = extra?.id ?? `zad_${randomBytes(6).toString('hex')}`;
@@ -45,6 +45,7 @@ export async function utworzZadanie(
     id, firma, zdarzenieId, kandydaci, stan: 'nowe', utworzono,
     opis: extra?.opis ?? '',
     ...(extra?.eskalujDo ? { eskalujDo: extra.eskalujDo } : {}),
+    ...(extra?.nadawca ? { nadawca: extra.nadawca } : {}),
   };
   const T = nazwaTabeli();
   const items = [
@@ -144,36 +145,155 @@ export async function ustawStan(
   );
 }
 
+/** Nowy stan zadania przenoszonego do jednej osoby. */
+interface Przeniesienie {
+  cel: string;
+  stan: StanZadania;
+  /** Właściciel po przeniesieniu; brak = zadanie czeka na „biorę”. */
+  wlasciciel?: string;
+  /** Pola ustawiane obok stanu (np. `postep`, `nadawca`, `odrzucenie`). */
+  pola: Record<string, unknown>;
+  /** Pola usuwane z zadania. */
+  usun: string[];
+}
+
+/** Warunek zapisu (wyrażenie DynamoDB z nazwami i wartościami). */
+interface Warunek { wyr: string; nazwy: Record<string, string>; wartosci: Record<string, unknown> }
+
+/**
+ * Przenosi zadanie do jednej osoby w jednej transakcji.
+ *
+ * Wywołanie: `await przeniesDo(z, p, w)`.
+ * Oczekuje: zadanie odczytane przed chwilą; warunek chroniący przed
+ * wyścigiem (np. „właścicielem jest wołający”).
+ * Wynik: zadanie po zmianie albo null, gdy warunek nie przeszedł.
+ * Wpisy skrzynki innych kandydatów znikają, cel dostaje wpis z nowym
+ * stanem.
+ */
+async function przeniesDo(z: Zadanie, p: Przeniesienie, w: Warunek): Promise<Zadanie | null> {
+  const T = nazwaTabeli();
+  const pola: Record<string, unknown> = { stan: p.stan, kandydaci: [p.cel], ...p.pola, ...(p.wlasciciel ? { wlasciciel: p.wlasciciel } : {}) };
+  const usun = [...p.usun, ...(p.wlasciciel ? [] : ['wlasciciel'])];
+  const nazwy: Record<string, string> = { ...w.nazwy };
+  const wartosci: Record<string, unknown> = { ...w.wartosci };
+  const ustaw = Object.entries(pola).map(([k, v], i) => {
+    nazwy[`#u${i}`] = k;
+    wartosci[`:u${i}`] = v;
+    return `#u${i} = :u${i}`;
+  });
+  const usuwane = usun.map((k, i) => {
+    nazwy[`#r${i}`] = k;
+    return `#r${i}`;
+  });
+  const wynik = await transakcja([
+    {
+      Update: {
+        TableName: T, Key: { pk: pkZad(z.firma), sk: z.id }, ConditionExpression: w.wyr,
+        UpdateExpression: `SET ${ustaw.join(', ')}${usuwane.length ? ` REMOVE ${usuwane.join(', ')}` : ''}`,
+        ExpressionAttributeNames: nazwy, ExpressionAttributeValues: wartosci,
+      },
+    },
+    ...z.kandydaci.filter((o) => o !== p.cel).map((o) => ({ Delete: { TableName: T, Key: { pk: pkSkr(z.firma, o), sk: z.id } } })),
+    {
+      Put: {
+        TableName: T,
+        Item: { pk: pkSkr(z.firma, p.cel), sk: z.id, gsi1pk: gsiPk(z.firma, p.cel), gsi1sk: `${p.stan}#${z.utworzono}`, zadanieId: z.id },
+      },
+    },
+  ]);
+  if (wynik !== 'OK') return null;
+  const po: Record<string, unknown> = { ...z, ...pola };
+  for (const k of usun) delete po[k];
+  return po as unknown as Zadanie;
+}
+
+/** Warunek: właścicielem zadania jest `osoba`. */
+const warunekWlasciciela = (osoba: string): Warunek => ({ wyr: '#wl = :os', nazwy: { '#wl': 'wlasciciel' }, wartosci: { ':os': osoba } });
+
 /**
  * Przekazanie zadania innej osobie (np. autorowi PR po code review): tylko właściciel; zadanie wraca do `nowe`
- * z jedynym kandydatem `doOsoby`, bez właściciela. Wpisy skrzynki dawnych kandydatów znikają w tej samej transakcji.
+ * z jedynym kandydatem `doOsoby`, bez właściciela, a przekazujący zostaje nadawcą (może dostać odrzucenie).
  */
 export async function przekaz(firma: string, idZadania: string, odOsoby: string, doOsoby: string, postep: string): Promise<Zadanie | null> {
   const z = await pobierzZadanie(firma, idZadania);
   if (!z || z.wlasciciel !== odOsoby) return null;
+  return przeniesDo(z, { cel: doOsoby, stan: 'nowe', pola: { postep, nadawca: odOsoby }, usun: ['odrzucenie'] }, warunekWlasciciela(odOsoby));
+}
+
+export type WynikOdrzuc =
+  | { ok: true; zadanie: Zadanie }
+  | { ok: false; kod: 'NIE_ZNALEZIONO' | 'BRAK_DOSTEPU' | 'BRAK_NADAWCY' | 'KONFLIKT' };
+
+const OCZEKUJACE: readonly string[] = ['nowe', 'eskalowane'];
+
+/**
+ * Odrzucenie zadania przez kandydata (niewzięte) lub właściciela.
+ *
+ * Wywołanie: `await odrzuc(firma, id, osoba, powod)`.
+ * Oczekuje: sprawdzony powód (krótki tekst osoby).
+ * Wynik: przy kilku kandydatach niewziętego zadania — zadanie bez
+ * odrzucającego; inaczej stan `odrzucone` u nadawcy (właściciel),
+ * z `odrzucenie` i postępem. Kody błędów jak w `WynikOdrzuc`.
+ */
+export async function odrzuc(firma: string, idZadania: string, osoba: string, powod: string): Promise<WynikOdrzuc> {
+  const z = await pobierzZadanie(firma, idZadania);
+  if (!z) return { ok: false, kod: 'NIE_ZNALEZIONO' };
+  if (!z.nadawca) return { ok: false, kod: 'BRAK_NADAWCY' };
+  const czeka = !z.wlasciciel && OCZEKUJACE.includes(z.stan);
+  if (z.wlasciciel !== osoba && !(czeka && z.kandydaci.includes(osoba))) {
+    return { ok: false, kod: z.stan === 'odrzucone' || z.stan === 'usuniete' ? 'KONFLIKT' : 'BRAK_DOSTEPU' };
+  }
+  if (z.stan === 'odrzucone' || z.stan === 'usuniete') return { ok: false, kod: 'KONFLIKT' };
+  const warunek: Warunek = czeka
+    ? { wyr: '#st = :st AND attribute_not_exists(#wl) AND size(#kan) = :n', nazwy: { '#st': 'stan', '#wl': 'wlasciciel', '#kan': 'kandydaci' }, wartosci: { ':st': z.stan, ':n': z.kandydaci.length } }
+    : warunekWlasciciela(osoba);
+  const zadanie = czeka && z.kandydaci.length > 1
+    ? await odejdzKandydat(z, osoba, warunek)
+    : await przeniesDo(z, {
+      cel: z.nadawca, stan: 'odrzucone', wlasciciel: z.nadawca,
+      pola: { postep: `Odrzucone przez ${osoba}`, odrzucenie: { osoba, powod } }, usun: [],
+    }, warunek);
+  return zadanie ? { ok: true, zadanie } : { ok: false, kod: 'KONFLIKT' };
+}
+
+/**
+ * Usuwa jednego kandydata z niewziętego zadania (jego skrzynka też).
+ *
+ * Wywołanie: `await odejdzKandydat(z, osoba, warunek)`.
+ * Oczekuje: zadanie z kilkoma kandydatami.
+ * Wynik: zadanie bez tej osoby albo null, gdy warunek nie przeszedł.
+ */
+async function odejdzKandydat(z: Zadanie, osoba: string, w: Warunek): Promise<Zadanie | null> {
   const T = nazwaTabeli();
-  const w = await transakcja([
+  const kandydaci = z.kandydaci.filter((o) => o !== osoba);
+  const wynik = await transakcja([
     {
       Update: {
-        TableName: T,
-        Key: { pk: pkZad(firma), sk: z.id },
-        ConditionExpression: '#wl = :od',
-        UpdateExpression: 'SET #stan = :nowe, #kan = :kan, #po = :po REMOVE #wl',
-        ExpressionAttributeNames: { '#wl': 'wlasciciel', '#stan': 'stan', '#kan': 'kandydaci', '#po': 'postep' },
-        ExpressionAttributeValues: { ':od': odOsoby, ':nowe': 'nowe', ':kan': [doOsoby], ':po': postep },
+        TableName: T, Key: { pk: pkZad(z.firma), sk: z.id }, ConditionExpression: w.wyr,
+        UpdateExpression: 'SET #kan = :kan', ExpressionAttributeNames: { ...w.nazwy, '#kan': 'kandydaci' },
+        ExpressionAttributeValues: { ...w.wartosci, ':kan': kandydaci },
       },
     },
-    ...z.kandydaci.filter((o) => o !== doOsoby).map((o) => ({ Delete: { TableName: T, Key: { pk: pkSkr(firma, o), sk: z.id } } })),
-    {
-      Put: {
-        TableName: T,
-        Item: { pk: pkSkr(firma, doOsoby), sk: z.id, gsi1pk: gsiPk(firma, doOsoby), gsi1sk: `nowe#${z.utworzono}`, zadanieId: z.id },
-      },
-    },
+    { Delete: { TableName: T, Key: { pk: pkSkr(z.firma, osoba), sk: z.id } } },
   ]);
-  if (w !== 'OK') return null;
-  const { wlasciciel: _wl, ...reszta } = z;
-  return { ...reszta, stan: 'nowe', kandydaci: [doOsoby], postep };
+  return wynik === 'OK' ? { ...z, kandydaci } : null;
+}
+
+/**
+ * Usunięcie odrzuconego zadania przez nadawcę (właściciela).
+ *
+ * Wywołanie: `await usunOdrzucone(firma, id, osoba)`.
+ * Oczekuje: zadanie w stanie `odrzucone`.
+ * Wynik: `ok` z zadaniem w stanie `usuniete` albo kod błędu.
+ */
+export async function usunOdrzucone(firma: string, idZadania: string, osoba: string): Promise<WynikOdrzuc> {
+  const z = await pobierzZadanie(firma, idZadania);
+  if (!z) return { ok: false, kod: 'NIE_ZNALEZIONO' };
+  if (z.stan !== 'odrzucone') return { ok: false, kod: 'KONFLIKT' };
+  if (z.wlasciciel !== osoba) return { ok: false, kod: 'BRAK_DOSTEPU' };
+  const ok = await zmien(z, 'usuniete', '#wl = :os AND #stan = :odrz', { '#wl': 'wlasciciel', '#stan': 'stan' },
+    { ':os': osoba, ':odrz': 'odrzucone' }, '#stan = :us', { ':us': 'usuniete' });
+  return ok ? { ok: true, zadanie: { ...z, stan: 'usuniete' } } : { ok: false, kod: 'KONFLIKT' };
 }
 
 /** Tylko z stanu `nowe`. false (bez wyjątku), gdy ktoś już wziął lub zadanie nie istnieje. */
