@@ -45,6 +45,7 @@ export function liniaPodsumowania(opisy: string[]): string {
 }
 
 export async function podsumowanie(k: Kontekst): Promise<Odpowiedz> {
-  const czekajace = await pobierz(k.firma, k.osoba, [...ISTOTNE]);
+  const wszystkie = await pobierz(k.firma, k.osoba, [...ISTOTNE, 'do_akceptacji']);
+  const czekajace = wszystkie.filter((z) => z.stan !== 'do_akceptacji' || z.akceptujacy === k.osoba);
   return { status: 200, body: { linia: liniaPodsumowania(czekajace.map((z) => z.opis)) } };
 }

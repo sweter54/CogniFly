@@ -2,7 +2,7 @@ import type { Zdarzenie } from '@cognifly/wspolne';
 import type { EventSummary } from '@cognifly/wspolne/api';
 import { zdarzenieZadania } from '../dane/historia.js';
 import { LOGIN_GITHUB, osobaPoLoginie, osobyFirmy } from '../dane/konfiguracja.js';
-import { odrzuc as odrzucZadanie, pobierzZadanie, przekaz as przekazZadanie, ustawStan, usunOdrzucone, wez, type StanZadania, type WynikOdrzuc } from '../dane/kolejka.js';
+import { doAkceptacji, odrzuc as odrzucZadanie, rozstrzygnij, pobierzZadanie, przekaz as przekazZadanie, ustawStan, usunOdrzucone, wez, type StanZadania, type WynikAkceptacji, type WynikOdrzuc } from '../dane/kolejka.js';
 import { zapiszWatek } from '../dane/watki.js';
 import { HttpBlad, obiektJson, type Kontekst, type Odpowiedz } from './kontekst.js';
 import { TASK_ID_PATTERN as ID, THREAD_PATTERN, USER_SETTABLE_STATES as DOZWOLONE } from '@cognifly/wspolne/api';
@@ -23,9 +23,10 @@ export async function biore(k: Kontekst, id: string | undefined): Promise<Odpowi
 
 export async function stan(k: Kontekst, id: string | undefined, surowe: string | null | undefined): Promise<Odpowiedz> {
   const zid = sprawdzId(id);
-  const { stan: s, postep } = obiektJson(surowe);
+  const { stan: s, postep, akceptujacy } = obiektJson(surowe);
   if (typeof s !== 'string' || !(DOZWOLONE as readonly string[]).includes(s)) throw new HttpBlad(400, 'ZLY_STAN');
   if (postep !== undefined && (typeof postep !== 'string' || postep.length > 200)) throw new HttpBlad(400, 'ZLY_POSTEP');
+  if (s === 'do_akceptacji') return oddajDoAkceptacji(k, zid, akceptujacy);
   if (!(await ustawStan(k.firma, zid, k.osoba, s as StanZadania, postep))) throw new HttpBlad(403, 'BRAK_DOSTEPU');
   return { status: 200, body: { zadanie: await pobierzZadanie(k.firma, zid) } };
 }
@@ -102,9 +103,9 @@ export function powodOdrzucenia(value: unknown): string {
  * Call: `odpowiedzZadania(wynik)`. Expects: a queue result.
  * Output: 200 `{zadanie}`; throws 404/403/409 for the error codes.
  */
-function odpowiedzZadania(w: WynikOdrzuc): Odpowiedz {
+function odpowiedzZadania(w: WynikOdrzuc | WynikAkceptacji): Odpowiedz {
   if (w.ok) return { status: 200, body: { zadanie: w.zadanie } };
-  const status = { NIE_ZNALEZIONO: 404, BRAK_DOSTEPU: 403, BRAK_NADAWCY: 409, KONFLIKT: 409 }[w.kod];
+  const status = ({ NIE_ZNALEZIONO: 404, BRAK_DOSTEPU: 403, BRAK_NADAWCY: 409, KONFLIKT: 409 } as const)[w.kod];
   throw new HttpBlad(status, w.kod);
 }
 
@@ -130,4 +131,36 @@ export async function watek(k: Kontekst, id: string | undefined, surowe: string 
   if (!z.kandydaci.includes(k.osoba) && z.wlasciciel !== k.osoba) throw new HttpBlad(403, 'BRAK_DOSTEPU');
   await zapiszWatek(k.firma, k.osoba, zid, w);
   return { status: 200, body: { watek: w } };
+}
+
+/**
+ * Hands the caller's task to a person for acceptance.
+ *
+ * Call: from `stan` for `do_akceptacji`.
+ * Expects: `akceptujacy` from the body (optional: the sender then).
+ * Output: 200 `{zadanie}`.
+ * Throws: 400 `BRAK_AKCEPTUJACEGO` / `ZLY_AKCEPTUJACY` (not a member,
+ * or the owner), 403/404/409 from the queue.
+ */
+async function oddajDoAkceptacji(k: Kontekst, zid: string, wskazany: unknown): Promise<Odpowiedz> {
+  const z = await pobierzZadanie(k.firma, zid);
+  if (!z) throw new HttpBlad(404, 'NIE_ZNALEZIONO');
+  if (z.wlasciciel !== k.osoba) throw new HttpBlad(403, 'BRAK_DOSTEPU');
+  const kto = wskazany ?? z.nadawca;
+  if (kto === undefined) throw new HttpBlad(400, 'BRAK_AKCEPTUJACEGO');
+  const czlonek = typeof kto === 'string' && (await osobyFirmy(k.firma)).some((o) => o.osoba === kto);
+  if (!czlonek || kto === k.osoba) throw new HttpBlad(400, 'ZLY_AKCEPTUJACY');
+  return odpowiedzZadania(await doAkceptacji(k.firma, zid, k.osoba, kto as string));
+}
+
+/** POST /zadania/{id}/akceptuj: akceptujący zatwierdza zadanie (→ zrobione). */
+export async function akceptuj(k: Kontekst, id: string | undefined): Promise<Odpowiedz> {
+  return odpowiedzZadania(await rozstrzygnij(k.firma, sprawdzId(id), k.osoba));
+}
+
+/** POST /zadania/{id}/do-poprawy {powod}: akceptujący odsyła zadanie właścicielowi. */
+export async function doPoprawy(k: Kontekst, id: string | undefined, surowe: string | null | undefined): Promise<Odpowiedz> {
+  const zid = sprawdzId(id);
+  const powod = powodOdrzucenia(obiektJson(surowe).powod);
+  return odpowiedzZadania(await rozstrzygnij(k.firma, zid, k.osoba, powod));
 }

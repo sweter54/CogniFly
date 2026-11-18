@@ -138,12 +138,13 @@ export async function ustawStan(
 ): Promise<boolean> {
   const z = await pobierzZadanie(firma, idZadania);
   if (!z || z.wlasciciel !== osoba || ZAMKNIETE_DLA_STANU.includes(z.stan)) return false;
+  // Inny stan niż do_akceptacji kończy oczekiwanie na akceptującego.
   return zmien(
     z, stan,
     '#wl = :osoba AND #stan <> :odrz AND #stan <> :usun',
-    { '#wl': 'wlasciciel', '#stan': 'stan', ...(postep !== undefined ? { '#po': 'postep' } : {}) },
+    { '#wl': 'wlasciciel', '#stan': 'stan', '#ak': 'akceptujacy', ...(postep !== undefined ? { '#po': 'postep' } : {}) },
     { ':osoba': osoba, ':odrz': 'odrzucone', ':usun': 'usuniete' },
-    postep !== undefined ? '#stan = :stan, #po = :po' : '#stan = :stan',
+    `${postep !== undefined ? '#stan = :stan, #po = :po' : '#stan = :stan'} REMOVE #ak`,
     { ':stan': stan, ...(postep !== undefined ? { ':po': postep } : {}) },
   );
 }
@@ -300,6 +301,74 @@ export async function usunOdrzucone(firma: string, idZadania: string, osoba: str
   const ok = await zmien(z, 'usuniete', '#wl = :os AND #stan = :odrz', { '#wl': 'wlasciciel', '#stan': 'stan' },
     { ':os': osoba, ':odrz': 'odrzucone' }, '#stan = :us', { ':us': 'usuniete' });
   return ok ? { ok: true, zadanie: { ...z, stan: 'usuniete' } } : { ok: false, kod: 'KONFLIKT' };
+}
+
+export type WynikAkceptacji =
+  | { ok: true; zadanie: Zadanie }
+  | { ok: false; kod: 'NIE_ZNALEZIONO' | 'BRAK_DOSTEPU' | 'KONFLIKT' };
+
+/**
+ * Oddanie zadania do akceptacji wskazanej osobie.
+ *
+ * Wywołanie: `await doAkceptacji(firma, id, wlasciciel, akceptujacy)`.
+ * Oczekuje: sprawdzonego akceptującego (członek firmy, nie właściciel).
+ * Wynik: zadanie `do_akceptacji` z `akceptujacy`, ta osoba w
+ * kandydatach (wpis w skrzynce), bez dawnych `uwagi`; kody błędów.
+ */
+export async function doAkceptacji(firma: string, idZadania: string, osoba: string, akceptujacy: string): Promise<WynikAkceptacji> {
+  const z = await pobierzZadanie(firma, idZadania);
+  if (!z) return { ok: false, kod: 'NIE_ZNALEZIONO' };
+  if (z.wlasciciel !== osoba) return { ok: false, kod: 'BRAK_DOSTEPU' };
+  if (!W_PRACY.includes(z.stan)) return { ok: false, kod: 'KONFLIKT' };
+  const kandydaci = z.kandydaci.includes(akceptujacy) ? z.kandydaci : [...z.kandydaci, akceptujacy];
+  const T = nazwaTabeli();
+  const wynik = await transakcja([
+    {
+      Update: {
+        TableName: T, Key: { pk: pkZad(firma), sk: z.id },
+        ConditionExpression: '#wl = :os AND #st = :byl',
+        UpdateExpression: 'SET #st = :dak, #ak = :ak, #kan = :kan REMOVE #uw',
+        ExpressionAttributeNames: { '#wl': 'wlasciciel', '#st': 'stan', '#ak': 'akceptujacy', '#kan': 'kandydaci', '#uw': 'uwagi' },
+        ExpressionAttributeValues: { ':os': osoba, ':byl': z.stan, ':dak': 'do_akceptacji', ':ak': akceptujacy, ':kan': kandydaci },
+      },
+    },
+    ...kandydaci.map((o) => ({
+      Put: { TableName: T, Item: { pk: pkSkr(firma, o), sk: z.id, gsi1pk: gsiPk(firma, o), gsi1sk: `do_akceptacji#${z.utworzono}`, zadanieId: z.id } },
+    })),
+  ]);
+  if (wynik !== 'OK') return { ok: false, kod: 'KONFLIKT' };
+  const { uwagi: _uw, ...reszta } = z;
+  return { ok: true, zadanie: { ...reszta, stan: 'do_akceptacji', akceptujacy, kandydaci } };
+}
+
+/**
+ * Decyzja akceptującego: akceptacja albo odesłanie do poprawy.
+ *
+ * Wywołanie: `await rozstrzygnij(firma, id, osoba, powod?)` — bez
+ * powodu akceptuje, z powodem odsyła do poprawy.
+ * Oczekuje: sprawdzonego powodu (gdy podany).
+ * Wynik: `zrobione` („Zaakceptowane przez X”) albo `w_trakcie` z
+ * `uwagi` („Do poprawy (X)”), w obu bez `akceptujacy`; kody błędów:
+ * KONFLIKT, gdy zadanie nie czeka na akceptację.
+ */
+export async function rozstrzygnij(firma: string, idZadania: string, osoba: string, powod?: string): Promise<WynikAkceptacji> {
+  const z = await pobierzZadanie(firma, idZadania);
+  if (!z) return { ok: false, kod: 'NIE_ZNALEZIONO' };
+  if (!z.kandydaci.includes(osoba) && z.wlasciciel !== osoba) return { ok: false, kod: 'BRAK_DOSTEPU' };
+  if (z.stan !== 'do_akceptacji') return { ok: false, kod: 'KONFLIKT' };
+  if (z.akceptujacy !== osoba) return { ok: false, kod: 'BRAK_DOSTEPU' };
+  const stan: StanZadania = powod === undefined ? 'zrobione' : 'w_trakcie';
+  const postep = powod === undefined ? `Zaakceptowane przez ${osoba}` : `Do poprawy (${osoba})`;
+  const ok = await zmien(
+    z, stan, '#st = :dak AND #ak = :os',
+    { '#st': 'stan', '#ak': 'akceptujacy', '#po': 'postep', ...(powod !== undefined ? { '#uw': 'uwagi' } : {}) },
+    { ':dak': 'do_akceptacji', ':os': osoba },
+    `#st = :nowy, #po = :po${powod !== undefined ? ', #uw = :uw' : ''} REMOVE #ak`,
+    { ':nowy': stan, ':po': postep, ...(powod !== undefined ? { ':uw': { osoba, powod } } : {}) },
+  );
+  if (!ok) return { ok: false, kod: 'KONFLIKT' };
+  const { akceptujacy: _ak, ...reszta } = z;
+  return { ok: true, zadanie: { ...reszta, stan, postep, ...(powod !== undefined ? { uwagi: { osoba, powod } } : {}) } };
 }
 
 /** Tylko z stanu `nowe`. false (bez wyjątku), gdy ktoś już wziął lub zadanie nie istnieje. */

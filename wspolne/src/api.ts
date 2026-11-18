@@ -44,6 +44,10 @@ export interface Task {
   nadawca?: string;
   /** Set while the task is `odrzucone`. */
   odrzucenie?: Rejection;
+  /** Who should accept the task while it is `do_akceptacji`. */
+  akceptujacy?: string;
+  /** Last "send back for fixes" from the acceptor (a person's text: data). */
+  uwagi?: Rejection;
   /** The caller's own Claude Desktop thread for this task (inbox only). */
   watek?: string;
 }
