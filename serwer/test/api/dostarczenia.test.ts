@@ -37,10 +37,19 @@ const SHA = 'b'.repeat(40);
 const prOk = { number: 5, state: 'OPEN', merged: false, headRefOid: SHA, baseRefName: 'main', headRefName: 'f', mergeable: 'MERGEABLE',
   reviewDecision: null, body: '', author: { login: 'x' }, reviews: { nodes: [] }, commits: { nodes: [{ commit: { statusCheckRollup: null } }] } };
 
+async function zadanieCr(klucz: string, podmiot: Zdarzenie['podmiot'], kandydaci = ['michal']) {
+  const zdarzenie: Zdarzenie = {
+    id: idZdarzenia('github', klucz), firma: 'f1', zrodlo: 'github', typ: 'github.pr.prosba_o_review',
+    czas: new Date(Date.now() - 5_000).toISOString(), podmiot, opis: 'CR', wymagaPracy: true,
+  };
+  await zapiszZdarzenie(zdarzenie);
+  return utworzZadanie('f1', zdarzenie.id, kandydaci, { opis: 'CR' });
+}
+
 describe('POST /dostarczenia', () => {
   test('owner of the CR task starts the watch and gets the first assessment', async () => {
     github.prs.set('o/r#5', prOk);
-    const z = await utworzZadanie('f1', 'evt_' + '1'.repeat(24), ['michal', 'ania'], { opis: 'CR' });
+    const z = await zadanieCr('cr-ok', { repo: 'o/r', pr: 5 }, ['michal', 'ania']);
     await wez('f1', z.id, 'michal');
     const body = JSON.stringify({ repo: 'o/r', pr: 5, zadanieId: z.id, sha: SHA });
     expect((await wywolaj('POST /dostarczenia', { sub: 'sub-ania', body })).status).toBe(403);
@@ -60,6 +69,17 @@ describe('POST /dostarczenia', () => {
     expect(await start('o/inne', 7)).toMatchObject({ status: 403, body: { kod: 'INNY_PR' } });
     github.prs.set('o/r#7', { ...prOk, number: 7 });
     expect((await start('o/r', 7)).status).toBe(200);
+  });
+  test('a task whose event expired or names no repo/PR cannot start a watch (403 INNY_PR)', async () => {
+    github.prs.set('o/r#9', { ...prOk, number: 9 });
+    const wygasle = await utworzZadanie('f1', 'evt_' + '3'.repeat(24), ['michal'], { opis: 'CR' });
+    const bezRepo = await zadanieCr('cr-bez-repo', { pr: 9 });
+    const bezPr = await zadanieCr('cr-bez-pr', { repo: 'o/r' });
+    for (const z of [wygasle, bezRepo, bezPr]) {
+      await wez('f1', z.id, 'michal');
+      const body = JSON.stringify({ repo: 'o/r', pr: 9, zadanieId: z.id, sha: SHA });
+      expect(await wywolaj('POST /dostarczenia', { body })).toMatchObject({ status: 403, body: { kod: 'INNY_PR' } });
+    }
   });
   test('rejects bad repo, PR number, sha and unknown task', async () => {
     const z = await utworzZadanie('f1', 'evt_' + '2'.repeat(24), ['michal'], { opis: 'CR' });

@@ -41,13 +41,13 @@ function repoName(value: unknown): string {
  *
  * Call: `zgodnyPr(podmiot, repo, pr)`.
  * Expects: the event `podmiot` (or undefined when the event expired).
- * Output: false when the event names a different repo (case-insensitive)
- * or PR number; true when it matches or names neither.
+ * Output: true only when the event names this repo (case-insensitive)
+ * and PR number; false when it names another one, when it lacks either
+ * (e.g. a task from outside GitHub) or when the event expired (fail closed).
  */
 function zgodnyPr(podmiot: { repo?: unknown; pr?: unknown } | undefined, repo: string, pr: number): boolean {
-  if (typeof podmiot?.repo === 'string' && podmiot.repo.toLowerCase() !== repo.toLowerCase()) return false;
-  if (podmiot?.pr !== undefined && Number(podmiot.pr) !== pr) return false;
-  return true;
+  if (typeof podmiot?.repo !== 'string' || podmiot.pr === undefined || podmiot.pr === null) return false;
+  return podmiot.repo.toLowerCase() === repo.toLowerCase() && Number(podmiot.pr) === pr;
 }
 
 /**
@@ -55,7 +55,7 @@ function zgodnyPr(podmiot: { repo?: unknown; pr?: unknown } | undefined, repo: s
  *
  * Call: by the plugin after an accepting review was sent.
  * Expects: the caller owns the CR task; `sha` = reviewed head commit;
- * when the task's event names a repo/PR, it must be this one.
+ * the task's (unexpired) event must name this repo and PR.
  * Output: 200 `{ ocena }` with the first assessment; 400 for bad
  * input, 404 unknown task, 403 not the owner (`BRAK_DOSTEPU`) or a task
  * of another PR (`INNY_PR`).

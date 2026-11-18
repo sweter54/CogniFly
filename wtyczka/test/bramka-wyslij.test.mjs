@@ -95,6 +95,28 @@ describe('bramka wyślij', () => {
     const werdykt = "node cr.mjs werdykt --repo o/r --pr 7 --zmiany --podsumowanie 'popraw cr.mjs wyslij'";
     expect((await run(werdykt, [user('x')])).code).toBe(0);
   });
+  it('still blocks a send hidden in a command substitution inside a double-quoted text flag', async () => {
+    for (const c of [
+      'node cr.mjs dodaj --repo o/r --pr 7 --plik x --linia 3 --tresc "$(gh pr review 7 --approve)"',
+      'node cr.mjs dodaj --repo o/r --pr 7 --plik x --linia 3 --tresc "ok `gh pr review 7 --approve`"',
+      'node cr.mjs werdykt --repo o/r --pr 7 --akceptuj --podsumowanie="a $(node /x/cr.mjs wyslij --pr 7)"',
+    ]) {
+      expect((await run(c, [user('x')])).code, c).toBe(2);
+    }
+    expect((await run("node cr.mjs dodaj --pr 7 --tresc '$(gh pr review 7 --approve)'", [user('x')])).code).toBe(0);
+  });
+  it('does not let ../ escape the memory folder towards transcripts', async () => {
+    for (const c of [
+      'cat ~/.claude/projects/a/memory/../*.j*',
+      'cat ~/.claude/projects/a/memory/x/../../b/*',
+      'cd ~/.claude/projects/a/memory && cat ../*.j*',
+      'cat ~/.claude/projects/a/memory/notatka.md ~/.claude/projects/a/*',
+      'ls ~/.claude/projects/a/memory*',
+    ]) {
+      expect((await run(c, [user('x')])).code, c).toBe(2);
+    }
+    expect((await run('ls ~/.claude/projects/a/memory/ && cat ~/.claude/projects/a/memory/*.md', [user('x')])).code).toBe(0);
+  });
   it('keeps auto-memory usable while still guarding transcripts', async () => {
     const mem = '/Users/m/.claude/projects/-Users-m-x/memory/notatka.md';
     expect((await run('', [user('x')], { tool_name: 'Write', tool_input: { file_path: mem, content: 'x' } })).code).toBe(0);

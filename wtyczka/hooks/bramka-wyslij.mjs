@@ -10,11 +10,11 @@ import { readFileSync } from 'node:fs';
 const COMMAND_TAG = /<command-name>\/(?:cognifly:)?wyslij-komentarz<\/command-name>/;
 
 /**
- * Where a shell command can start: line start, after ; & | ( $( or a quote
- * (bash -c '…'), optionally behind wrappers (`env`, `command`, `exec`,
+ * Where a shell command can start: line start, after ; & | ( $( ` or a
+ * quote (bash -c '…'), optionally behind wrappers (`env`, `command`, `exec`,
  * `nohup`, `time`, with their flags) and variable assignments (`A=1`).
  */
-const START = String.raw`(?:^|[\n;&|(]|\$\(|['"])\s*(?:(?:env|command|exec|nohup|time)\b(?:\s+-\S+)*\s+)*(?:\w+=\S*\s+)*`;
+const START = String.raw`(?:^|[\n;&|(\x60]|\$\(|['"])\s*(?:(?:env|command|exec|nohup|time)\b(?:\s+-\S+)*\s+)*(?:\w+=\S*\s+)*`;
 /**
  * `cr.mjs wyslij` anywhere in the command: the path may be quoted and
  * contain spaces ("~/Library/Application Support/…/cr.mjs") or sit behind
@@ -42,14 +42,31 @@ function withoutWrittenText(command) {
 /**
  * Empties quoted values of the cr.mjs text flags (`--tresc`,
  * `--podsumowanie`), so a review comment that quotes a send command does
- * not block `dodaj`/`omow`/`werdykt`.
+ * not block `dodaj`/`omow`/`werdykt`. Double-quoted values with `$(` or
+ * a backtick are kept: the shell runs those substitutions (fail closed).
  *
  * Call: `withoutTextFlags(command)`.
  * Expects: a Bash command string.
  * Output: the command with those quoted values replaced by "".
  */
 function withoutTextFlags(command) {
-  return command.replace(/(--(?:tresc|podsumowanie)(?:=|\s+))(?:"(?:[^"\\]|\\.)*"|'[^']*')/g, '$1""');
+  return command.replace(/(--(?:tresc|podsumowanie)(?:=|\s+))("(?:[^"\\]|\\.)*"|'[^']*')/g,
+    (whole, flag, value) => (value.startsWith('"') && /\$\(|`/.test(value) ? whole : `${flag}""`));
+}
+
+/**
+ * Whether a Bash command stays inside auto-memory when it names the
+ * Claude projects directory: every such path points into
+ * `<projekt>/memory` (or below) and the command has no `..` segment.
+ *
+ * Call: `onlyMemory(command)`.
+ * Expects: a Bash command string that names `.claude/projects`.
+ * Output: true only when the command cannot reach a transcript that way.
+ */
+function onlyMemory(command) {
+  if (/(?:^|[\s/'"=])\.\.(?=$|[\s/'";&|)])/.test(command)) return false;
+  const paths = command.match(/\.claude\/projects\b[^\s'";&|)]*/g) ?? [];
+  return paths.every((p) => /^\.claude\/projects\/[^/*?[\]]+\/memory(?:\/|$)/.test(p));
 }
 
 /**
@@ -80,7 +97,7 @@ export function publishesReview(command) {
  * Output: true for file tools writing a `*.jsonl` file in the Claude
  * projects directory (or the transcript itself), and for Bash commands
  * naming the transcript path, or naming that directory together with
- * "jsonl" or without pointing into a `memory` folder. Auto-memory
+ * "jsonl", with a `..` segment or with any path outside a `memory` folder. Auto-memory
  * (`<projekt>/memory/*.md`) stays usable; `--tresc`/`--podsumowanie`
  * values are ignored.
  */
@@ -90,7 +107,7 @@ export function touchesTranscript(toolName, toolInput, transcriptPath) {
     const c = withoutTextFlags(String(toolInput?.command ?? ''));
     if (!!transcriptPath && c.includes(transcriptPath)) return true;
     if (!/\.claude\/projects\b/.test(c)) return false;
-    return /jsonl/i.test(c) || !/\.claude\/projects\/[^\s'";&|]+\/memory\b/.test(c);
+    return /jsonl/i.test(c) || !onlyMemory(c);
   }
   const file = String(toolInput?.file_path ?? toolInput?.notebook_path ?? '');
   return !!file && (transcripts.test(file) || file === transcriptPath);
