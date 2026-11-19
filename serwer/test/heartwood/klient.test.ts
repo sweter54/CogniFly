@@ -47,4 +47,40 @@ describe('intClient', () => {
     const bodies = fetch.mock.calls.map((x) => (x as unknown as [string, RequestInit])[1].body);
     expect(bodies).toEqual(['{"right":"write"}', '{"isAdmin":true}', '{"name":"Name"}']);
   });
+
+  it('gets work files, merging pages and signing GETs', async () => {
+    const page = (n: number, cursor?: string) => new Response(JSON.stringify({
+      writer: 's1', closed: false, hiddenLocks: n === 1 ? 2 : 0,
+      locks: n === 1 ? [{ space: 'ws:a', path: 'x', folder: false, by: 's1', at: 't', ws: 'a', workId: 'w', writer: 's1' }] : [],
+      versions: [{ space: 'ws:a', path: `f${n}`, seq: n }], ...(cursor ? { cursor } : {}),
+    }), { status: 200 });
+    const fetch = vi.fn()
+      .mockResolvedValueOnce(page(1, 'c1')).mockResolvedValueOnce(page(2));
+    const sign = vi.fn(async () => ({ authorization: 'SIG' }));
+    const c = intClient({ url: 'https://hw.test', region: 'r', fetch: fetch as never, sign });
+    const r = await c.getWorkFiles('pilot', 'cognifly:zad_0123456789ab');
+    const urls = fetch.mock.calls.map((x) => (x as unknown as [string])[0]);
+    expect(urls).toEqual([
+      'https://hw.test/int/orgs/pilot/work/cognifly%3Azad_0123456789ab/files',
+      'https://hw.test/int/orgs/pilot/work/cognifly%3Azad_0123456789ab/files?cursor=c1']);
+    expect((fetch.mock.calls[0] as unknown as [string, RequestInit])[1].method).toBe('GET');
+    expect(r.versions.map((v) => v.seq)).toEqual([1, 2]);
+    expect(r).toMatchObject({ writer: 's1', hiddenLocks: 2 });
+    expect(r.locks).toHaveLength(1);
+    expect(r.cursor).toBeUndefined();
+  });
+
+  it('stops after 20 pages', async () => {
+    const fetch = vi.fn(async () => new Response(JSON.stringify({
+      writer: null, closed: false, locks: [], hiddenLocks: 0, versions: [], cursor: 'more',
+    })));
+    const c = intClient({ url: 'https://hw.test', region: 'r', fetch: fetch as never, sign: async () => ({}) });
+    await c.getWorkFiles('o', 'w');
+    expect(fetch).toHaveBeenCalledTimes(20);
+  });
+
+  it('throws IntError on a failed GET', async () => {
+    const { c } = setup(new Response('{"code":"FORBIDDEN"}', { status: 403 }));
+    await expect(c.getWorkFiles('o', 'w')).rejects.toMatchObject({ code: 'FORBIDDEN', status: 403 });
+  });
 });

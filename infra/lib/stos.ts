@@ -148,7 +148,10 @@ export class StosCogniFly extends Stack {
     const eskalacja = wspolne('Eskalacja', 'eskalacja/obsluz.ts', {
       COGNIFLY_TABELA: NAZWA_TABELI, COGNIFLY_NADAWCA: nadawca,
     }, dlqEskalacji);
-    const api = wspolne('Api', 'api/index.ts', { COGNIFLY_TABELA: NAZWA_TABELI });
+    const api = wspolne('Api', 'api/index.ts', {
+      COGNIFLY_TABELA: NAZWA_TABELI,
+      ...(heartwood ? { HEARTWOOD_INT_URL: heartwood.intUrl } : {}),
+    });
     // Nasłuch dostarczeń: ocenia zaakceptowane PR (tylko odczyt GitHuba) i tworzy zadania „Dostarcz”.
     const dostarczenia = wspolne('Dostarczenia', 'dostarczenia/obsluz.ts', { COGNIFLY_TABELA: NAZWA_TABELI });
 
@@ -223,9 +226,11 @@ export class StosCogniFly extends Stack {
       tabela.grantReadWriteData(zdarzenia);
       zdarzenia.addToRolePolicy(odczytSekretow('discord'));
       zdarzenia.addToRolePolicy(wysylkaSes);
-      praca.addToRolePolicy(new PolicyStatement({
+      const invokeInt = () => new PolicyStatement({
         actions: ['execute-api:Invoke'], resources: [`${heartwood.intApiArn}/*/*/int/*`],
-      }));
+      });
+      praca.addToRolePolicy(invokeInt());
+      api.addToRolePolicy(invokeInt()); // GET /zadania/{id}/pliki reads work files
       praca.addEventSource(new DynamoEventSource(tabela, {
         startingPosition: StartingPosition.TRIM_HORIZON,
         reportBatchItemFailures: true, retryAttempts: 10, bisectBatchOnError: true,
@@ -312,6 +317,7 @@ export class StosCogniFly extends Stack {
     const apiIntegracja = new HttpLambdaIntegration('ApiIntegracja', api);
     for (const [metoda, sciezka] of [
       [HttpMethod.GET, '/zdarzenia'], [HttpMethod.GET, '/skrzynka'], [HttpMethod.GET, '/zadania/{id}'],
+      [HttpMethod.GET, '/zadania/{id}/pliki'],
       [HttpMethod.POST, '/zadania/{id}/biore'], [HttpMethod.POST, '/zadania/{id}/przekaz'], [HttpMethod.POST, '/zadania/{id}/stan'],
       [HttpMethod.POST, '/zadania/{id}/odrzuc'], [HttpMethod.POST, '/zadania/{id}/usun'], [HttpMethod.POST, '/zadania/{id}/watek'],
       [HttpMethod.POST, '/zadania/{id}/akceptuj'], [HttpMethod.POST, '/zadania/{id}/do-poprawy'],

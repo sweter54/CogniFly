@@ -6,7 +6,7 @@ import { Stan, katalog, czytaj, zapisz, punktCognito, odswiez, zaloguj, kod, wyl
 
 const DOBA = 86_400_000;
 const STANY = ['w_trakcie', 'do_akceptacji', 'zrobione'];
-const ID_ZADANIA = /^zad_([0-9a-f]{12}|[0-9a-f]{24})$/;
+export const ID_ZADANIA = /^zad_([0-9a-f]{12}|[0-9a-f]{24})$/;
 const LOGIN_GITHUB = /^[A-Za-z0-9-]{1,39}(\[bot\])?$/;
 const REPO = /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9_.-]+$/;
 const SHA = /^[0-9a-f]{40}$/;
@@ -93,8 +93,16 @@ async function wywolaj(url, metoda, sesja, firma, body, signal) {
   return { status: r.status, json };
 }
 
-// Wywołanie z sesją: odświeżenie przy bliskim wygaśnięciu lub 401 (maks. raz).
-async function zSesja(ctx, metoda, sciezka, body) {
+/**
+ * Calls the CogniFly API with the stored session.
+ *
+ * Call: `await zSesja(ctx, 'GET', '/skrzynka')`.
+ * Expects: a context from `kontekst()`; a path starting with `/`.
+ * Output: `{status, json}`; the token is refreshed when it is close
+ * to expiry or on a 401 (at most once).
+ * Throws: `Stan('WYMAGA_LOGOWANIA')`, `Stan('BLAD_SIECI')`, ...
+ */
+export async function zSesja(ctx, metoda, sciezka, body) {
   const sesja0 = czytaj(ctx.kat, 'sesja.json');
   if (!sesja0 || !sesja0.accessToken || !sesja0.refreshToken) throw new Stan('WYMAGA_LOGOWANIA');
   let sesja = sesja0, odswiezono = false;
@@ -181,6 +189,20 @@ function adresatPrzekazania(opcje) {
   return { doLoginu: opcje['do-loginu'] };
 }
 
+/**
+ * Builds the call context from the configuration.
+ *
+ * Call: `kontekst(env, opcje, AbortSignal.timeout(10_000))`.
+ * Expects: the environment, parsed options and an abort signal.
+ * Output: `{kat, konf, endpoint, signal, opcje}` for `zSesja`.
+ * Throws: `Stan('BRAK_KONFIGURACJI')` without API address or client.
+ */
+export function kontekst(env, opcje, signal) {
+  const konf = wczytajKonfiguracje(env);
+  if (!konf.adresApi || !konf.klientCognito) throw new Stan('BRAK_KONFIGURACJI');
+  return { kat: katalog(env), konf, endpoint: punktCognito(konf, env), signal, opcje };
+}
+
 const blad = (r) => ({ stan: 'BLAD', kod: typeof r.json?.kod === 'string' ? r.json.kod : `HTTP_${r.status}` });
 
 export async function wykonaj(argv, env = process.env) {
@@ -224,11 +246,7 @@ export async function wykonaj(argv, env = process.env) {
       if (zle) throw new Stan('ZLE_PARAMETRY');
     }
 
-    const konf = wczytajKonfiguracje(env);
-    if (!konf.adresApi || !konf.klientCognito) throw new Stan('BRAK_KONFIGURACJI');
-    const endpoint = punktCognito(konf, env);
-    const signal = AbortSignal.timeout(polecenie === 'podsumowanie' ? 1200 : 10_000);
-    const ctx = { kat, konf, endpoint, signal, opcje };
+    const ctx = kontekst(env, opcje, AbortSignal.timeout(polecenie === 'podsumowanie' ? 1200 : 10_000));
 
     switch (polecenie) {
       case 'zaloguj': return await zaloguj({ ...ctx, email: opcje.email });

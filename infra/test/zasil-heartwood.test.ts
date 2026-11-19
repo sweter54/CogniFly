@@ -4,6 +4,7 @@ import {
 } from '../skrypty/zasil-heartwood.js';
 
 const O = { firma: 'pilot', tematy: ['Dokumenty', 'Oferty'] };
+const temat = (t: string) => ({ typ: 'temat', org: 'pilot', ws: 'wspolne', temat: t });
 const osoby = [
   { osoba: 'michal', email: 'm@x.pl', rola: 'admin' as const, sub: 'sub-m' },
   { osoba: 'szymon', email: 's@x.pl', rola: 'czlonek' as const },
@@ -31,9 +32,19 @@ describe('planZasilenia', () => {
       { typ: 'przestrzen', org: 'pilot', ws: 'wspolne', nazwa: 'Wspólne' },
       { typ: 'temat', org: 'pilot', ws: 'wspolne', temat: 'Dokumenty' },
       { typ: 'temat', org: 'pilot', ws: 'wspolne', temat: 'Oferty' },
+      { typ: 'temat', org: 'pilot', ws: 'wspolne', temat: 'Zadania' },
       { typ: 'prawo', org: 'pilot', ws: 'wspolne', osoba: 'michal', right: 'admin' },
       { typ: 'prawo', org: 'pilot', ws: 'wspolne', osoba: 'szymon', right: 'write' },
     ]);
+  });
+});
+
+describe('temat Zadania', () => {
+  const tematy = (t: string[]) =>
+    planZasilenia(osoby, { firma: 'pilot', tematy: t }).filter((k) => k.typ === 'temat');
+  test('is always added after the requested topics, without duplicates', () => {
+    expect(tematy(['Oferty'])).toEqual([temat('Oferty'), temat('Zadania')]);
+    expect(tematy(['Zadania', 'Oferty'])).toEqual([temat('Zadania'), temat('Oferty')]);
   });
 });
 
@@ -69,7 +80,7 @@ describe('zasil / wykonaj na atrapach', () => {
     expect(client.putOrg).toHaveBeenCalledWith('pilot', 'pilot');
     expect(client.putPerson.mock.calls).toEqual([['pilot', 'sub-m', true], ['pilot', 'sub-s', false]]);
     expect(client.putWorkspace).toHaveBeenCalledWith('pilot', 'wspolne', 'Wspólne');
-    expect(client.putTopic.mock.calls.map((c: unknown[]) => c[2])).toEqual(['Dokumenty', 'Oferty']);
+    expect(client.putTopic.mock.calls.map((c: unknown[]) => c[2])).toEqual(['Dokumenty', 'Oferty', 'Zadania']);
     expect(client.putGrant.mock.calls).toEqual([
       ['pilot', 'wspolne', 'sub-m', 'admin'], ['pilot', 'wspolne', 'sub-s', 'write'],
     ]);

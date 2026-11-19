@@ -1,9 +1,12 @@
-// "Pliki" screen: the space browser, Heartwood spaces, conflicts,
-// skipped files and the version history of one file. Paths, names and
-// reasons come from the daemon: they are data and go into the page via
-// textContent only.
-import { fileErrorText, filesViewModel, parseTopics, spaceStatusText, versionLine, type FilesModel, type SpaceRow } from '../../logic/files-view.js';
-import type { FilesView, HwConflict, HwIssue, HwSkipped, HwVersion } from '../../logic/heartwood.js';
+// "Pliki" screen: the space browser, Heartwood spaces, untracked
+// files, conflicts, skipped files and the version history of one
+// file. Paths, names and reasons come from the daemon: they are data
+// and go into the page via textContent only.
+import {
+  adoptErrorText, fileErrorText, filesViewModel, lockableTasks, parseTopics, spaceStatusText, versionLine, type ConflictRow, type FilesModel,
+  type SpaceRow, type TaskRef, type UntrackedRow,
+} from '../../logic/files-view.js';
+import type { FilesView, HwIssue, HwSkipped, HwVersion } from '../../logic/heartwood.js';
 import { RpcError } from '../../logic/rpc.js';
 import type { InboxView } from '../protocol.js';
 import {
@@ -25,8 +28,23 @@ export interface FilesScreen {
 /** Where a history points: a local path or a path in a space. */
 type HistoryTarget = { path: string; space?: string };
 
+/** What the rows of the lists need besides their data. */
+interface ListContext {
+  call: Call;
+  /** Tasks the user may move files into (read on click). */
+  tasks: () => TaskRef[];
+  /** Asks for a fresh status after a change. */
+  changed: () => void;
+  /** Redraws the lists from the last model (after a picker closes). */
+  redraw: () => void;
+}
+
 /** How often the open screen asks for a fresh status. */
 const REFRESH_MS = 15_000;
+/** Shown when the user has no task to move a file into. */
+const NO_ADOPT_TASKS = 'Nie masz zadania, do którego można dołączyć plik.';
+/** Question asked before the copies of a conflict are deleted. */
+const RESOLVE_QUESTION = 'Usunąć kopie konfliktu? Upewnij się, że przepisałeś zmiany.';
 /** Question asked when unselecting would delete the local folder. */
 const UNSELECT_QUESTION = 'Usunąć folder z dysku? Pliki zostają na serwerze.';
 
@@ -65,12 +83,99 @@ function spaceRow(call: Call, space: SpaceRow): HTMLLIElement {
 }
 
 /**
- * Row of one conflict.
- * Call: `conflictRow(c)`. Expects: a conflict.
- * Output: path, "Kopia: <copyPath>" and the daemon's message.
+ * Row of one untracked file.
+ * Call: `untrackedRow(ctx, u)`. Expects: a row of the model.
+ * Output: path, reason and "Przenieś do zadania…".
  */
-function conflictRow(c: HwConflict): HTMLLIElement {
-  return row(el('strong', c.path, 'path'), el('span', `Kopia: ${c.copyPath}`, 'path'), el('span', c.message, 'muted'));
+function untrackedRow(ctx: ListContext, u: UntrackedRow): HTMLLIElement {
+  return row(el('strong', u.label, 'path'), el('span', u.reasonText, 'muted'), adoptButton(ctx, u));
+}
+
+/**
+ * "Przenieś do zadania…": shows the user's tasks to pick from.
+ * Call: `adoptButton(ctx, row)`. Expects: an untracked file.
+ * Output: the button; without tasks it says so, else it turns
+ * into a task select and picking a task moves the file.
+ */
+function adoptButton(ctx: ListContext, u: UntrackedRow): HTMLButtonElement {
+  const move = button('Przenieś do zadania…', 'secondary');
+  move.addEventListener('click', () => {
+    const tasks = ctx.tasks();
+    if (!tasks.length) return setStatus(NO_ADOPT_TASKS, 'info');
+    const pick = el('select', '', 'task-pick');
+    pick.setAttribute('aria-label', 'Zadanie');
+    pick.append(new Option('Wybierz zadanie…', ''), ...tasks.map((t) => new Option(t.title, t.id)));
+    pick.addEventListener('change', () => {
+      if (pick.value) void adopt(ctx, pick, move, u.path);
+    });
+    // Nothing picked: give the button back (unless adopt did).
+    const cancel = () => {
+      if (pick.value || !pick.isConnected) return;
+      pick.replaceWith(move);
+      ctx.redraw();
+    };
+    pick.addEventListener('blur', cancel);
+    pick.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') cancel();
+    });
+    move.replaceWith(pick);
+    pick.focus();
+  });
+  return move;
+}
+
+/**
+ * Moves an untracked file into the picked task.
+ * Call: `await adopt(ctx, select, button, path)`.
+ * Expects: the task select shown in place of `button`.
+ * Output: none; the select is disabled during the call, then the
+ * button comes back; success asks for a fresh status.
+ */
+async function adopt(ctx: ListContext, pick: HTMLSelectElement, move: HTMLButtonElement, path: string): Promise<void> {
+  pick.disabled = true;
+  try {
+    await ctx.call('files.adopt', { paths: [path], taskId: pick.value }, DAEMON_WAIT_MS);
+    setStatus('Przeniesiono do zadania.', 'ok');
+    ctx.changed();
+  } catch (e) {
+    setStatus(adoptErrorText(e), 'error');
+  } finally {
+    pick.replaceWith(move);
+    ctx.redraw();
+  }
+}
+
+/**
+ * Row of one conflicting file (its conflicts grouped).
+ * Call: `conflictRow(ctx, c)`. Expects: a row of the model.
+ * Output: path, "N kopii", "Pokaż kopię" (when a copy is left)
+ * and "Oznacz jako rozwiązane" (asks, then clears every copy).
+ */
+function conflictRow(ctx: ListContext, c: ConflictRow): HTMLLIElement {
+  const li = row(el('strong', c.label, 'path'), el('span', c.countText, 'state'));
+  if (c.copyPath) li.append(showCopyButton(ctx.call, c.copyPath));
+  const done = button('Oznacz jako rozwiązane', 'secondary');
+  armed(done, RESOLVE_QUESTION, () => runFileAction(done, async () => {
+    await ctx.call('files.resolve', { space: c.space, path: c.path }, DAEMON_WAIT_MS);
+    ctx.changed();
+    return { text: 'Oznaczono jako rozwiązane.', kind: 'ok' };
+  }));
+  li.append(done);
+  return li;
+}
+
+/**
+ * "Pokaż kopię": selects the newest copy in Finder.
+ * Call: `showCopyButton(call, copyPath)`. Expects: a copy path.
+ * Output: the button.
+ */
+function showCopyButton(call: Call, copyPath: string): HTMLButtonElement {
+  const show = button('Pokaż kopię', 'secondary');
+  show.addEventListener('click', () => void runFileAction(show, async () => {
+    await call('files.revealCopy', { copyPath });
+    return { text: '', kind: 'info' };
+  }));
+  return show;
 }
 
 /**
@@ -110,18 +215,22 @@ function fillList(listId: string, titleId: string | null, rows: HTMLLIElement[])
 /**
  * Draws the model (everything except the history).
  *
- * Call: `draw(call, model)`.
+ * Call: `draw(ctx, model)`.
  * Expects: main.html files markup.
  * Output: none.
  */
-function draw(call: Call, model: FilesModel): void {
+function draw(ctx: ListContext, model: FilesModel): void {
   const banner = byId('files-banner');
   banner.hidden = model.banner === null;
   banner.textContent = model.banner ?? '';
   byId('files-body').hidden = !model.ready;
   fillList('files-issues', null, model.issues.map(issueRow));
-  byId('files-spaces').replaceChildren(...model.spaces.map((s) => spaceRow(call, s)));
-  fillList('files-conflicts', 'conflicts-title', model.conflicts.map(conflictRow));
+  byId('files-spaces').replaceChildren(...model.spaces.map((s) => spaceRow(ctx.call, s)));
+  // An open task picker keeps its list; the others redraw anyway.
+  if (!document.querySelector('#files-untracked select')) {
+    fillList('files-untracked', 'untracked-title', model.untracked.map((u) => untrackedRow(ctx, u)));
+  }
+  fillList('files-conflicts', 'conflicts-title', model.conflicts.map((c) => conflictRow(ctx, c)));
   fillList('files-skipped', 'skipped-title', model.skipped.map(skippedRow));
 }
 
@@ -230,22 +339,33 @@ function wireHistory(call: Call): void {
 export function mountFiles(call: Call): FilesScreen {
   let drawn = '';
   let timer: ReturnType<typeof setInterval> | undefined;
+  let view: InboxView | null = null;
+  const ctx: ListContext = {
+    call,
+    tasks: () => (view ? lockableTasks(view.tasks, view.osoba, view.files.info.state) : []),
+    changed: () => refresh(false),
+    redraw: () => {
+      drawn = '';
+      if (view) renderFiles(view.files);
+    },
+  };
   const tree = mountTree(call, (space, path) => {
     showHistory(call, { space, path }).catch((e) => setStatus(fileErrorText(e), 'error'));
   });
 
   /**
    * Draws the files part when its model changed (keeps open
-   * questions).
+   * questions; an open task select of "Nieśledzone" keeps its list).
    * Call: `renderFiles(files)`. Expects: the files part of a view.
    * Output: none.
    */
   function renderFiles(files: FilesView): void {
+    if (view) view = { ...view, files };
     const model = filesViewModel(files);
     const key = JSON.stringify(model);
     if (key === drawn) return;
     drawn = key;
-    draw(call, model);
+    draw(ctx, model);
   }
 
   /**
@@ -253,9 +373,10 @@ export function mountFiles(call: Call): FilesScreen {
    * Call: `render(view)`. Expects: a logged-in view.
    * Output: none.
    */
-  function render(view: InboxView): void {
-    renderFiles(view.files);
-    tree.render(view);
+  function render(next: InboxView): void {
+    view = next;
+    renderFiles(next.files);
+    tree.render(next);
   }
 
   /**

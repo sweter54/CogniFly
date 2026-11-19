@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 /// Commands the webview may send to the daemon.
-pub const ALLOWED: [&str; 11] = [
+pub const ALLOWED: [&str; 13] = [
     "status",
     "lock",
     "release",
@@ -21,9 +21,11 @@ pub const ALLOWED: [&str; 11] = [
     "unselect",
     "files",
     "work-files",
+    "adopt",
+    "resolve",
 ];
-/// Commands that may download a lot and get the long timeout.
-const SLOW: [&str; 3] = ["download", "select", "unselect"];
+/// Commands that may download or move a lot and get the long timeout.
+const SLOW: [&str; 4] = ["download", "select", "unselect", "adopt"];
 /// Commands that may ask the server and get the medium timeout.
 const MEDIUM: [&str; 2] = ["files", "work-files"];
 /// Answer timeout of ordinary commands.
@@ -54,7 +56,7 @@ pub fn command(req: &Value) -> Result<&str, String> {
 ///
 /// Call: `timeout_for(cmd)`.
 /// Expects: a command name.
-/// Output: 120 s for `download`/`select`/`unselect`, 30 s for
+/// Output: 120 s for `download`/`select`/`unselect`/`adopt`, 30 s for
 /// `files`/`work-files`, else 10 s.
 pub fn timeout_for(cmd: &str) -> Duration {
     if SLOW.contains(&cmd) {
@@ -242,7 +244,7 @@ mod tests {
     #[test]
     fn long_commands_get_long_timeout() {
         assert_eq!(timeout_for("status"), Duration::from_secs(10));
-        for cmd in ["download", "select", "unselect"] {
+        for cmd in ["download", "select", "unselect", "adopt"] {
             assert_eq!(timeout_for(cmd), Duration::from_secs(120));
         }
         for cmd in ["files", "work-files"] {
@@ -252,11 +254,19 @@ mod tests {
 
     #[test]
     fn browse_commands_are_allowed() {
-        assert_eq!(ALLOWED.len(), 11);
+        assert_eq!(ALLOWED.len(), 13);
         for cmd in ["files", "work-files"] {
             assert_eq!(command(&json!({"cmd": cmd})), Ok(cmd));
         }
         assert!(command(&json!({"cmd": "wait"})).is_err());
+    }
+
+    #[test]
+    fn adopt_and_resolve_are_allowed() {
+        for cmd in ["adopt", "resolve"] {
+            assert_eq!(command(&json!({"cmd": cmd})), Ok(cmd));
+        }
+        assert_eq!(timeout_for("resolve"), Duration::from_secs(10));
     }
 
     /// Tells whether a daemon of the given config file is running.

@@ -1,8 +1,8 @@
 import type { Task } from '@cognifly/wspolne/api';
 import { describe, expect, it } from 'vitest';
 import {
-  canLockFiles, fileErrorText, filesViewModel, folderCrumbs, lockableTasks, parseTopics, spaceChoices, spaceStatusText, taskFilesModel,
-  taskRefs, treeViewModel, versionLine, versionsLabel, visibleRows,
+  adoptErrorText, canLockFiles, conflictRows, copiesLabel, fileErrorText, filesViewModel, folderCrumbs, lockableTasks, parseTopics, spaceChoices, spaceStatusText,
+  taskFilesModel, taskRefs, treeViewModel, untrackedRows, versionLine, versionsLabel, visibleRows,
 } from '../src/logic/files-view.js';
 import {
   DISABLED_INFO, filesView, hwMessage, parseStatus, type HwBrowse, type HwBrowseEntry, type HwInfo, type HwState, type HwVersion, type HwWorkFiles,
@@ -54,9 +54,10 @@ describe('filesViewModel', () => {
 
   it('passes conflicts, skipped files and issues with their fields', () => {
     const m = filesViewModel(running());
-    expect(m.conflicts[0]).toEqual({
-      space: 'ws:w1', path: 'b.docx', copyPath: 'b (konflikt).docx', at: '2026-11-19T10:00:00Z', message: 'Ktoś zmienił plik.',
+    expect(m.conflicts[0]).toMatchObject({
+      space: 'ws:w1', path: 'b.docx', copyPath: 'b (konflikt).docx', message: 'Ktoś zmienił plik.', count: 2, countText: '2 kopie',
     });
+    expect(m.untracked).toHaveLength(2);
     expect(m.skipped[0]).toEqual({
       space: 'ws:w1', path: 'x:y', reason: 'name:NAME_INVALID', reasonText: 'nieprawidłowa nazwa', suggestion: 'x_y', hint: 'zmień nazwę na „x_y”',
     });
@@ -93,6 +94,17 @@ describe('fileErrorText', () => {
   it('uses app texts for app codes', () => expect(fileErrorText(new RpcError('TIMEOUT'))).toBe('Heartwood nie odpowiada.'));
   it('explains a path outside the root', () => expect(fileErrorText(new RpcError('OUTSIDE'))).toBe('Można wybrać tylko pliki z folderu Heartwood.'));
   it('names unknown errors', () => expect(fileErrorText(new Error('x'))).toBe('Nie udało się (UNEXPECTED).'));
+});
+
+describe('adoptErrorText', () => {
+  it('explains the unselected Zadania topic', () => {
+    expect(adoptErrorText(new RpcError('NOT_SELECTED', 'Temat nie jest wybrany.')))
+      .toBe('Temat Zadania nie jest wybrany na tym komputerze — wybierz go w Przestrzeniach.');
+  });
+  it('uses the file texts otherwise', () => {
+    expect(adoptErrorText(new RpcError('TASK_NOT_LOCKABLE'))).toBe('Do tego zadania nie można teraz dołączyć plików.');
+    expect(adoptErrorText(new Error('x'))).toBe('Nie udało się (UNEXPECTED).');
+  });
 });
 
 describe('canLockFiles', () => {
@@ -218,6 +230,11 @@ describe('treeViewModel', () => {
     expect(m.rows[0]).toMatchObject({ path: 'T/a.txt', folder: false });
   });
 
+  it('names an untracked file and offers no history or lock', () => {
+    const m = treeViewModel(browse([entry('T/n.txt', 'untracked')]), TASKS);
+    expect(m.rows[0]).toMatchObject({ stateText: 'nieśledzony', actions: ['open'], locked: false });
+  });
+
   it('offers actions by state', () => {
     const m = treeViewModel(browse([
       entry('T/a.txt', 'free'), entry('T/b.txt', 'writable'), entry('T/c.txt', 'locked'),
@@ -329,4 +346,50 @@ describe('folder refusals', () => {
     const files = { info: { state: 'disabled' as const, root: '', restarts: 0, lastError: 'ROOT_TOO_LONG' }, status: null, counts: { conflicts: 0, unsent: 0 } };
     expect(filesViewModel(files).banner).toBe(hwMessage('ROOT_TOO_LONG'));
   });
+});
+
+describe('untrackedRows', () => {
+  const R = '/Users/a/Heartwood/pilot/w1';
+  const status = (untracked: unknown[]) =>
+    parseStatus({ ...STATUS_REPLY, spaces: [{ space: 'ws:w1', folder: R, lastSeq: 1, serverSeq: 1, unsent: 0 }], untracked })!;
+
+  it('one row per untracked file with its local path, label and reason', () => {
+    const rows = untrackedRows(status(STATUS_REPLY.untracked));
+    expect(rows).toEqual([
+      { path: `${R}/Oferty/nowy.docx`, label: 'w1/Oferty/nowy.docx', reasonText: 'brak blokady — dołącz do zadania, żeby wysłać', space: 'ws:w1' },
+      { path: `${R}/luzem.txt`, label: 'w1/luzem.txt', reasonText: 'poza tematem — przenieś do zadania', space: 'ws:w1' },
+    ]);
+  });
+
+  it('drops a trailing slash of the space folder', () => {
+    const st = parseStatus({ ...STATUS_REPLY, spaces: [{ space: 'ws:w1', folder: `${R}/`, lastSeq: 1, serverSeq: 1, unsent: 0 }] })!;
+    expect(untrackedRows(st)[1]!.path).toBe(`${R}/luzem.txt`);
+  });
+
+  it('skips rows of spaces not on this computer', () => {
+    const rows = untrackedRows(status([{ space: 'ws:w9', path: 'a.txt', folder: false, reason: 'no_lock', reasonText: 'r' }]));
+    expect(rows).toEqual([]);
+  });
+
+  it('no status, no rows', () => expect(untrackedRows(null)).toEqual([]));
+});
+
+describe('conflictRows', () => {
+  it('one row per file with the number of copies and the copies newest first', () => {
+    const rows = conflictRows(parseStatus(STATUS_REPLY));
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({
+      label: 'w1/b.docx', space: 'ws:w1', path: 'b.docx', count: 2, countText: '2 kopie', copyPath: 'b (konflikt).docx', message: 'Ktoś zmienił plik.',
+    });
+    expect(rows[0]!.copies.map((c) => c.copyPath)).toEqual(['b (konflikt).docx', 'b (konflikt 2).docx']);
+    expect(rows[1]).toMatchObject({ count: 1, countText: '1 kopia' });
+  });
+
+  it('no status, no rows', () => expect(conflictRows(null)).toEqual([]));
+});
+
+describe('copiesLabel', () => {
+  it.each([[1, '1 kopia'], [2, '2 kopie'], [4, '4 kopie'], [5, '5 kopii'], [12, '12 kopii'], [22, '22 kopie']])(
+    '%i → %s', (n, text) => expect(copiesLabel(n)).toBe(text),
+  );
 });
