@@ -1,4 +1,5 @@
 // Wywołania API CogniFly i polecenia CLI. Bez zależności.
+import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Stan, katalog, czytaj, zapisz, punktCognito, odswiez, zaloguj, kod, wyloguj } from './sesja.mjs';
@@ -119,6 +120,16 @@ function odchudz(z) {
   return wynik;
 }
 
+// Po zmianie zadania pokaż je w aplikacji CogniFly (link cognifly://, tylko id zadania).
+// macOS: /usr/bin/open; COGNIFLY_OTWIERACZ podmienia program ('' = wyłączone). Błąd lub brak aplikacji = cisza.
+export function pokazWAplikacji(id, env = process.env) {
+  const otwieracz = env.COGNIFLY_OTWIERACZ ?? (process.platform === 'darwin' ? '/usr/bin/open' : '');
+  if (!otwieracz || !ID_ZADANIA.test(id)) return Promise.resolve();
+  return new Promise((ok) => {
+    execFile(otwieracz, [`cognifly://zadanie/${id}`], { timeout: 3000 }, () => ok());
+  });
+}
+
 const blad = (r) => ({ stan: 'BLAD', kod: typeof r.json?.kod === 'string' ? r.json.kod : `HTTP_${r.status}` });
 
 export async function wykonaj(argv, env = process.env) {
@@ -128,7 +139,7 @@ export async function wykonaj(argv, env = process.env) {
   try {
     if (polecenie === 'wyloguj') return wyloguj(kat);
     if (polecenie === 'konfiguruj') return konfiguruj(kat, opcje);
-    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'biore', 'stan', 'podsumowanie'];
+    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'zadanie', 'biore', 'stan', 'podsumowanie'];
     if (!komendy.includes(polecenie)) throw new Stan('BLAD', { kod: 'NIEZNANE_POLECENIE' });
 
     // walidacje lokalne przed siecią i konfiguracją
@@ -140,7 +151,7 @@ export async function wykonaj(argv, env = process.env) {
       if (opcje.typ) q.set('typ', opcje.typ);
       zapytanie = `?${q}`;
     }
-    if (polecenie === 'biore' || polecenie === 'stan') {
+    if (polecenie === 'zadanie' || polecenie === 'biore' || polecenie === 'stan') {
       id = poz[1];
       if (!ID_ZADANIA.test(id ?? '')) throw new Stan('NIE_ZNALEZIONO');
     }
@@ -171,9 +182,20 @@ export async function wykonaj(argv, env = process.env) {
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         return blad(r);
       }
+      case 'zadanie': {
+        // Zdarzenie odchudzane także tutaj (obrona w głąb): bez `dane` i nazwy gałęzi.
+        const r = await zSesja(ctx, 'GET', `/zadania/${id}`);
+        if (r.status === 200) return { stan: 'OK', zadanie: r.json.zadanie, zdarzenie: r.json.zdarzenie ? odchudz(r.json.zdarzenie) : null };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
+        return blad(r);
+      }
       case 'biore': {
         const r = await zSesja(ctx, 'POST', `/zadania/${id}/biore`);
-        if (r.status === 200) return { stan: 'WZIETE', zadanie: r.json.zadanie };
+        if (r.status === 200) {
+          await pokazWAplikacji(id, env);
+          return { stan: 'WZIETE', zadanie: r.json.zadanie };
+        }
         if (r.status === 409) return { stan: 'ZAJETE', wlasciciel: r.json.wlasciciel };
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
@@ -182,7 +204,10 @@ export async function wykonaj(argv, env = process.env) {
       case 'stan': {
         const body = { stan: poz[2], ...(opcje.postep !== undefined ? { postep: opcje.postep } : {}) };
         const r = await zSesja(ctx, 'POST', `/zadania/${id}/stan`, body);
-        if (r.status === 200) return { stan: 'OK', zadanie: r.json.zadanie };
+        if (r.status === 200) {
+          await pokazWAplikacji(id, env);
+          return { stan: 'OK', zadanie: r.json.zadanie };
+        }
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
         return blad(r);

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="pl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CogniFly</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <header class="top">
+      <strong class="brand">CogniFly</strong>
+      <nav id="nav" hidden>
+        <button type="button" class="tab" data-go="inbox">Skrzynka</button>
+        <button type="button" class="tab" data-go="settings">Ustawienia</button>
+      </nav>
+      <span class="spacer"></span>
+      <span id="who" class="muted"></span>
+      <button type="button" id="logout" class="link" hidden>Wyloguj</button>
+    </header>
+
+    <main>
+      <p id="status" role="status"></p>
+
+      <section id="screen-login" hidden>
+        <ol class="steps" aria-label="Postęp logowania">
+          <li data-step="email">1. E-mail</li>
+          <li data-step="code">2. Kod z maila</li>
+          <li data-step="folder">3. Folder pracy</li>
+          <li data-step="done">4. Gotowe</li>
+        </ol>
+
+        <div data-pane="email">
+          <h1>Witaj w CogniFly</h1>
+          <p>CogniFly pokazuje przy zegarze, ile zadań na Ciebie czeka, i powiadamia Cię, gdy pojawi się nowe
+            zadanie albo eskalacja. Zaloguj się adresem e-mail, który podałeś firmie — bez hasła.</p>
+          <form id="email-form" novalidate>
+            <label>Twój e-mail <input name="email" type="email" autocomplete="email" required /></label>
+            <div class="actions"><button type="submit">Wyślij kod</button></div>
+          </form>
+        </div>
+
+        <div data-pane="code" hidden>
+          <h1>Wpisz kod z e-maila</h1>
+          <p>Wysłaliśmy jednorazowy kod na <strong id="email-shown"></strong>. Kod jest ważny ok. 3 minuty.</p>
+          <p class="hint">Nie widzisz wiadomości? Sprawdź folder <strong>Spam</strong> — nadawcą jest CogniFly.</p>
+          <form id="code-form" novalidate>
+            <label>Kod <input name="code" inputmode="numeric" autocomplete="one-time-code" required /></label>
+            <div class="actions">
+              <button type="button" id="change-email" class="secondary">Zmień e-mail</button>
+              <button type="button" id="resend" class="secondary">Wyślij nowy kod</button>
+              <button type="submit">Zaloguj</button>
+            </div>
+          </form>
+        </div>
+
+        <div data-pane="folder" hidden>
+          <h1>Wybierz folder pracy</h1>
+          <p>W tym folderze CogniFly i Claude będą trzymać pliki zadań — najlepiej folder z Twoim projektem
+            (np. klon repozytorium). Tu otworzy się sesja Claude po kliknięciu „Pracuj w Claude”.</p>
+          <div class="folder-choice">
+            <button type="button" id="setup-pick-folder">Wybierz folder…</button>
+            <code id="setup-folder" class="muted">Nie wybrano folderu</code>
+          </div>
+          <div class="actions"><button type="button" id="setup-folder-next" disabled>Dalej</button></div>
+        </div>
+
+        <div data-pane="done" hidden>
+          <h1>Gotowe!</h1>
+          <p>Jesteś zalogowany jako <strong id="email-done"></strong>.</p>
+          <ul class="guide">
+            <li>Ikona <strong>CogniFly</strong> przy zegarze pokazuje liczbę zadań, które na Ciebie czekają.</li>
+            <li>Gdy pojawi się nowe zadanie lub eskalacja, dostaniesz powiadomienie. Kliknij je, aby otworzyć skrzynkę.</li>
+            <li>To okno możesz zamknąć — CogniFly działa dalej w tle. Wrócisz tu z menu ikony.</li>
+          </ul>
+          <div class="actions"><button type="button" data-go="inbox">Przejdź do skrzynki</button></div>
+        </div>
+      </section>
+
+      <section id="screen-inbox" hidden>
+        <div class="bar">
+          <h1>Skrzynka</h1>
+          <button type="button" id="refresh" class="secondary">Odśwież</button>
+        </div>
+        <ul id="list" class="tasks"></ul>
+        <h2 id="done-title" hidden></h2>
+        <ul id="done-list" class="tasks"></ul>
+        <template id="task-template">
+          <li class="task">
+            <span class="badge"></span>
+            <p class="desc"></p>
+            <p class="progress"></p>
+            <p class="meta"></p>
+            <div class="actions">
+              <button type="button" class="take">Biorę</button>
+              <button type="button" class="claude secondary">Pracuj w Claude</button>
+              <select class="state" aria-label="Zmień stan">
+                <option value="">Zmień stan…</option>
+                <option value="w_trakcie">W trakcie</option>
+                <option value="do_akceptacji">Do akceptacji</option>
+                <option value="zrobione">Zrobione</option>
+              </select>
+            </div>
+          </li>
+        </template>
+      </section>
+
+      <section id="screen-settings" hidden>
+        <h1>Ustawienia</h1>
+        <h2>Konto</h2>
+        <dl class="facts">
+          <dt>E-mail</dt><dd id="account-email"></dd>
+          <dt>Identyfikator</dt><dd id="account-id"></dd>
+          <dt>Firma</dt>
+          <dd><span id="company-name"></span><select id="company-select" aria-label="Firma" hidden></select></dd>
+        </dl>
+        <div class="actions start"><button type="button" id="change-account" class="secondary">Zmień konto</button></div>
+        <h2>Folder pracy</h2>
+        <p class="hint">Tu CogniFly i Claude trzymają pliki zadań; tu otwiera się sesja „Pracuj w Claude”.</p>
+        <div class="folder-row">
+          <input id="work-folder" aria-label="Folder pracy" readonly />
+          <button type="button" id="pick-folder" class="secondary">Wybierz…</button>
+        </div>
+        <div class="actions"><button type="button" id="settings-back">Gotowe</button></div>
+      </section>
+    </main>
+    <script type="module" src="/src/windows/main.ts"></script>
+  </body>
+</html>

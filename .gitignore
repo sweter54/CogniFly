@@ -4,3 +4,6 @@ node_modules/
 cdk.out/
 .DS_Store
 .superpowers/
+aplikacja/dist
+aplikacja/src-tauri/target
+aplikacja/src-tauri/gen

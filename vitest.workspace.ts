@@ -1,1 +1,1 @@
-export default ['wspolne', 'serwer', 'infra', 'wtyczka'];
+export default ['wspolne', 'serwer', 'infra', 'wtyczka', 'aplikacja'];
