@@ -241,7 +241,8 @@ describe('taskFolderName', () => {
   it('keeps a plain description', () => expect(named('Oferta dla Acme')).toBe(`Oferta dla Acme (${ID})`));
 
   it('removes forbidden and control characters and collapses spaces', () => {
-    expect(named('Raport: Q3/Q4 \\ "final"? <a|b>*')).toBe(`Raport Q3Q4 final ab (${ID})`);
+    expect(named('Raport: Q3/Q4 \\ "final"? <a|b>*')).toBe(`Raport Q3-Q4 - final ab (${ID})`);
+    expect(named('PR #10 (repo sweter54/CogniFly)')).toBe(`PR #10 (repo sweter54-CogniFly) (${ID})`);
     expect(named('a\u0007b\tc\n\nd')).toBe(`ab c d (${ID})`);
   });
 
@@ -273,7 +274,7 @@ describe('taskFolderName', () => {
     expect(Array.from(head).length).toBeLessThanOrEqual(60);
     expect(name).not.toMatch(/[/\\:*?"<>|\p{Cc}]/u);
     expect(head).toBe(head.trim());
-    expect(head.startsWith('Zadanie 🚀 etcpasswd')).toBe(true);
+    expect(head.startsWith('Zadanie 🚀 -etc-passwd')).toBe(true);
   });
 
   it('normalizes to NFC', () => expect(named('Zażółć')).toBe(`Zażółć (${ID})`));

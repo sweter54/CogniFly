@@ -27,6 +27,8 @@
     "allow-heartwood-stop",
     "allow-heartwood-info",
     "allow-heartwood-call",
+    "allow-pick-files",
+    "allow-pick-folder",
     {
       "identifier": "http:default",
       "allow": [

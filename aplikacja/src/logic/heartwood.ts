@@ -669,14 +669,16 @@ const COPY_FOLDERS: readonly string[] = ['kopie konfliktów', '.heartwood-kopie'
  *
  * Call: `taskFolderName(task)`.
  * Expects: a task with a checked id; any description.
- * Output: the description in NFC without `/\:*?"<>|` and control
- * characters, spaces collapsed, leading `.`/`~`/`$` dropped (hidden
+ * Output: the description in NFC, `/` and `\` turned into `-`, without
+ * `:*?"<>|` and control
+ * characters, spaces collapsed, leading `.`/`~`/`$`/`-` and trailing
+ * `-` dropped (hidden
  * or ignored names), cut to 60 code points without a trailing space,
  * then ` (<id>)`; only `(<id>)` when nothing is left.
  */
 export function taskFolderName(task: { id: string; opis: string }): string {
-  const clean = task.opis.normalize('NFC').replace(/[/\\:*?"<>|\p{Cc}]/gu, (c) => (/\s/.test(c) ? ' ' : ''));
-  const flat = clean.replace(/\s+/g, ' ').replace(/^[\s.~$]+/, '');
+  const clean = task.opis.normalize('NFC').replace(/[/\\]/g, '-').replace(/[:*?"<>|\p{Cc}]/gu, (c) => (/\s/.test(c) ? ' ' : ''));
+  const flat = clean.replace(/\s+/g, ' ').replace(/^[\s.~$-]+/, '').replace(/[\s-]+$/, '');
   const head = cutName(escapeReserved(cutName(flat)));
   return head ? `${head} (${task.id})` : `(${task.id})`;
 }

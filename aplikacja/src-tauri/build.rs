@@ -14,6 +14,8 @@ fn main() {
         "heartwood_stop",
         "heartwood_info",
         "heartwood_call",
+        "pick_files",
+        "pick_folder",
     ];
     tauri_build::try_build(
         tauri_build::Attributes::new()
