@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-heartwood-info"
+description = "Enables the heartwood_info command without any pre-configured scope."
+commands.allow = ["heartwood_info"]
+
+[[permission]]
+identifier = "deny-heartwood-info"
+description = "Denies the heartwood_info command without any pre-configured scope."
+commands.deny = ["heartwood_info"]

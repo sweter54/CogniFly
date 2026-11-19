@@ -67,3 +67,141 @@ pub fn vault_delete() -> Result<(), String> {
         Err(_) => Err("VAULT_ERROR".to_string()),
     }
 }
+
+/// Minimum remaining validity for the Heartwood token command. The
+/// background window refreshes the session when <= 5 min remain, so
+/// a minute leaves room for one missed poll.
+const TOKEN_MIN_LEFT_MS: u64 = 60_000;
+
+/// Extracts a still-valid access token from the session JSON.
+///
+/// Call: `fresh_access_token(raw, now_ms, min_left_ms)`.
+/// Expects: `raw` is the session JSON written by the UI
+/// (`accessToken`, `expiresAt` in epoch milliseconds).
+/// Output: the token, or `None` for bad JSON, missing/empty fields,
+/// or fewer than `min_left_ms` milliseconds of validity left.
+pub fn fresh_access_token(raw: &str, now_ms: u64, min_left_ms: u64) -> Option<String> {
+    let json: serde_json::Value = serde_json::from_str(raw).ok()?;
+    let token = json.get("accessToken")?.as_str().filter(|t| !t.is_empty())?;
+    let expires = json.get("expiresAt")?.as_f64()?;
+    let left = expires - now_ms as f64;
+    (left >= min_left_ms as f64).then(|| token.to_string())
+}
+
+/// Current time as epoch milliseconds.
+///
+/// Call: `now_ms()`.
+/// Expects: nothing.
+/// Output: milliseconds since the Unix epoch, or `None` when the
+/// clock reads before 1970 (callers then give no token).
+fn now_ms() -> Option<u64> {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .map(|d| d.as_millis() as u64)
+}
+
+/// Picks the token for `token_command` at a given time.
+///
+/// Call: `token_at(&raw, now_ms())`.
+/// Expects: the session JSON and the clock reading.
+/// Output: the token with at least `TOKEN_MIN_LEFT_MS` left; `None`
+/// when the clock is unknown (fail closed) or the token is not fresh.
+fn token_at(raw: &str, now: Option<u64>) -> Option<String> {
+    fresh_access_token(raw, now?, TOKEN_MIN_LEFT_MS)
+}
+
+/// Writes the token line and maps the result to an exit code.
+///
+/// Call: `write_token(&mut io::stdout().lock(), token)`.
+/// Expects: any writer and an optional token.
+/// Output: 0 after writing `<token>\n` and flushing; 1 when there is
+/// no token or the write fails (never panics).
+fn write_token(out: &mut impl std::io::Write, token: Option<String>) -> i32 {
+    let Some(t) = token else { return 1 };
+    match writeln!(out, "{t}").and_then(|()| out.flush()) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    }
+}
+
+/// Heartwood `token_command`: prints the access token to stdout.
+///
+/// Call: `std::process::exit(print_token())` from `main`.
+/// Expects: nothing; no session or a near-expired token is normal.
+/// Output: exit code 0 after printing `<token>\n` to stdout; exit
+/// code 1 with nothing printed otherwise (also on a write error).
+/// The token goes nowhere else.
+pub fn print_token() -> i32 {
+    let token = entry()
+        .ok()
+        .and_then(|e| e.get_password().ok())
+        .and_then(|raw| token_at(&raw, now_ms()));
+    write_token(&mut std::io::stdout().lock(), token)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fresh_access_token, token_at, write_token, TOKEN_MIN_LEFT_MS};
+    use std::io::{self, Write};
+
+    const NOW: u64 = 1_000_000;
+
+    fn session(expires_at: u64) -> String {
+        format!(r#"{{"accessToken":"tok","refreshToken":"r","expiresAt":{expires_at},"email":"a@b"}}"#)
+    }
+
+    #[test]
+    fn returns_token_with_enough_validity() {
+        assert_eq!(fresh_access_token(&session(NOW + 60_000), NOW, 10_000), Some("tok".into()));
+    }
+
+    #[test]
+    fn rejects_token_close_to_expiry() {
+        assert_eq!(fresh_access_token(&session(NOW + 5_000), NOW, 10_000), None);
+    }
+
+    #[test]
+    fn rejects_expired_token() {
+        assert_eq!(fresh_access_token(&session(NOW - 1), NOW, 10_000), None);
+    }
+
+    #[test]
+    fn rejects_missing_token_or_bad_json() {
+        assert_eq!(fresh_access_token(r#"{"expiresAt":99999999}"#, NOW, 10_000), None);
+        assert_eq!(fresh_access_token("not json", NOW, 10_000), None);
+    }
+
+    #[test]
+    fn min_left_is_one_minute() {
+        assert_eq!(TOKEN_MIN_LEFT_MS, 60_000);
+    }
+
+    #[test]
+    fn unreadable_clock_gives_no_token() {
+        assert_eq!(token_at(&session(u64::MAX / 2), None), None);
+        assert_eq!(token_at(&session(NOW + 61_000), Some(NOW)), Some("tok".into()));
+        assert_eq!(token_at(&session(NOW + 59_000), Some(NOW)), None);
+    }
+
+    /// Writer that always fails, like a closed stdout pipe.
+    struct Broken;
+
+    impl Write for Broken {
+        fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+    }
+
+    #[test]
+    fn write_token_prints_line_or_fails_with_one() {
+        let mut out = Vec::new();
+        assert_eq!(write_token(&mut out, Some("tok".into())), 0);
+        assert_eq!(out, b"tok\n");
+        assert_eq!(write_token(&mut Broken, Some("tok".into())), 1);
+        assert_eq!(write_token(&mut Vec::new(), None), 1);
+    }
+}

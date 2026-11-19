@@ -75,6 +75,12 @@ describe('zasiej-pilot --wykonaj na atrapach (bez AWS)', () => {
     });
   });
 
+  test('sub z Cognito trafia do rekordu osoby', async () => {
+    const m = zbuduj({ istniejacySekret: true });
+    await zasiej(opcje(), () => {}, m.zal);
+    expect(m.dane.zapiszOsobe).toHaveBeenCalledWith('pilot', 'michal', { email: 'm@example.com', rola: 'admin', sub: 'sub-1' });
+  });
+
   test('--github-michal wiąże login GitHub z osobą; bez opcji nic nie zapisuje', async () => {
     const m = zbuduj({ istniejacySekret: true });
     await zasiej(opcje('--github-michal', 'sweter54'), () => {}, m.zal);

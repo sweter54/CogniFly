@@ -4,14 +4,15 @@ import { CfnSchedule, CfnScheduleGroup } from 'aws-cdk-lib/aws-scheduler';
 import { Alarm, ComparisonOperator, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { AccountRecovery, FeaturePlan, UserPool, UserPoolEmail, UserPoolClient } from 'aws-cdk-lib/aws-cognito';
-import { AttributeType, BillingMode, Table } from 'aws-cdk-lib/aws-dynamodb';
+import { AttributeType, BillingMode, StreamViewType, Table } from 'aws-cdk-lib/aws-dynamodb';
 import { EventBus, Match, Rule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { HttpApi, HttpMethod, CorsHttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
-import { Architecture, Runtime } from 'aws-cdk-lib/aws-lambda';
+import { Architecture, Runtime, StartingPosition } from 'aws-cdk-lib/aws-lambda';
+import { DynamoEventSource, SqsDlq } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Topic } from 'aws-cdk-lib/aws-sns';
@@ -35,6 +36,32 @@ function kontekst(scope: Construct, klucz: string): string {
   return w.trim();
 }
 
+/** Detail types of Heartwood events handled by `HeartwoodZdarzenia`. */
+const TYPY_HEARTWOOD = ['lock.release_requested', 'change.rejected', 'lock.broken', 'quota.near', 'quota.exceeded'];
+
+/** Value of the optional `heartwood` CDK context. */
+export interface KontekstHeartwood { intUrl: string; intApiArn: string }
+
+/**
+ * Reads the optional `heartwood` context (a JSON string).
+ *
+ * Call: `kontekstHeartwood(scope)`.
+ * Expects: absent/empty, or JSON
+ *   `{"intUrl":"https://...","intApiArn":"arn:..."}`.
+ * Output: the parsed context, or `undefined` when absent; throws a
+ *   Polish error on invalid JSON or missing fields.
+ */
+export function kontekstHeartwood(scope: Construct): KontekstHeartwood | undefined {
+  const w = scope.node.tryGetContext('heartwood');
+  if (w === undefined || w === null || (typeof w === 'string' && w.trim() === '')) return undefined;
+  const blad = () => new Error('Zły kontekst CDK "heartwood": oczekiwano JSON {"intUrl":"https://...","intApiArn":"arn:aws:execute-api:..."} (np. -c heartwood=\'{...}\').');
+  let o: unknown;
+  try { o = typeof w === 'string' ? JSON.parse(w) : w; } catch { throw blad(); }
+  const { intUrl, intApiArn } = (o ?? {}) as Record<string, unknown>;
+  if (typeof intUrl !== 'string' || intUrl.trim() === '' || typeof intApiArn !== 'string' || intApiArn.trim() === '') throw blad();
+  return { intUrl: intUrl.trim(), intApiArn: intApiArn.trim() };
+}
+
 /** `Nazwa <adres@x>` -> `adres@x` (tożsamość SES to sam adres). */
 const adresNadawcy = (nadawca: string) => /<([^>]+)>/.exec(nadawca)?.[1] ?? nadawca;
 
@@ -44,6 +71,7 @@ export class StosCogniFly extends Stack {
     const nadawca = kontekst(this, 'nadawca');
     const emailAlarmow = kontekst(this, 'emailAlarmow');
     const domenaSesRaw = this.node.tryGetContext('domenaSes');
+    const heartwood = kontekstHeartwood(this);
     const domenaSes = typeof domenaSesRaw === 'string' && domenaSesRaw.trim() !== '' ? domenaSesRaw.trim() : undefined;
 
     // --- Dane (odzwierciedla definicjaTabeli() z serwer/src/dane/tabela.ts) ---
@@ -55,6 +83,7 @@ export class StosCogniFly extends Stack {
       timeToLiveAttribute: 'wygasa',
       pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: true },
       removalPolicy: RemovalPolicy.RETAIN, // dane przeżywają usunięcie stosu
+      ...(heartwood ? { stream: StreamViewType.NEW_AND_OLD_IMAGES } : {}),
     });
     tabela.addGlobalSecondaryIndex({
       indexName: 'GSI1',
@@ -174,6 +203,42 @@ export class StosCogniFly extends Stack {
     }));
     przetwarzanie.node.addDependency(grupa);
 
+    // --- Heartwood (tylko z kontekstem `heartwood`):
+    //     praca -> rejestr, zdarzenia -> zadania ---
+    // Funkcje i kolejka Heartwood trafiają niżej do pętli alarmów.
+    const funkcjeHeartwood: Record<string, NodejsFunction> = {};
+    const kolejkiHeartwood: Record<string, Queue> = {};
+    if (heartwood) {
+      const env = { HEARTWOOD_INT_URL: heartwood.intUrl, COGNIFLY_TABELA: NAZWA_TABELI };
+      const praca = wspolne('HeartwoodPraca', 'heartwood/strumien.ts', env);
+      const zdarzenia = wspolne('HeartwoodZdarzenia', 'heartwood/zdarzenia.ts', { ...env, COGNIFLY_NADAWCA: nadawca });
+      const dlqHeartwood = new Queue(this, 'DlqHeartwood', {
+        queueName: `${PREFIKS}-heartwood-dlq`,
+        retentionPeriod: Duration.days(14),
+        enforceSSL: true,
+      });
+      Object.assign(funkcjeHeartwood, { HeartwoodPraca: praca, HeartwoodZdarzenia: zdarzenia });
+      kolejkiHeartwood.Heartwood = dlqHeartwood;
+      tabela.grantReadData(praca);
+      tabela.grantReadWriteData(zdarzenia);
+      zdarzenia.addToRolePolicy(odczytSekretow('discord'));
+      zdarzenia.addToRolePolicy(wysylkaSes);
+      praca.addToRolePolicy(new PolicyStatement({
+        actions: ['execute-api:Invoke'], resources: [`${heartwood.intApiArn}/*/*/int/*`],
+      }));
+      praca.addEventSource(new DynamoEventSource(tabela, {
+        startingPosition: StartingPosition.TRIM_HORIZON,
+        reportBatchItemFailures: true, retryAttempts: 10, bisectBatchOnError: true,
+        onFailure: new SqsDlq(dlqHeartwood),
+      }));
+      new Rule(this, 'RegulaHeartwood', {
+        ruleName: `${PREFIKS}-heartwood`,
+        eventBus: szyna,
+        eventPattern: { source: ['heartwood'], detailType: TYPY_HEARTWOOD },
+        targets: [new LambdaFunction(zdarzenia, { deadLetterQueue: dlqHeartwood, retryAttempts: 2 })],
+      });
+    }
+
     // --- Reguła szyny -> przetwarzanie ---
     new Rule(this, 'RegulaPrzetwarzania', {
       ruleName: `${PREFIKS}-przetwarzanie`,
@@ -260,7 +325,7 @@ export class StosCogniFly extends Stack {
     // --- Alarmy ---
     const alarmy = new Topic(this, 'Alarmy', { topicName: `${PREFIKS}-alarmy` });
     alarmy.addSubscription(new EmailSubscription(emailAlarmow));
-    for (const [nazwa, f] of Object.entries({ Webhook: webhook, Przetwarzanie: przetwarzanie, Eskalacja: eskalacja, Api: api, Dostarczenia: dostarczenia })) {
+    for (const [nazwa, f] of Object.entries({ Webhook: webhook, Przetwarzanie: przetwarzanie, Eskalacja: eskalacja, Api: api, Dostarczenia: dostarczenia, ...funkcjeHeartwood })) {
       new Alarm(this, `Alarm${nazwa}`, {
         alarmName: `${PREFIKS}-${nazwa.toLowerCase()}-bledy`,
         metric: f.metricErrors({ period: Duration.minutes(5), statistic: 'Sum' }),
@@ -271,7 +336,7 @@ export class StosCogniFly extends Stack {
       }).addAlarmAction(new SnsAction(alarmy));
     }
 
-    for (const [nazwa, q] of Object.entries({ Przetwarzanie: dlq, Eskalacja: dlqEskalacji })) {
+    for (const [nazwa, q] of Object.entries({ Przetwarzanie: dlq, Eskalacja: dlqEskalacji, ...kolejkiHeartwood })) {
       new Alarm(this, `AlarmDlq${nazwa}`, {
         alarmName: `${PREFIKS}-${nazwa.toLowerCase()}-dlq`,
         metric: q.metricApproximateNumberOfMessagesVisible({ period: Duration.minutes(5), statistic: 'Maximum' }),

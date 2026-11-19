@@ -1,13 +1,17 @@
 // Brain of the background window: owns config, session, polling,
 // notifications and the rpc handlers. Platform effects are injected
 // as ports, so the whole flow is unit-tested without Tauri.
-import { THREAD_PATTERN, type Task, type UserSettableState } from '@cognifly/wspolne/api';
+import { TASK_ID_PATTERN, THREAD_PATTERN, type Task, type UserSettableState } from '@cognifly/wspolne/api';
 import type { InboxView, Methods, Screen } from '../windows/protocol.js';
 import { ApiClient, type Membership } from './api.js';
 import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, type PendingLogin } from './cognito.js';
 import { isSafeFolder, loadConfig, saveChoices, type AppConfig, type UserChoices } from './config.js';
 import { claudeLink, threadLink } from './claude-link.js';
 import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
+import {
+  checkReply, DISABLED_INFO, filesView, forgetLocked, groupBySpace, hwError, isUnderRoot, lockedPaths, parseStatus, parseVersions,
+  rememberLocked, workIdFor, type FilesView, type HeartwoodPort, type HwInfo, type HwReply, type HwRequest, type HwStatus,
+} from './heartwood.js';
 import type { FetchFn } from './http.js';
 import { clearSeen, loadSeen, notificationBody, notificationTitle, pickNew, saveSeen, waitingTasks } from './notify.js';
 import type { Handler } from './rpc.js';
@@ -17,11 +21,18 @@ import type { KeyValueStore } from './storage.js';
 /** Poll interval (ms). */
 export const POLL_INTERVAL_MS = 60_000;
 
+/** Start refusals that will not change until the app changes. */
+const FINAL_START_CODES: readonly string[] = ['DISABLED', 'NOT_INSTALLED'];
+/** Longest accepted space or topic name (the daemon checks more). */
+const MAX_NAME = 200;
+
 /** Platform effects used by the controller. */
 export interface Ports {
   store: KeyValueStore;
   vault: Vault;
   fetch: FetchFn;
+  /** Heartwood daemon, its local API and the file picker. */
+  heartwood: HeartwoodPort;
   /** Shows one system notification. */
   notify(title: string, body: string): Promise<void>;
   /** Updates tray and inbox window with the latest view. */
@@ -47,6 +58,8 @@ export class Controller {
   private view: InboxView;
   /** Companies of the logged-in person (from `GET /ja`); null = not loaded. */
   private companies: Membership[] | null = null;
+  /** Company the daemon was started for; null = not started. */
+  private filesOrg: string | null = null;
 
   /**
    * Call: `new Controller(ports)`.
@@ -55,7 +68,10 @@ export class Controller {
    */
   constructor(private readonly ports: Ports) {
     this.config = loadConfig(ports.store);
-    this.view = { loggedIn: false, offline: false, email: null, osoba: null, tasks: [], updatedAt: null, workFolder: this.config.workFolder };
+    this.view = {
+      loggedIn: false, offline: false, email: null, osoba: null, tasks: [], updatedAt: null,
+      workFolder: this.config.workFolder, files: filesView(DISABLED_INFO, null),
+    };
     this.session = new SessionManager(ports.vault, (rt) => refreshTokens(this.cognito(), rt), ports.now);
   }
 
@@ -105,7 +121,7 @@ export class Controller {
    *
    * Call: `await controller.logout()` from the tray menu.
    * Expects: nothing.
-   * Output: none; view becomes logged out.
+   * Output: none; view becomes logged out and the daemon stops.
    */
   async logout(): Promise<void> {
     await this.session.logout();
@@ -113,6 +129,7 @@ export class Controller {
     this.pending = null;
     this.companies = null;
     this.update({ loggedIn: false, offline: false, email: null, osoba: null, tasks: [], updatedAt: null });
+    await this.stopFiles();
   }
 
   /**
@@ -178,6 +195,49 @@ export class Controller {
         await this.logout();
         return { ok: true };
       },
+      ...this.fileHandlers(),
+    };
+  }
+
+  /**
+   * Rpc handlers of the files feature.
+   *
+   * Call: spread into `handlers()`.
+   * Expects: params from the main window; paths are checked against
+   * the Heartwood root before reaching the daemon.
+   * Output: one handler per `files.*` / `task.*Files` method. Daemon
+   * refusals reject with their code (the UI shows `hwMessage`).
+   */
+  private fileHandlers(): Pick<Record<keyof Methods, Handler>, FileMethod> {
+    return {
+      'files.get': async () => this.view.files,
+      'files.refresh': () => this.refreshFiles(this.session.epoch()),
+      'files.history': async (p) => {
+        const path = await this.underRoot(text(p, 'path'));
+        const r = await this.fileAction({ cmd: 'history', path });
+        return { versions: parseVersions(r.versions), path };
+      },
+      'files.download': async (p) => {
+        const r = await this.fileAction({ cmd: 'download', path: await this.underRoot(text(p, 'path')), version: versionParam(p) });
+        if (typeof r.copy !== 'string') throw new AppError('BAD_RESPONSE');
+        return { copy: r.copy };
+      },
+      'files.restore': async (p) => {
+        await this.fileAction({ cmd: 'restore', path: await this.underRoot(text(p, 'path')), version: versionParam(p) });
+        return { ok: true };
+      },
+      'files.select': async (p) => {
+        await this.fileAction({ cmd: 'select', ...scopeParams(p) });
+        return { ok: true };
+      },
+      'files.unselect': async (p) => {
+        await this.fileAction({ cmd: 'unselect', ...scopeParams(p), yes: field(p, 'yes') === true });
+        return { ok: true };
+      },
+      'files.pickPath': () => this.pickPath(),
+      'task.lockFiles': async (p) => this.lockFiles(taskIdParam(p)),
+      'task.releaseFiles': async (p) => this.releaseFiles(taskIdParam(p)),
+      'task.lockedFiles': async (p) => ({ paths: lockedPaths(this.ports.store, taskIdParam(p)) }),
     };
   }
 
@@ -195,14 +255,267 @@ export class Controller {
     try {
       if (!this.companies) await this.loadIdentity();
       const tasks = await this.api().inbox();
-      if (this.session.epoch() !== epoch || !this.view.loggedIn) return this.view; // logged out meanwhile
+      if (!this.isCurrent(epoch)) return this.view; // logged out meanwhile
       const fresh = await this.announce(tasks);
       this.ports.log?.(`poll ok: tasks=${tasks.length} waiting=${waitingTasks(tasks, this.view.osoba).length} new=${fresh}`);
       this.update({ offline: false, tasks, updatedAt: new Date(this.time()).toISOString() });
     } catch (e) {
       await this.pollFailed(e);
     }
+    await this.syncFiles(epoch);
     return this.view;
+  }
+
+  /**
+   * Tells whether a session epoch is still the live, logged-in one.
+   *
+   * Call: `this.isCurrent(epoch)` after an await.
+   * Expects: an epoch read before the await.
+   * Output: false after a logout or a new login meanwhile.
+   */
+  private isCurrent(epoch: number): boolean {
+    return this.session.epoch() === epoch && this.view.loggedIn;
+  }
+
+  /**
+   * Keeps the daemon running for the company and reads its status.
+   *
+   * Call: `await this.syncFiles(epoch)` at the end of each poll.
+   * Expects: the epoch the poll started with.
+   * Output: none (never throws); nothing before the company is known
+   * (`GET /ja`); the daemon is (re)started when the company differs
+   * from the one it runs for.
+   */
+  private async syncFiles(epoch: number): Promise<void> {
+    if (!this.companies || !this.isCurrent(epoch)) return;
+    if (this.filesOrg !== this.config.company) await this.startFiles(epoch);
+    await this.refreshFiles(epoch);
+  }
+
+  /**
+   * Starts the daemon for the current company.
+   *
+   * Call: `await this.startFiles(epoch)` from `syncFiles`.
+   * Expects: a session (the daemon asks this app for tokens) and the
+   * epoch of the calling poll.
+   * Output: none; the company is remembered on success and on final
+   * refusals (`DISABLED`, `NOT_INSTALLED`), so others retry at the
+   * next poll — but only if the session and company are unchanged
+   * after the await. A start that ends after a logout is stopped
+   * again. Codes go to the log.
+   */
+  private async startFiles(epoch: number): Promise<void> {
+    const org = this.config.company;
+    let code: string | null = null;
+    try {
+      await this.ports.heartwood.start(this.config.heartwoodUrl, this.config.heartwoodWsUrl, org);
+    } catch (e) {
+      code = errorCode(hwError(e));
+      this.ports.log?.(`heartwood start: ${code}`);
+    }
+    if (!this.view.loggedIn) {
+      if (code === null) await this.stopDaemon();
+      return;
+    }
+    if (!this.isCurrent(epoch) || org !== this.config.company) return;
+    if (code === null || FINAL_START_CODES.includes(code)) this.filesOrg = org;
+  }
+
+  /**
+   * Stops the daemon and clears the files view.
+   *
+   * Call: `await this.stopFiles()` on logout, a revoked session or a
+   * company change.
+   * Expects: nothing.
+   * Output: none (never throws); the next poll of a live session
+   * starts it again; old status and counts are gone at once.
+   */
+  private async stopFiles(): Promise<void> {
+    this.filesOrg = null;
+    await this.stopDaemon();
+    this.update({ files: filesView(await this.hwInfo(), null) });
+  }
+
+  /**
+   * Asks the supervisor to stop the daemon.
+   *
+   * Call: `await this.stopDaemon()`.
+   * Expects: nothing.
+   * Output: none (never throws); failures go to the log.
+   */
+  private async stopDaemon(): Promise<void> {
+    await this.ports.heartwood.stop().catch((e: unknown) => this.ports.log?.(`heartwood stop: ${errorCode(hwError(e))}`));
+  }
+
+  /**
+   * Reads supervisor info and, when running, the daemon status.
+   *
+   * Call: `await this.refreshFiles(epoch)` from polls, rpc
+   * `files.refresh` and after each file action.
+   * Expects: the epoch read before the call.
+   * Output: the files view (never throws); unchanged when logged
+   * out; status `null` when the daemon does not run or fails.
+   */
+  private async refreshFiles(epoch: number): Promise<FilesView> {
+    if (!this.isCurrent(epoch)) return this.view.files;
+    const info = await this.hwInfo();
+    const status = info.state === 'running' ? await this.readStatus() : null;
+    if (this.isCurrent(epoch)) this.update({ files: filesView(info, status) });
+    return this.view.files;
+  }
+
+  /**
+   * Supervisor info.
+   *
+   * Call: `await this.hwInfo()`.
+   * Expects: nothing.
+   * Output: the info, or the last known one if the call fails.
+   */
+  private async hwInfo(): Promise<HwInfo> {
+    return this.ports.heartwood.info().catch(() => this.view.files.info);
+  }
+
+  /**
+   * Asks the daemon for its status.
+   *
+   * Call: `await this.readStatus()`.
+   * Expects: a running daemon.
+   * Output: the parsed status, or `null` on any failure (logged).
+   */
+  private async readStatus(): Promise<HwStatus | null> {
+    try {
+      return parseStatus(await this.hwCall({ cmd: 'status' }));
+    } catch (e) {
+      this.ports.log?.(`heartwood status: ${errorCode(e)}`);
+      return null;
+    }
+  }
+
+  /**
+   * One local API call with refusals turned into errors.
+   *
+   * Call: `await this.hwCall(request)`.
+   * Expects: a request built from checked params.
+   * Output: the `ok: true` reply.
+   * Throws: `AppError(code)` for transport failures and refusals.
+   */
+  private async hwCall(req: HwRequest): Promise<HwReply> {
+    let reply: HwReply;
+    try {
+      reply = await this.ports.heartwood.call(req);
+    } catch (e) {
+      throw hwError(e);
+    }
+    checkReply(reply);
+    return reply;
+  }
+
+  /**
+   * A file action followed by a status refresh.
+   *
+   * Call: `await this.fileAction(request)` from rpc handlers.
+   * Expects: a request built from checked params.
+   * Output: the reply; the files view refreshes in the background.
+   * Throws: like `hwCall`.
+   */
+  private async fileAction(req: HwRequest): Promise<HwReply> {
+    const reply = await this.hwCall(req);
+    void this.refreshFiles(this.session.epoch());
+    return reply;
+  }
+
+  /**
+   * Heartwood root of a usable files feature.
+   *
+   * Call: `await this.filesRoot()` before picking or checking paths.
+   * Expects: nothing.
+   * Output: the root folder.
+   * Throws: `AppError('DISABLED')` / `AppError('NOT_INSTALLED')`
+   * when files cannot work on this computer.
+   */
+  private async filesRoot(): Promise<string> {
+    const info = this.view.files.info.root ? this.view.files.info : await this.hwInfo();
+    if (info.state === 'disabled') throw new AppError('DISABLED');
+    if (info.state === 'not_installed') throw new AppError('NOT_INSTALLED');
+    return info.root;
+  }
+
+  /**
+   * Checks that a path from a window is inside the Heartwood root.
+   *
+   * Call: `await this.underRoot(path)`.
+   * Expects: any string.
+   * Output: the same path.
+   * Throws: `AppError('OUTSIDE')`, or the errors of `filesRoot`.
+   */
+  private async underRoot(path: string): Promise<string> {
+    if (!isUnderRoot(path, await this.filesRoot())) throw new AppError('OUTSIDE');
+    return path;
+  }
+
+  /**
+   * Lets the user pick files under the root.
+   *
+   * Call: `await this.pickUnderRoot()`.
+   * Expects: nothing.
+   * Output: the root and the picked paths (`[]` when cancelled).
+   * Throws: `AppError('OUTSIDE')` when any path is outside the root.
+   */
+  private async pickUnderRoot(): Promise<{ root: string; paths: string[] }> {
+    const root = await this.filesRoot();
+    const paths = await this.ports.heartwood.pickFiles(root);
+    if (!paths.every((p) => isUnderRoot(p, root))) throw new AppError('OUTSIDE');
+    return { root, paths };
+  }
+
+  /**
+   * Picks one file for its history.
+   *
+   * Call: rpc `files.pickPath`.
+   * Expects: nothing.
+   * Output: `{ path }` of the first picked file, `null` if cancelled.
+   */
+  private async pickPath(): Promise<{ path: string | null }> {
+    return { path: (await this.pickUnderRoot()).paths[0] ?? null };
+  }
+
+  /**
+   * Locks files the user picks for a task (D11).
+   *
+   * Call: rpc `task.lockFiles`.
+   * Expects: a checked task id.
+   * Output: `{ paths }` = all paths this computer holds for the task;
+   * one `lock` per space, each remembered once the daemon agreed.
+   * Throws: `OUTSIDE` before any call, or the daemon's code.
+   */
+  private async lockFiles(taskId: string): Promise<{ paths: string[] }> {
+    const { root, paths } = await this.pickUnderRoot();
+    for (const group of groupBySpace(paths, root)) {
+      await this.fileAction({ cmd: 'lock', workId: workIdFor(taskId), paths: group });
+      rememberLocked(this.ports.store, taskId, group);
+    }
+    return { paths: lockedPaths(this.ports.store, taskId) };
+  }
+
+  /**
+   * Releases the files this computer locked for a task (D11).
+   *
+   * Call: rpc `task.releaseFiles`.
+   * Expects: a checked task id.
+   * Output: `{ paths }` released; one `release` per space, each
+   * forgotten once the daemon agreed.
+   * Throws: the daemon's code (already released groups stay
+   * forgotten).
+   */
+  private async releaseFiles(taskId: string): Promise<{ paths: string[] }> {
+    const paths = lockedPaths(this.ports.store, taskId);
+    if (!paths.length) return { paths };
+    const root = await this.filesRoot();
+    for (const group of groupBySpace(paths, root)) {
+      await this.fileAction({ cmd: 'release', paths: group });
+      forgetLocked(this.ports.store, taskId, group);
+    }
+    return { paths };
   }
 
   /**
@@ -219,6 +532,7 @@ export class Controller {
     if (e instanceof LoginRequiredError) {
       clearSeen(this.ports.store);
       this.update({ loggedIn: false, offline: false, tasks: [] });
+      await this.stopFiles();
       await this.ports.showScreen('login');
       return;
     }
@@ -268,8 +582,9 @@ export class Controller {
    *
    * Call: rpc `config.setCompany`.
    * Expects: one of the companies from `GET /ja`.
-   * Output: `{ ok: true }`; tasks and notification memory reset and
-   * a poll for the new company starts.
+   * Output: `{ ok: true }`; tasks and notification memory reset, the
+   * old company's daemon stopped (its status cleared) and a poll for
+   * the new company starts (it starts the daemon again).
    * Throws: `AppError('BAD_COMPANY')` for any other value.
    */
   private async setCompany(company: string): Promise<{ ok: true }> {
@@ -278,6 +593,7 @@ export class Controller {
     this.applyChoices({ company });
     clearSeen(this.ports.store);
     this.update({ osoba: member.osoba, tasks: [] });
+    await this.stopFiles();
     void this.poll();
     return { ok: true };
   }
@@ -527,4 +843,64 @@ function optionalText(params: unknown, name: string): string | undefined {
 function text(params: unknown, name: string): string {
   const v = field(params, name);
   return typeof v === 'string' ? v : '';
+}
+
+/** Methods served by `fileHandlers`. */
+type FileMethod = Extract<keyof Methods, `files.${string}` | 'task.lockFiles' | 'task.releaseFiles' | 'task.lockedFiles'>;
+
+/**
+ * Reads a task id param.
+ *
+ * Call: `taskIdParam(params)`.
+ * Expects: anything as params.
+ * Output: the id.
+ * Throws: `AppError('BAD_TASK_ID')` unless it matches the pattern.
+ */
+function taskIdParam(params: unknown): string {
+  const id = text(params, 'id');
+  if (!TASK_ID_PATTERN.test(id)) throw new AppError('BAD_TASK_ID');
+  return id;
+}
+
+/**
+ * Reads a version number param.
+ *
+ * Call: `versionParam(params)`.
+ * Expects: anything as params.
+ * Output: the version (`seq`), an integer ≥ 0.
+ * Throws: `AppError('BAD_REQUEST')` otherwise.
+ */
+function versionParam(params: unknown): number {
+  const v = field(params, 'version');
+  if (!Number.isSafeInteger(v) || (v as number) < 0) throw new AppError('BAD_REQUEST');
+  return v as number;
+}
+
+/**
+ * Reads the space and optional topics of select/unselect.
+ *
+ * Call: `scopeParams(params)`.
+ * Expects: anything as params.
+ * Output: `{ space }` plus `topics` when given.
+ * Throws: `AppError('BAD_REQUEST')` for an empty or long space, or
+ * topics that are not a list of such names.
+ */
+function scopeParams(params: unknown): { space: string; topics?: string[] } {
+  const space = text(params, 'space');
+  const topics = field(params, 'topics');
+  if (!isName(space)) throw new AppError('BAD_REQUEST');
+  if (topics === undefined) return { space };
+  if (!Array.isArray(topics) || !topics.every(isName)) throw new AppError('BAD_REQUEST');
+  return { space, topics };
+}
+
+/**
+ * Checks a space or topic name before it reaches the daemon.
+ *
+ * Call: `isName(v)`.
+ * Expects: anything.
+ * Output: true for a non-empty string of at most `MAX_NAME` chars.
+ */
+function isName(v: unknown): v is string {
+  return typeof v === 'string' && v.length > 0 && v.length <= MAX_NAME;
 }

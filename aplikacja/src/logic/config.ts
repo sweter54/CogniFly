@@ -12,6 +12,10 @@ export interface AppConfig {
   company: string;
   /** Optional absolute folder for Claude Code sessions (`''` = none). */
   workFolder: string;
+  /** Heartwood server (https; `''` = files disabled, D10). */
+  heartwoodUrl: string;
+  /** Heartwood WebSocket (wss; `''` = files disabled, D10). */
+  heartwoodWsUrl: string;
 }
 
 /** Built-in connection (pilot: test account, eu-central-1). */
@@ -21,6 +25,8 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   region: 'eu-central-1',
   company: 'pilot',
   workFolder: '',
+  heartwoodUrl: '',
+  heartwoodWsUrl: '',
 });
 
 const STORE_KEY = 'cognifly.config';
@@ -38,9 +44,10 @@ export type ConfigCheck =
  *
  * Call: `validateConfig(input)` with form values or stored JSON.
  * Expects: anything; strings are trimmed.
- * Output: `{ ok: true, config }` with the API URL stripped of trailing
+ * Output: `{ ok: true, config }` with URLs stripped of trailing
  * slashes, or `{ ok: false, field }` naming the first invalid field.
  * Rules: API URL must be https without credentials/query/fragment;
+ * Heartwood URLs empty or likewise (https, and wss for the socket);
  * client id alphanumeric; region like `eu-central-1`; company
  * lowercase letters, digits and dashes (may be empty); work folder
  * empty or a safe absolute path (see `isSafeFolder`).
@@ -52,12 +59,16 @@ export function validateConfig(input: unknown): ConfigCheck {
     region: trimmedField(input, 'region'),
     company: trimmedField(input, 'company'),
     workFolder: trimmedField(input, 'workFolder').replace(/(.)\/+$/, '$1'),
+    heartwoodUrl: trimmedField(input, 'heartwoodUrl').replace(/\/+$/, ''),
+    heartwoodWsUrl: trimmedField(input, 'heartwoodWsUrl').replace(/\/+$/, ''),
   };
   if (!isSafeHttpsUrl(config.apiUrl)) return { ok: false, field: 'apiUrl' };
   if (!CLIENT_ID.test(config.clientId)) return { ok: false, field: 'clientId' };
   if (!REGION.test(config.region)) return { ok: false, field: 'region' };
   if (!COMPANY.test(config.company)) return { ok: false, field: 'company' };
   if (config.workFolder && !isSafeFolder(config.workFolder)) return { ok: false, field: 'workFolder' };
+  if (config.heartwoodUrl && !isSafeHttpsUrl(config.heartwoodUrl)) return { ok: false, field: 'heartwoodUrl' };
+  if (config.heartwoodWsUrl && !isSafeUrl(config.heartwoodWsUrl, 'wss:')) return { ok: false, field: 'heartwoodWsUrl' };
   return { ok: true, config };
 }
 
@@ -83,10 +94,22 @@ function trimmedField(input: unknown, name: keyof AppConfig): string {
  * query string or fragment.
  */
 export function isSafeHttpsUrl(url: string): boolean {
-  if (!/^https:\/\/\S+$/.test(url)) return false;
+  return isSafeUrl(url, 'https:');
+}
+
+/**
+ * Checks that a string is a plain base URL of one scheme.
+ *
+ * Call: `isSafeUrl(url, 'wss:')`.
+ * Expects: any string; a protocol like `https:` or `wss:`.
+ * Output: `true` only for parsable URLs of that protocol without
+ * user info, query string or fragment.
+ */
+function isSafeUrl(url: string, protocol: string): boolean {
+  if (!url.startsWith(`${protocol}//`) || /\s/.test(url)) return false;
   try {
     const u = new URL(url);
-    return u.protocol === 'https:' && !u.username && !u.password && !u.search && !u.hash;
+    return u.protocol === protocol && !!u.host && !u.username && !u.password && !u.search && !u.hash;
   } catch {
     return false;
   }

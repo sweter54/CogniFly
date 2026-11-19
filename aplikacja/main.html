@@ -11,6 +11,7 @@
       <strong class="brand">CogniFly</strong>
       <nav id="nav" hidden>
         <button type="button" class="tab" data-go="inbox">Skrzynka</button>
+        <button type="button" class="tab" data-go="files">Pliki</button>
         <button type="button" class="tab" data-go="settings">Ustawienia</button>
       </nav>
       <span class="spacer"></span>
@@ -124,6 +125,11 @@
                 <option value="zrobione">Zrobione</option>
               </select>
             </div>
+            <div class="files actions start" hidden>
+              <button type="button" class="lock secondary">Zablokuj pliki…</button>
+              <button type="button" class="release secondary" hidden>Zwolnij</button>
+            </div>
+            <ul class="locked" hidden></ul>
             <form class="reject-form actions" hidden>
               <input class="reason" maxlength="200" required placeholder="Powód odrzucenia" aria-label="Powód odrzucenia">
               <button type="submit">Odrzuć</button>
@@ -141,6 +147,36 @@
             </form>
           </li>
         </template>
+      </section>
+
+      <section id="screen-files" hidden>
+        <div class="bar">
+          <h1>Pliki</h1>
+          <div class="actions"><button type="button" id="files-refresh" class="secondary">Odśwież</button></div>
+        </div>
+        <p id="files-banner" class="banner" hidden></p>
+        <ul id="files-issues" class="rows"></ul>
+        <div id="files-body" hidden>
+          <h2>Przestrzenie</h2>
+          <ul id="files-spaces" class="rows"></ul>
+          <div class="actions start"><button type="button" id="space-open" class="secondary">Wybierz przestrzeń…</button></div>
+          <form id="space-form" class="card" novalidate hidden>
+            <label>Przestrzeń <input name="space" spellcheck="false" required /></label>
+            <label>Tematy (opcjonalnie, po przecinku) <input name="topics" spellcheck="false" /></label>
+            <div class="actions">
+              <button type="button" id="space-cancel" class="secondary">Anuluj</button>
+              <button type="submit">Wybierz</button>
+            </div>
+          </form>
+          <h2 id="conflicts-title">Konflikty</h2>
+          <ul id="files-conflicts" class="rows"></ul>
+          <h2 id="skipped-title">Pominięte pliki</h2>
+          <ul id="files-skipped" class="rows"></ul>
+          <h2>Historia wersji</h2>
+          <div class="actions start"><button type="button" id="history-pick" class="secondary">Wybierz plik…</button></div>
+          <p id="history-path" class="path"></p>
+          <ul id="files-versions" class="rows"></ul>
+        </div>
       </section>
 
       <section id="screen-settings" hidden>

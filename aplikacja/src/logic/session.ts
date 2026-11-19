@@ -13,8 +13,12 @@ export interface Vault {
 /** Stored session: tokens plus the e-mail shown in the UI. */
 export interface Session extends Tokens { email: string }
 
-/** Refresh when the access token expires within this window. */
-export const REFRESH_MARGIN_MS = 60_000;
+/**
+ * Refresh when the access token expires within this window. Five
+ * minutes, so that the background poll (every 60 s) keeps the stored
+ * token valid for the Heartwood `token_command` (needs >= 60 s).
+ */
+export const REFRESH_MARGIN_MS = 300_000;
 
 /** Cognito refresh errors that mean "log in again". */
 export const LOGOUT_ERRORS: readonly string[] = ['NotAuthorizedException', 'UserNotFoundException'];

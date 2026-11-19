@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-heartwood-start"
+description = "Enables the heartwood_start command without any pre-configured scope."
+commands.allow = ["heartwood_start"]
+
+[[permission]]
+identifier = "deny-heartwood-start"
+description = "Denies the heartwood_start command without any pre-configured scope."
+commands.deny = ["heartwood_start"]

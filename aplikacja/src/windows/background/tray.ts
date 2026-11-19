@@ -62,7 +62,7 @@ export async function createTray(actions: TrayActions): Promise<Tray> {
   return {
     async render(view) {
       loggedIn = view.loggedIn;
-      await icon.setTitle(trayTitle({ loggedIn: view.loggedIn, offline: view.offline, waiting: waitingCount(view) }));
+      await icon.setTitle(trayTitle({ loggedIn: view.loggedIn, offline: view.offline, waiting: waitingCount(view), ...view.files.counts }));
       await icon.setTooltip(tooltipFor(view));
       await status.setText(statusFor(view));
       await account.setText(view.loggedIn ? 'Wyloguj' : 'Zaloguj…');

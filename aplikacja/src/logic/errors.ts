@@ -68,6 +68,32 @@ export class AppError extends Error {
   }
 }
 
+/** A refusal of the Heartwood daemon with its Polish text. */
+export class RefusalError extends AppError {
+  /**
+   * Call: `new RefusalError(code, text)`.
+   * Expects: a stable code and the daemon's message, already made
+   * one-line and short (see `checkReply`), or `undefined`.
+   * Output: an `AppError` whose text may be shown to the user.
+   */
+  constructor(code: string, readonly text: string | undefined) {
+    super(code);
+    this.name = 'RefusalError';
+  }
+}
+
+/**
+ * Text that may travel to a window next to the error code.
+ *
+ * Call: as the `toDetail` of `rpcServer`.
+ * Expects: anything thrown by a handler.
+ * Output: the daemon's text of a `RefusalError`, else `undefined`
+ * (other errors never send messages).
+ */
+export function errorDetail(e: unknown): string | undefined {
+  return e instanceof RefusalError ? e.text : undefined;
+}
+
 /**
  * Maps any thrown value to a stable error code for the UI.
  *

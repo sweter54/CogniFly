@@ -2,7 +2,7 @@ import { beforeAll, afterAll, describe, expect, test } from 'vitest';
 import type { Regula } from '@cognifly/wspolne';
 import { ustawTabeleTestowa } from './pomocnik.js';
 import {
-  regulyFirmy, roleFirmy, kontaktOsoby, zapiszRegule, zapiszRole, zapiszKontakt, zapiszOsobe,
+  regulyFirmy, roleFirmy, kontaktOsoby, zapiszRegule, zapiszRole, zapiszKontakt, zapiszOsobe, subOsoby, adminiFirmy, rejestrOsob,
 } from '../../src/dane/konfiguracja.js';
 
 const tabela = ustawTabeleTestowa('cognifly-test-konfiguracja');
@@ -48,5 +48,29 @@ describe('konfiguracja', () => {
     await zapiszOsobe('f1', 'ola', { email: 'ola@x.pl', rola: 'admin' });
     expect((await regulyFirmy('f1')).length).toBeGreaterThan(0);
     expect(await roleFirmy('f1')).toHaveProperty('dev');
+  });
+  test('osoba: sub zapisany i odczytany, brak = null', async () => {
+    await zapiszOsobe('f1', 'michal', { email: 'm@x.pl', rola: 'admin', sub: 's1' });
+    await zapiszOsobe('f1', 'bezsub', { email: 'b@x.pl', rola: 'czlonek' });
+    expect(await subOsoby('f1', 'michal')).toBe('s1');
+    expect(await subOsoby('f1', 'bezsub')).toBeNull();
+    expect(await subOsoby('f1', 'nikt')).toBeNull();
+  });
+  test('rejestr osób: pełne rekordy firmy, posortowane, sub opcjonalny', async () => {
+    await zapiszOsobe('fr', 'zuza', { email: 'z@x.pl', rola: 'czlonek' });
+    await zapiszOsobe('fr', 'adam', { email: 'a@x.pl', rola: 'admin', sub: 's9' });
+    await zapiszOsobe('fq', 'obcy', { email: 'o@x.pl', rola: 'admin' });
+    expect(await rejestrOsob('fr')).toEqual([
+      { osoba: 'adam', email: 'a@x.pl', rola: 'admin', sub: 's9' },
+      { osoba: 'zuza', email: 'z@x.pl', rola: 'czlonek' },
+    ]);
+  });
+  test('admini: tylko osoby z rolą admin, posortowane', async () => {
+    await zapiszOsobe('fa', 'zuza', { email: 'z@x.pl', rola: 'admin' });
+    await zapiszOsobe('fa', 'adam', { email: 'a@x.pl', rola: 'admin', sub: 's2' });
+    await zapiszOsobe('fa', 'ewa', { email: 'e@x.pl', rola: 'czlonek' });
+    await zapiszOsobe('fb', 'obcy', { email: 'o@x.pl', rola: 'admin' });
+    expect(await adminiFirmy('fa')).toEqual(['adam', 'zuza']);
+    expect(await adminiFirmy('pusta')).toEqual([]);
   });
 });

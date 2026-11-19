@@ -23,6 +23,10 @@
     "allow-vault-read",
     "allow-vault-write",
     "allow-vault-delete",
+    "allow-heartwood-start",
+    "allow-heartwood-stop",
+    "allow-heartwood-info",
+    "allow-heartwood-call",
     {
       "identifier": "http:default",
       "allow": [

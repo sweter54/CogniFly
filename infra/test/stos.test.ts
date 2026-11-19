@@ -268,3 +268,75 @@ describe('stos CogniFly', () => {
     expect(f.Properties.Tags).toContainEqual({ Key: 'Project', Value: 'cognifly' });
   });
 });
+
+describe('stos z kontekstem heartwood', () => {
+  const HW = JSON.stringify({ intUrl: 'https://hw.example.com/prod', intApiArn: 'arn:aws:execute-api:eu-west-1:111122223333:abc123' });
+
+  test('bez kontekstu heartwood brak strumienia i funkcji Heartwood', () => {
+    t.resourceCountIs('AWS::Lambda::EventSourceMapping', 0);
+    expect(json.Resources[zasoby('AWS::DynamoDB::Table')[0]![0]].Properties.StreamSpecification).toBeUndefined();
+    expect(JSON.stringify(json)).not.toContain('Heartwood');
+  });
+
+  test('z kontekstem: strumień, mapowanie, reguła i uprawnienie Invoke', () => {
+    const t2 = Template.fromStack(zbuduj({ ...KONTEKST, heartwood: HW }));
+    t2.hasResourceProperties('AWS::DynamoDB::Table', { StreamSpecification: { StreamViewType: 'NEW_AND_OLD_IMAGES' } });
+    t2.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+      FunctionName: { Ref: Match.stringLikeRegexp('HeartwoodPraca') },
+      FunctionResponseTypes: ['ReportBatchItemFailures'], MaximumRetryAttempts: 10, BisectBatchOnFunctionError: true,
+    });
+    t2.hasResourceProperties('AWS::Events::Rule', {
+      EventPattern: {
+        source: ['heartwood'],
+        'detail-type': ['lock.release_requested', 'change.rejected', 'lock.broken', 'quota.near', 'quota.exceeded'],
+      },
+    });
+    t2.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({
+        Action: 'execute-api:Invoke', Resource: 'arn:aws:execute-api:eu-west-1:111122223333:abc123/*/*/int/*',
+      })]) },
+    });
+    for (const n of ['HeartwoodPraca', 'HeartwoodZdarzenia']) {
+      t2.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: `cognifly-test-${n.toLowerCase()}`,
+        Environment: { Variables: Match.objectLike({ HEARTWOOD_INT_URL: 'https://hw.example.com/prod' }) },
+      });
+    }
+  });
+
+  test('z kontekstem: DLQ strumienia i reguły, alarmy błędów i DLQ', () => {
+    const t2 = Template.fromStack(zbuduj({ ...KONTEKST, heartwood: HW }));
+    const j2 = t2.toJSON();
+    const [idQ] = Object.entries<any>(j2.Resources)
+      .find(([id, r]) => r.Type === 'AWS::SQS::Queue' && id.includes('Heartwood'))!;
+    t2.hasResourceProperties('AWS::SQS::Queue', {
+      QueueName: 'cognifly-test-heartwood-dlq', MessageRetentionPeriod: 14 * 24 * 3600,
+    });
+    t2.hasResourceProperties('AWS::SQS::QueuePolicy', {
+      Queues: [{ Ref: idQ }],
+      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({
+        Effect: 'Deny', Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+      })]) },
+    });
+    t2.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+      FunctionName: { Ref: Match.stringLikeRegexp('HeartwoodPraca') },
+      DestinationConfig: { OnFailure: { Destination: { 'Fn::GetAtt': [idQ, 'Arn'] } } },
+    });
+    t2.hasResourceProperties('AWS::Events::Rule', {
+      EventPattern: Match.objectLike({ source: ['heartwood'] }),
+      Targets: [Match.objectLike({
+        Arn: { 'Fn::GetAtt': [Match.stringLikeRegexp('HeartwoodZdarzenia'), 'Arn'] },
+        DeadLetterConfig: { Arn: { 'Fn::GetAtt': [idQ, 'Arn'] } },
+      })],
+    });
+    for (const n of ['heartwoodpraca-bledy', 'heartwoodzdarzenia-bledy', 'heartwood-dlq']) {
+      t2.hasResourceProperties('AWS::CloudWatch::Alarm', { AlarmName: `cognifly-test-${n}` });
+    }
+    t2.resourceCountIs('AWS::CloudWatch::Alarm', 10);
+  });
+
+  test('zły kontekst heartwood -> czytelny błąd', () => {
+    expect(() => zbuduj({ ...KONTEKST, heartwood: '{nie json' })).toThrow(/"heartwood"/);
+    expect(() => zbuduj({ ...KONTEKST, heartwood: '{"intUrl":"https://x"}' })).toThrow(/intApiArn/);
+  });
+});

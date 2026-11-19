@@ -69,3 +69,13 @@ fieldset { border: 1px solid var(--line); border-radius: 6px; display: grid; gap
 fieldset label { display: flex; gap: 8px; align-items: center; font-weight: 400; }
 .reject-form, .fix-form, .accept-form { margin-top: 8px; }
 .task form .reason { flex: 1; min-width: 0; }
+.banner { margin: 0 0 12px; padding: 8px 12px; border-radius: 6px; background: color-mix(in srgb, #d97706 15%, transparent); color: CanvasText; }
+.rows { list-style: none; padding: 0; margin: 0 0 8px; display: grid; gap: 6px; }
+.rows li { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; }
+.rows li button { padding: 3px 10px; font-size: 12px; }
+.rows li button:first-of-type { margin-left: auto; }
+.rows .state { color: var(--muted); }
+.path { overflow-wrap: anywhere; }
+#history-path { margin: 8px 0 6px; color: var(--muted); }
+.task .files { margin-top: 6px; }
+.task .locked { margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
