@@ -10,10 +10,10 @@ const ID = 'zad_0123456789ab';
 const task = (over: object = {}) => ({ id: ID, firma: 'pilot', zdarzenieId: 'evt_1', kandydaci: ['michal'], stan: 'nowe', utworzono: '2026-11-16T10:00:00Z', opis: 'Review PR #1', ...over });
 
 function setup(script: Scripted[]) {
-  const vault = memoryVault(JSON.stringify({ accessToken: 'A1', refreshToken: 'R1', expiresAt: NOW + 3_600_000, email: 'a@b.pl' }));
+  const vault = memoryVault(JSON.stringify({ accessToken: 'A1', refreshToken: 'R1', expiresAt: NOW + 3_600_000, email: 'a@b.pl', clientId: DEFAULT_CONFIG.clientId }));
   const refresher = vi.fn(async () => ({ accessToken: 'A2', refreshToken: 'R1', expiresAt: NOW + 3_600_000 }));
   const f = scriptedFetch(script);
-  const api = new ApiClient(DEFAULT_CONFIG, new SessionManager(vault, refresher, () => NOW), f.fetch);
+  const api = new ApiClient(DEFAULT_CONFIG, new SessionManager(vault, refresher, DEFAULT_CONFIG.clientId, () => NOW), f.fetch);
   return { api, calls: f.calls, refresher, vault };
 }
 

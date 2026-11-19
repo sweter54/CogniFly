@@ -21,11 +21,11 @@ export interface AppConfig {
 /** Built-in connection (pilot: test account, eu-central-1). */
 export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   apiUrl: 'https://td5k44easl.execute-api.eu-central-1.amazonaws.com',
-  clientId: '67b7re8ou041svoosk3ukotqrq',
+  clientId: '130crcifqe1l4uggfap3p7kiml',
   region: 'eu-central-1',
   company: 'pilot',
   workFolder: '',
-  // Heartwood test (stack heartwood-test, Heartwood repo); same pool.
+  // Heartwood test (stack heartwood-test, Heartwood repo); same Platforma pool.
   heartwoodUrl: 'https://eohqtq0t3j.execute-api.eu-central-1.amazonaws.com',
   heartwoodWsUrl: 'wss://s0ulscfugh.execute-api.eu-central-1.amazonaws.com/prod',
 });

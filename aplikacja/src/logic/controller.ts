@@ -81,7 +81,7 @@ export class Controller {
       loggedIn: false, offline: false, email: null, osoba: null, tasks: [], updatedAt: null,
       workFolder: this.config.workFolder, files: filesView(DISABLED_INFO, null),
     };
-    this.session = new SessionManager(ports.vault, (rt) => refreshTokens(this.cognito(), rt), ports.now);
+    this.session = new SessionManager(ports.vault, (rt) => refreshTokens(this.cognito(), rt), this.config.clientId, ports.now);
   }
 
   /**

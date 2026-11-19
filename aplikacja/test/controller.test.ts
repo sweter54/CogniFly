@@ -13,12 +13,12 @@ const NOW = 50_000_000;
 const id = (n: number) => `zad_${String(n).padStart(12, '0')}`;
 const task = (n: number, stan = 'nowe') => ({ id: id(n), firma: 'pilot', zdarzenieId: 'e', kandydaci: ['michal'], stan, utworzono: '', opis: `Review PR #${n}` });
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
-const goodSession = JSON.stringify({ accessToken: 'A', refreshToken: 'R', expiresAt: NOW + 3_600_000, email: 'm@x.pl' });
+const goodSession = JSON.stringify({ accessToken: 'A', refreshToken: 'R', expiresAt: NOW + 3_600_000, email: 'm@x.pl', clientId: DEFAULT_CONFIG.clientId });
 
 const ROOT = '/Users/m/Heartwood';
 
 /** Stored session whose access token carries `sub`. */
-const sessionOf = (sub: string) => JSON.stringify({ accessToken: jwt({ sub }), refreshToken: 'R', expiresAt: NOW + 3_600_000, email: 'm@x.pl' });
+const sessionOf = (sub: string) => JSON.stringify({ accessToken: jwt({ sub }), refreshToken: 'R', expiresAt: NOW + 3_600_000, email: 'm@x.pl', clientId: DEFAULT_CONFIG.clientId });
 /** One lock row of a `work-files` reply. */
 const LOCK_W1 = { space: 'ws:w1', path: 'a.docx', folder: false, by: 'u-me', at: '2026-11-19T10:00:00Z', workId: `cognifly:${id(7)}`, writer: 'u-me', localPath: null };
 /** One version row of a `work-files` reply. */
@@ -147,12 +147,12 @@ describe('Controller', () => {
     expect(await h['login.sendCode']!({ email: 'm@x.pl' })).toEqual({ email: 'm@x.pl' });
     await expect(h['login.confirm']!({ code: '000000' })).rejects.toMatchObject({ code: 'WRONG_CODE' });
     expect(await h['login.confirm']!({ code: '123456' })).toEqual({ email: 'm@x.pl' });
-    expect(JSON.parse((await ports.vault.read())!)).toMatchObject({ accessToken: 'A', email: 'm@x.pl' });
+    expect(JSON.parse((await ports.vault.read())!)).toMatchObject({ accessToken: 'A', email: 'm@x.pl', clientId: DEFAULT_CONFIG.clientId });
     expect(c.current().loggedIn).toBe(true);
   });
 
   it('a revoked session switches to the login screen and clears the vault', async () => {
-    const { ports } = setup({ session: JSON.stringify({ accessToken: 'A', refreshToken: 'R', expiresAt: NOW, email: 'm@x.pl' }) });
+    const { ports } = setup({ session: JSON.stringify({ accessToken: 'A', refreshToken: 'R', expiresAt: NOW, email: 'm@x.pl', clientId: DEFAULT_CONFIG.clientId }) });
     const revoked: FetchFn = vi.fn(async (url: string) => json(url.includes('cognito') ? 400 : 401, { __type: 'NotAuthorizedException' }));
     const c = new Controller({ ...ports, fetch: revoked });
     expect((await c.start()).loggedIn).toBe(false);
@@ -225,7 +225,7 @@ describe('Controller', () => {
     const { ports } = setup({ inbox: [task(1)] });
     ports.store.setItem('cognifly.seen', JSON.stringify(['x#nowe']));
     const revoked: FetchFn = vi.fn(async (url: string) => json(url.includes('cognito') ? 400 : 401, { __type: 'NotAuthorizedException' }));
-    const c = new Controller({ ...ports, vault: memoryVault(JSON.stringify({ accessToken: 'A', refreshToken: 'R', expiresAt: NOW, email: 'm@x.pl' })), fetch: revoked });
+    const c = new Controller({ ...ports, vault: memoryVault(JSON.stringify({ accessToken: 'A', refreshToken: 'R', expiresAt: NOW, email: 'm@x.pl', clientId: DEFAULT_CONFIG.clientId })), fetch: revoked });
     await c.start();
     expect(ports.store.getItem('cognifly.seen')).toBeNull();
   });
