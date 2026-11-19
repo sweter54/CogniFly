@@ -205,9 +205,9 @@ niej zadań) i woła `adopt` z `workId` = `cognifly:<id>` oraz `taskFolder`:
 - nazwę buduje `taskFolderName`: opis w NFC bez `/\:*?"<>|` i znaków
   sterujących, spacje zwinięte, bez wiodących `.`, `~`, `$`, do 60 znaków; bez
   opisu zostaje samo `(<id>)`;
-- zastrzeżone nazwy Windows (con, prn, aux, nul, com1–9, lpt1–9) liczą się,
-  gdy opis (część przed pierwszą kropką) je zawiera — dostają prefiks `_`;
-  samo `aux` zostaje (staje się `aux (zad_…)`);
+- zastrzeżone nazwy Windows (con, prn, aux, nul, com1–9, lpt1–9): gdy opis
+  zawiera kropkę, a jego część przed pierwszą kropką to taka nazwa (np.
+  `con.txt`), opis dostaje prefiks `_`; samo `aux` zostaje (`aux (zad_…)`);
 - `NOT_SELECTED` (temat `Zadania` niewybrany na tym komputerze) daje
   podpowiedź „wybierz go w Przestrzeniach” (`adoptErrorText`).
 
