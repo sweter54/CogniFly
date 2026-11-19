@@ -1,5 +1,5 @@
 import type { Zdarzenie } from '@cognifly/wspolne';
-import type { EventSummary } from '@cognifly/wspolne/api';
+import type { EventSummary, Task } from '@cognifly/wspolne/api';
 import { zdarzenieZadania } from '../dane/historia.js';
 import { LOGIN_GITHUB, osobaPoLoginie, osobyFirmy } from '../dane/konfiguracja.js';
 import { doAkceptacji, odrzuc as odrzucZadanie, rozstrzygnij, pobierzZadanie, przekaz as przekazZadanie, ustawStan, usunOdrzucone, wez, type StanZadania, type WynikAkceptacji, type WynikOdrzuc } from '../dane/kolejka.js';
@@ -37,11 +37,24 @@ export function odchudzZdarzenie(z: Zdarzenie): EventSummary {
   return { id: z.id, czas: z.czas, zrodlo: z.zrodlo, typ: z.typ, opis: z.opis, podmiot, wymagaPracy: z.wymagaPracy };
 }
 
-/** GET /zadania/{id}: zadanie i jego zdarzenie — tylko dla kandydata lub właściciela (inaczej 403). */
+/**
+ * Tells whether a person takes part in a task.
+ *
+ * Call: `jestUczestnikiem(zadanie, osoba)`.
+ * Expects: a task and a person id of its company.
+ * Output: true for a candidate, the owner or the acceptor.
+ */
+export function jestUczestnikiem(
+  z: Pick<Task, 'kandydaci' | 'wlasciciel' | 'akceptujacy'>, osoba: string,
+): boolean {
+  return z.kandydaci.includes(osoba) || z.wlasciciel === osoba || z.akceptujacy === osoba;
+}
+
+/** GET /zadania/{id}: zadanie i jego zdarzenie — tylko dla uczestnika (inaczej 403). */
 export async function szczegoly(k: Kontekst, id: string | undefined): Promise<Odpowiedz> {
   const zadanie = await pobierzZadanie(k.firma, sprawdzId(id));
   if (!zadanie) throw new HttpBlad(404, 'NIE_ZNALEZIONO');
-  if (!zadanie.kandydaci.includes(k.osoba) && zadanie.wlasciciel !== k.osoba) throw new HttpBlad(403, 'BRAK_DOSTEPU');
+  if (!jestUczestnikiem(zadanie, k.osoba)) throw new HttpBlad(403, 'BRAK_DOSTEPU');
   const z = await zdarzenieZadania(k.firma, zadanie.zdarzenieId, zadanie.utworzono);
   return { status: 200, body: { zadanie, zdarzenie: z ? odchudzZdarzenie(z) : null } };
 }

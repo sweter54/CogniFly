@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { ustawTabeleTestowa } from '../dane/pomocnik.js';
 import { zapiszTozsamosc } from '../../src/dane/konfiguracja.js';
-import { utworzZadanie, wez } from '../../src/dane/kolejka.js';
+import { doAkceptacji, utworzZadanie, wez } from '../../src/dane/kolejka.js';
+import { jestUczestnikiem } from '../../src/api/zadania.js';
 import { pliki } from '../../src/api/pliki.js';
 import { handler } from '../../src/api/index.js';
 import type { IntClient, WorkFilesResponse } from '../../src/heartwood/klient.js';
@@ -73,9 +74,28 @@ describe('GET /zadania/{id}/pliki', () => {
   test('the acceptor has access', async () => {
     const z = await utworzZadanie('f1', 'evt_000000000000000000000002', ['ania'], { opis: 'Y' });
     await wez('f1', z.id, 'ania');
-    const { doAkceptacji } = await import('../../src/dane/kolejka.js');
     await doAkceptacji('f1', z.id, 'ania', 'celina');
     await expect(pliki(kto('celina'), z.id, klient(odp()))).resolves.toMatchObject({ status: 200 });
+  });
+
+  test('shared rule: acceptor outside candidates counts, a stranger does not', () => {
+    const z = { kandydaci: ['ania'], wlasciciel: 'ania', akceptujacy: 'celina' };
+    expect(jestUczestnikiem(z, 'celina')).toBe(true);
+    expect(jestUczestnikiem(z, 'ania')).toBe(true);
+    expect(jestUczestnikiem({ ...z, wlasciciel: undefined }, 'bartek')).toBe(false);
+  });
+
+  test('GET /zadania/{id}: acceptor 200, non-participant 403 (as in pliki)', async () => {
+    const z = await utworzZadanie('f1', 'evt_000000000000000000000003', ['ania'], { opis: 'Z' });
+    await wez('f1', z.id, 'ania');
+    await doAkceptacji('f1', z.id, 'ania', 'celina');
+    const get = (sub: string) => handler({
+      routeKey: 'GET /zadania/{id}', headers: {}, pathParameters: { id: z.id },
+      requestContext: { authorizer: { jwt: { claims: { sub } } } },
+    });
+    expect((await get('sub-celina')).statusCode).toBe(200);
+    expect((await get('sub-obcy')).statusCode).toBe(403);
+    await expect(pliki(kto('obcy'), z.id, klient(odp()))).rejects.toMatchObject({ status: 403 });
   });
 
   test('unknown or malformed id -> 404, no client call', async () => {

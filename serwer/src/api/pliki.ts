@@ -3,7 +3,7 @@ import { pobierzZadanie } from '../dane/kolejka.js';
 import { intClient, type IntClient } from '../heartwood/klient.js';
 import { workIdOf } from '../heartwood/praca.js';
 import { HttpBlad, type Kontekst, type Odpowiedz } from './kontekst.js';
-import { sprawdzId } from './zadania.js';
+import { jestUczestnikiem, sprawdzId } from './zadania.js';
 
 /**
  * Builds the Heartwood client from the environment.
@@ -61,9 +61,7 @@ export async function pliki(
 ): Promise<Odpowiedz> {
   const zadanie = await pobierzZadanie(k.firma, sprawdzId(id));
   if (!zadanie) throw new HttpBlad(404, 'NIE_ZNALEZIONO');
-  const swoje = zadanie.kandydaci.includes(k.osoba)
-    || zadanie.wlasciciel === k.osoba || zadanie.akceptujacy === k.osoba;
-  if (!swoje) throw new HttpBlad(403, 'BRAK_DOSTEPU');
+  if (!jestUczestnikiem(zadanie, k.osoba)) throw new HttpBlad(403, 'BRAK_DOSTEPU');
   if (!klient) throw new HttpBlad(503, 'PLIKI_WYLACZONE');
   const r = await klient.getWorkFiles(k.firma, workIdOf(zadanie.id));
   const osoba = resolver(k.firma);

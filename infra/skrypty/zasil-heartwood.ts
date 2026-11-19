@@ -10,7 +10,8 @@
  *   --firma <id>             company id (required)
  *   --pula <id>              Cognito user pool id (required)
  *   --int-url <url>          Heartwood API base url (required)
- *   --tematy A,B             topics (default `Dokumenty`; `Zadania` always)
+ *   --tematy A,B             topics (default `Dokumenty`)
+ *                            `Zadania` is always added
  *   --region <r>             SigV4 region of the API (default eu-central-1)
  *   --wykonaj                really call Cognito, DynamoDB and Heartwood
  *
@@ -68,7 +69,8 @@ export interface Zaleznosci {
  * Call: `planZasilenia(osoby, { firma, tematy })`.
  * Expects: people of the company (`sub` optional), topic names.
  * Output: steps in order: org, per person [lookup, person], workspace,
- *   topics (`Zadania` is always added), grants (`admin` for admins, `write` otherwise).
+ *   topics (`Zadania` is always added), grants (`admin` for
+ *   admins, `write` otherwise).
  */
 export function planZasilenia(osoby: OsobaRejestru[], o: OpcjePlanu): Krok[] {
   const org = o.firma;

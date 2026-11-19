@@ -316,7 +316,8 @@ export class StosCogniFly extends Stack {
     });
     const apiIntegracja = new HttpLambdaIntegration('ApiIntegracja', api);
     for (const [metoda, sciezka] of [
-      [HttpMethod.GET, '/zdarzenia'], [HttpMethod.GET, '/skrzynka'], [HttpMethod.GET, '/zadania/{id}'], [HttpMethod.GET, '/zadania/{id}/pliki'],
+      [HttpMethod.GET, '/zdarzenia'], [HttpMethod.GET, '/skrzynka'], [HttpMethod.GET, '/zadania/{id}'],
+      [HttpMethod.GET, '/zadania/{id}/pliki'],
       [HttpMethod.POST, '/zadania/{id}/biore'], [HttpMethod.POST, '/zadania/{id}/przekaz'], [HttpMethod.POST, '/zadania/{id}/stan'],
       [HttpMethod.POST, '/zadania/{id}/odrzuc'], [HttpMethod.POST, '/zadania/{id}/usun'], [HttpMethod.POST, '/zadania/{id}/watek'],
       [HttpMethod.POST, '/zadania/{id}/akceptuj'], [HttpMethod.POST, '/zadania/{id}/do-poprawy'],
