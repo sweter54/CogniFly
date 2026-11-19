@@ -132,6 +132,14 @@ describe('person registry as copy of Identity', () => {
     expect(await activeSubs(f)).toEqual(['s-am-rm']);
     expect(await tozsamosc('s-am-rm')).toEqual({ [f]: 'a' });
   });
+  test('applyMember_role_change_does_not_resurrect_removed_person', async () => {
+    const f = 'am-noresurrect';
+    await applyMember(f, { sub: 's-nr', email: 'a@x.pl', role: 'member' }, T1);
+    await removeMember(f, 's-nr', T2);
+    expect(await applyMember(f, { sub: 's-nr', role: 'admin' }, T3)).toBe('skipped');
+    expect(await rejestrOsob(f)).toEqual([]);
+    expect(await activeSubs(f)).toEqual([]);
+  });
   test('personIdFor_rules', () => {
     expect(personIdFor('a.b+c@x', new Set())).toBe('a-b-c');
     expect(personIdFor('--@x', new Set())).toBe('osoba');

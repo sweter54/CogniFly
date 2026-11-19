@@ -265,7 +265,7 @@ async function ensureContact(firma: string, osoba: string, email: string): Promi
  * Input: company, member (no email = role change of a known sub only),
  * ISO 8601 event time `at`.
  * Output: 'added' (new person), 'updated', or 'skipped' (older than the
- * stored `tozsamoscAt`, or unknown sub without e-mail).
+ * stored `tozsamoscAt`, or without e-mail for an unknown or removed sub).
  * Side effects: sets the person's sub, role, e-mail, `tozsamoscAt`,
  * clears `usunieta`, moves the `PROFIL` entry on sub change, creates a
  * missing contact. Throws on DynamoDB errors.
@@ -274,11 +274,11 @@ export async function applyMember(firma: string, m: Member, at: string): Promise
   const records = await wszystkie(firma, 'OSOBA#');
   const found = findPerson(records, m);
   if (!found && m.email === undefined) return 'skipped';
-  if (found && isStale(at, found.tozsamoscAt)) return 'skipped';
+  if (found && (isStale(at, found.tozsamoscAt) || (m.email === undefined && found.usunieta !== undefined))) return 'skipped';
   const osoba = found ? personOf(found) : personIdFor(m.email!, new Set(records.map(personOf)));
   const email = m.email ?? (found!.email as string);
-  await patchPerson(firma, osoba, { email, rola: roleOf(m.role), sub: m.sub, tozsamoscAt: at }, ['usunieta']);
   if (typeof found?.sub === 'string' && found.sub !== m.sub) await dropProfileEntry(found.sub, firma);
+  await patchPerson(firma, osoba, { email, rola: roleOf(m.role), sub: m.sub, tozsamoscAt: at }, ['usunieta']);
   await zapiszTozsamosc(m.sub, firma, osoba);
   await ensureContact(firma, osoba, email);
   return found ? 'updated' : 'added';
