@@ -5,7 +5,7 @@ import {
   fileErrorText, folderCrumbs, lockableTasks, spaceChoices, taskRefs, treeViewModel, visibleRows, type TreeRow,
 } from '../../logic/files-view.js';
 import type { FilesView, HwBrowse } from '../../logic/heartwood.js';
-import type { InboxView } from '../protocol.js';
+import type { InboxView, Methods } from '../protocol.js';
 import { button, byId, DAEMON_WAIT_MS, el, messageFor, row, runFileAction, setStatus, type Call } from '../ui.js';
 
 /** Handle returned by `mountTree`. */
@@ -180,7 +180,8 @@ export function mountTree(call: Call, showHistory: ShowHistory): SpaceTree {
    * "Zablokuj do zadania…": shows the user's tasks to pick from.
    * Call: `lockButton(row, level)`. Expects: a free entry.
    * Output: the button; picking a task locks the entry (a folder
-   * as a folder lock) and reads the level again.
+   * as a folder lock) and reads the level again; the select is
+   * disabled meanwhile and a failure puts the button back.
    */
   function lockButton(r: TreeRow, b: HwBrowse): HTMLButtonElement {
     const lock = button('Zablokuj do zadania…', 'secondary');
@@ -191,18 +192,34 @@ export function mountTree(call: Call, showHistory: ShowHistory): SpaceTree {
       pick.setAttribute('aria-label', 'Zadanie');
       pick.append(new Option('Wybierz zadanie…', ''), ...tasks.map((t) => new Option(t.title, t.id)));
       pick.addEventListener('change', () => {
-        if (!pick.value) return;
-        const taskId = pick.value;
-        void runFileAction(lock, async () => {
-          await call('files.lockFor', { taskId, space: b.space, path: r.path, ...(r.folder ? { folder: true } : {}) }, DAEMON_WAIT_MS);
-          load(false);
-          return { text: 'Zablokowano do zadania.', kind: 'ok' };
-        });
+        if (pick.value) void lockFor(pick, lock, { taskId: pick.value, space: b.space, path: r.path, ...(r.folder ? { folder: true } : {}) });
       });
       lock.replaceWith(pick);
       pick.focus();
     });
     return lock;
+  }
+
+  /**
+   * Locks an entry for the picked task.
+   * Call: `await lockFor(select, button, params)`.
+   * Expects: the task select shown in place of `button`.
+   * Output: none; the select is disabled during the call, then the
+   * button comes back (the periodic refresh resumes); success reads
+   * the level again, a failure shows why and redraws the level.
+   */
+  async function lockFor(pick: HTMLSelectElement, lock: HTMLButtonElement, params: Methods['files.lockFor']['params']): Promise<void> {
+    pick.disabled = true;
+    try {
+      await call('files.lockFor', params, DAEMON_WAIT_MS);
+      setStatus('Zablokowano do zadania.', 'ok');
+      pick.replaceWith(lock);
+      load(false);
+    } catch (e) {
+      setStatus(fileErrorText(e), 'error');
+      pick.replaceWith(lock);
+      draw(true);
+    }
   }
 
   /**

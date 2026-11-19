@@ -156,7 +156,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
   TIMEOUT: 'Heartwood nie odpowiada.',
   OUTSIDE: 'Można wybrać tylko pliki z folderu Heartwood.',
   NOT_LOCAL: 'Tej przestrzeni nie ma na tym komputerze.',
-  OPEN_FAILED: 'Nie udało się otworzyć folderu w Finderze.',
+  OPEN_FAILED: 'Nie udało się pokazać folderu w Finderze.',
 };
 
 /**

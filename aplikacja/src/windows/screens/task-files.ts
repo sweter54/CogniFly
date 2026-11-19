@@ -16,6 +16,8 @@ const shown = new Map<string, TaskFilesModel>();
 const openVersions = new Set<string>();
 /** Number of the newest `task.files` request per task. */
 const requests = new Map<string, number>();
+/** Tasks whose newest `task.files` request has not answered yet. */
+const pending = new Set<string>();
 /** Timer of the periodic refresh (started with the first section). */
 let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -40,14 +42,18 @@ function taskItem(taskId: string): HTMLElement | undefined {
 /**
  * Reads the task's files and draws them where the task is shown.
  *
- * Call: `reload(call, id)` on opening, after actions and by timer.
+ * Call: `reload(call, id)` on opening and after actions;
+ * `reload(call, id, true)` from the timer.
  * Expects: a task id.
- * Output: none; a reply for another task or older than the newest
- * request is dropped; a failure shows its text in the section.
+ * Output: none; the timer skips a task whose request is still
+ * pending (no pile-up); a reply for another task or older than the
+ * newest request is dropped; a failure shows its text.
  */
-function reload(call: Call, taskId: string): void {
+function reload(call: Call, taskId: string, byTimer = false): void {
+  if (byTimer && pending.has(taskId)) return;
   const mine = (requests.get(taskId) ?? 0) + 1;
   requests.set(taskId, mine);
+  pending.add(taskId);
   call('task.files', { id: taskId }, DAEMON_WAIT_MS).then((r) => {
     if (r.id !== taskId || requests.get(taskId) !== mine) return;
     const model = taskFilesModel(r.files, r.me);
@@ -57,6 +63,8 @@ function reload(call: Call, taskId: string): void {
   }).catch((e) => {
     const li = taskItem(taskId);
     if (requests.get(taskId) === mine && li) showError(li, fileErrorText(e));
+  }).finally(() => {
+    if (requests.get(taskId) === mine) pending.delete(taskId);
   });
 }
 
@@ -80,7 +88,7 @@ function refreshOpen(call: Call): void {
   if (document.hidden) return;
   for (const taskId of openTasks) {
     const li = taskItem(taskId);
-    if (li && !li.closest('[hidden]')) reload(call, taskId);
+    if (li && !li.closest('[hidden]')) reload(call, taskId, true);
   }
 }
 

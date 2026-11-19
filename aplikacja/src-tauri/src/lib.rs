@@ -1,8 +1,9 @@
 //! Thin native layer of the CogniFly desktop app.
 //!
 //! Only wiring lives here: official plugins (HTTP, notifications, log,
-//! opener for `claude://` links and `~/Heartwood` folders only,
-//! dialog for the folder picker, deep link `cognifly://` to show a task),
+//! opener for `claude://` links and showing Heartwood folders in
+//! Finder, dialog for the folder picker, deep link `cognifly://` to
+//! show a task),
 //! the keychain commands, the Heartwood daemon commands and window
 //! behaviour. Business logic is in the TypeScript UI (`aplikacja/src`);
 //! daemon supervision and its socket API are in `heartwood/`.

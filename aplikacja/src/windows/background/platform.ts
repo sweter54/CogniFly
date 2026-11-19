@@ -5,7 +5,7 @@ import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { fetch as httpFetch } from '@tauri-apps/plugin-http';
-import { openPath, openUrl as openWithOs } from '@tauri-apps/plugin-opener';
+import { openUrl as openWithOs, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { taskFromAppLink } from '../../logic/app-link.js';
 import type { HeartwoodPort, HwInfo, HwReply } from '../../logic/heartwood.js';
@@ -105,15 +105,15 @@ export async function openUrl(url: string): Promise<void> {
 }
 
 /**
- * Opens a local folder in Finder.
+ * Shows a local item in Finder (selected in its parent folder).
  *
- * Call: as the controller's `openFolder` port.
- * Expects: a folder already checked to be under the Heartwood root;
- * the capability scope also allows only `~/Heartwood`.
- * Output: none; rejects when the scope or the OS refuses.
+ * Call: as the controller's `revealFolder` port.
+ * Expects: a path already checked to be under the Heartwood root.
+ * Output: none; nothing is opened or launched (unlike `openPath`,
+ * which would run a synced `X.app`); rejects when the OS refuses.
  */
-export async function openFolder(path: string): Promise<void> {
-  await openPath(path);
+export async function revealFolder(path: string): Promise<void> {
+  await revealItemInDir(path);
 }
 
 /**

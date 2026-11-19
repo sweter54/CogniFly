@@ -99,7 +99,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
     render: (v) => void views.push(v),
     showScreen: vi.fn(async () => undefined),
     openUrl: vi.fn(async () => undefined),
-    openFolder: vi.fn(async () => undefined),
+    revealFolder: vi.fn(async () => undefined),
     pickFolder: vi.fn(async (): Promise<string | null> => '/Users/m/repo'),
     now: () => NOW,
   };
@@ -671,8 +671,11 @@ describe('Controller', () => {
       const h = c.handlers();
       expect(await h['files.reveal']!({ space: 'ws:w1', folder: '' })).toEqual({ ok: true });
       await h['files.reveal']!({ space: 'ws:w1', folder: 'Oferty/2026/' });
-      expect(ports.openFolder).toHaveBeenNthCalledWith(1, `${ROOT}/pilot/w1`);
-      expect(ports.openFolder).toHaveBeenNthCalledWith(2, `${ROOT}/pilot/w1/Oferty/2026`);
+      expect(ports.revealFolder).toHaveBeenNthCalledWith(1, `${ROOT}/pilot/w1`);
+      expect(ports.revealFolder).toHaveBeenNthCalledWith(2, `${ROOT}/pilot/w1/Oferty/2026`);
+      await h['files.reveal']!({ space: 'ws:w1', folder: 'Narzedzia/Evil.app' });
+      expect(ports.revealFolder).toHaveBeenLastCalledWith(`${ROOT}/pilot/w1/Narzedzia/Evil.app`);
+      expect(ports.openUrl).not.toHaveBeenCalled();
     });
 
     it('files.reveal refuses bad folders, unselected spaces and paths outside the root', async () => {
@@ -685,8 +688,8 @@ describe('Controller', () => {
       await expect(h['files.reveal']!({ space: 'ws:w1', folder: 7 })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
       await expect(h['files.reveal']!({ space: 'ws:w2', folder: '' })).rejects.toMatchObject({ code: 'NOT_LOCAL' });
       await expect(h['files.reveal']!({ space: 'ws:x', folder: '' })).rejects.toMatchObject({ code: 'OUTSIDE' });
-      expect(ports.openFolder).not.toHaveBeenCalled();
-      vi.mocked(ports.openFolder).mockRejectedValueOnce('Not allowed to open path');
+      expect(ports.revealFolder).not.toHaveBeenCalled();
+      vi.mocked(ports.revealFolder).mockRejectedValueOnce('Not allowed to open path');
       await expect(h['files.reveal']!({ space: 'ws:w1', folder: '' })).rejects.toMatchObject({ code: 'OPEN_FAILED' });
     });
 

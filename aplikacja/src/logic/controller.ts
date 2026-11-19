@@ -47,8 +47,9 @@ export interface Ports {
   pickFolder(startAt: string): Promise<string | null>;
   /** Opens a URL with the OS (only `claude://` is allowed by scope). */
   openUrl(url: string): Promise<void>;
-  /** Opens a local folder in Finder (scope: the Heartwood root). */
-  openFolder(path: string): Promise<void>;
+  /** Shows (selects) a local item in Finder; never opens or runs
+   *  it, so a bundle such as `X.app` is not launched. */
+  revealFolder(path: string): Promise<void>;
   /** Writes a diagnostic line (counts and codes only, no task text). */
   log?(line: string): void;
   now?: () => number;
@@ -505,13 +506,14 @@ export class Controller {
   }
 
   /**
-   * Opens a folder of a selected space in Finder.
+   * Shows a folder of a selected space in Finder.
    *
    * Call: rpc `files.reveal`.
    * Expects: params checked by `treeParams` (`folder` in the space,
    * `''` or missing = the space root).
    * Output: `{ ok: true }`; the space's local folder comes from a
-   * fresh status, never from the window.
+   * fresh status, never from the window; Finder only shows it
+   * (a bundle folder like `X.app` is not launched).
    * Throws: `NOT_LOCAL` for a space not on this computer, `OUTSIDE`
    * for a folder outside the Heartwood root, `OPEN_FAILED` when the
    * OS (or the opener scope) refuses.
@@ -522,7 +524,7 @@ export class Controller {
     const sub = (params.folder ?? '').replace(/\/$/, '');
     const path = sub ? `${base}/${sub}` : base;
     if (!isUnderRoot(path, await this.filesRoot())) throw new AppError('OUTSIDE');
-    await this.ports.openFolder(path).catch(() => {
+    await this.ports.revealFolder(path).catch(() => {
       throw new AppError('OPEN_FAILED');
     });
     return { ok: true };
