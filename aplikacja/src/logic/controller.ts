@@ -341,7 +341,7 @@ export class Controller {
     const key = this.filesKey();
     let code: string | null = null;
     try {
-      await this.ports.heartwood.start(this.config.heartwoodUrl, this.config.heartwoodWsUrl, org, heartwoodRoot(this.config.workFolder));
+      await this.ports.heartwood.start(this.config.heartwoodUrl, this.config.heartwoodWsUrl, this.config.identityUrl, org, heartwoodRoot(this.config.workFolder));
     } catch (e) {
       code = errorCode(hwError(e));
       this.ports.log?.(`heartwood start: ${code}`);

@@ -27,7 +27,7 @@ export interface HeartwoodPort {
    * Starts (or keeps) the daemon with the sync root chosen by
    * CogniFly; rejects with a code string.
    */
-  start(serverUrl: string, wsUrl: string, org: string, root: string): Promise<HwInfo>;
+  start(serverUrl: string, wsUrl: string, identityUrl: string, org: string, root: string): Promise<HwInfo>;
   /** Stops the daemon (logout). */
   stop(): Promise<void>;
   /** Current supervisor state. */

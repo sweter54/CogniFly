@@ -27,6 +27,8 @@ pub struct HwConfig {
     pub token_command: Vec<String>,
     pub root: PathBuf,
     pub org: String,
+    /// Identity API for the access check (empty = check off).
+    pub identity_url: String,
 }
 
 /// A config ready for the daemon.
@@ -71,7 +73,8 @@ fn quote(value: &str) -> String {
 /// Call: `render(&cfg)` before writing the config file.
 /// Expects: any values; paths are stored lossily as UTF-8.
 /// Output: one `key = value` line each for `server_url`, `ws_url`,
-/// `token_command`, `root` and `org` (omitted when empty), ending
+/// `token_command`, `root`, `org` and `identity_url` (the last two
+/// omitted when empty), ending
 /// with a newline.
 pub fn render(c: &HwConfig) -> String {
     let command: Vec<String> =
@@ -85,6 +88,9 @@ pub fn render(c: &HwConfig) -> String {
     );
     if !c.org.is_empty() {
         let _ = writeln!(out, "org = {}", quote(&c.org));
+    }
+    if !c.identity_url.is_empty() {
+        let _ = writeln!(out, "identity_url = {}", quote(&c.identity_url));
     }
     out
 }
@@ -249,10 +255,11 @@ pub fn exclude_from_git(root: &Path) {
 
 /// Resolves the config the daemon will run with (D10).
 ///
-/// Call: `resolve(server_url, ws_url, org, root)` on
+/// Call: `resolve(server_url, ws_url, org, identity_url, root)` on
 /// `heartwood_start`.
-/// Expects: the URLs built into the app (empty = disabled) and the
-/// sync root chosen by CogniFly (work folder + `Pliki`).
+/// Expects: the URLs built into the app (empty = disabled; empty
+/// `identity_url` = no access check) and the sync root chosen by
+/// CogniFly (work folder + `Pliki`).
 /// Output: the env file as-is (root read from it, else the default)
 /// when `COGNIFLY_HEARTWOOD_CONFIG` is set; otherwise a generated
 /// config with `root` and `token_command` = this app in token mode.
@@ -262,6 +269,7 @@ pub fn resolve(
     server_url: &str,
     ws_url: &str,
     org: &str,
+    identity_url: &str,
     root: &Path,
 ) -> Result<Resolved, String> {
     if let Some(path) = env_path(CONFIG_ENV) {
@@ -285,6 +293,7 @@ pub fn resolve(
         ],
         root: root.to_path_buf(),
         org: org.to_string(),
+        identity_url: identity_url.to_string(),
     };
     Ok(Resolved {
         path: generated_path(),
@@ -370,7 +379,28 @@ mod tests {
             ],
             root: PathBuf::from("/Users/a/Heart\"wood"),
             org: "acme".into(),
+            identity_url: String::new(),
         }
+    }
+
+    #[test]
+    fn render_writes_identity_url_only_when_set() {
+        let mut c = sample();
+        assert!(!render(&c).contains("identity_url"));
+        c.identity_url = "https://id.example.com".into();
+        let text = render(&c);
+        assert!(text
+            .lines()
+            .any(|l| l == r#"identity_url = "https://id.example.com""#));
+        assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn resolve_passes_identity_url_through() {
+        let root = Path::new("/Users/a/Praca/Pliki");
+        let r = resolve("https://s", "wss://w", "", "https://id.example.com", root);
+        let text = r.unwrap().text.unwrap();
+        assert!(text.contains(r#"identity_url = "https://id.example.com""#));
     }
 
     #[test]
