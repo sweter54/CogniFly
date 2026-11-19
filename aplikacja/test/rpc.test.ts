@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { rpcClient, rpcServer, RpcError } from '../src/logic/rpc.js';
+import { callWhenReady, rpcClient, rpcServer, RpcError } from '../src/logic/rpc.js';
 import { memoryBus as bus } from './helpers.js';
 
 describe('rpc', () => {
@@ -46,5 +46,26 @@ describe('rpc', () => {
     const call = await rpcClient(b('main'), 'main', 10);
     await expect(call('slow')).rejects.toEqual(new RpcError('TIMEOUT'));
     expect(await call('slow', {}, 200)).toBe('ok');
+  });
+
+  it('callWhenReady retries until the background window starts serving', async () => {
+    const b = bus();
+    const call = await rpcClient(b('main'), 'main');
+    setTimeout(() => void rpcServer(b('background'), { 'inbox.get': async () => ({ ok: 1 }) }, () => 'X'), 30);
+    expect(await callWhenReady(call, 'inbox.get', {}, { attemptMs: 10, totalMs: 1000 })).toEqual({ ok: 1 });
+  });
+
+  it('callWhenReady gives up with TIMEOUT after totalMs', async () => {
+    const call = await rpcClient(bus()('main'), 'main');
+    await expect(callWhenReady(call, 'inbox.get', {}, { attemptMs: 10, totalMs: 40 })).rejects.toEqual(new RpcError('TIMEOUT'));
+  });
+
+  it('callWhenReady does not retry a server error', async () => {
+    const b = bus();
+    let n = 0;
+    await rpcServer(b('background'), { boom: async () => { n += 1; throw new Error('x'); } }, () => 'UNEXPECTED');
+    const call = await rpcClient(b('main'), 'main');
+    await expect(callWhenReady(call, 'boom', {}, { attemptMs: 50, totalMs: 500 })).rejects.toEqual(new RpcError('UNEXPECTED'));
+    expect(n).toBe(1);
   });
 });

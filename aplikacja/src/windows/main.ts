@@ -8,6 +8,7 @@ import { mountLogin } from './screens/login.js';
 import { mountReviewRequest } from './screens/review-request.js';
 import { mountSettings } from './screens/settings.js';
 import { installErrorLog, reportError } from './diagnostics.js';
+import { callWhenReady, type RawCall } from '../logic/rpc.js';
 import { tauriBus } from './tauri-bus.js';
 import { byId, connect, messageFor, setStatus } from './ui.js';
 
@@ -62,7 +63,8 @@ function showOnly(screen: Screen): void {
  */
 async function main(): Promise<void> {
   const call = await connect();
-  let view = await call('inbox.get', {});
+  // The background window may still be starting: resend until it answers.
+  let view = await callWhenReady(call as RawCall, 'inbox.get', {}) as InboxView;
   let current: Screen = 'login';
   const login = mountLogin(call, () => view.workFolder !== '');
   const inbox = mountInbox(call);

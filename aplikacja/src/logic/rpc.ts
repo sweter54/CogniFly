@@ -77,6 +77,36 @@ export async function rpcClient(bus: Bus, selfLabel: string, timeoutMs = 20_000)
   });
 }
 
+/** A call function as returned by `rpcClient`. */
+export type RawCall = (method: string, params?: unknown, waitMs?: number) => Promise<unknown>;
+
+/**
+ * Calls the background window, retrying while it is still starting.
+ *
+ * Call: `await callWhenReady(call, 'inbox.get', {})` at window start.
+ * Expects: a call from `rpcClient`; an idempotent method (a request
+ * sent before the background window listens is lost, so it is resent).
+ * Options: `attemptMs` per try (default 2 s), `totalMs` overall
+ * (default 60 s).
+ * Output: the handler's value.
+ * Throws: `RpcError('TIMEOUT')` after `totalMs`; any other error at
+ * once (the background window answered).
+ */
+export async function callWhenReady(
+  call: RawCall, method: string, params: unknown,
+  o: { attemptMs?: number; totalMs?: number } = {},
+): Promise<unknown> {
+  const attemptMs = o.attemptMs ?? 2_000;
+  const deadline = Date.now() + (o.totalMs ?? 60_000);
+  for (;;) {
+    try {
+      return await call(method, params, attemptMs);
+    } catch (e) {
+      if (!(e instanceof RpcError && e.code === 'TIMEOUT') || Date.now() + attemptMs > deadline) throw e;
+    }
+  }
+}
+
 /** Maps a thrown value to a text safe to show, or `undefined`. */
 export type ToDetail = (e: unknown) => string | undefined;
 
