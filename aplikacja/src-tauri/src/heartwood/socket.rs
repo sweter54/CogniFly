@@ -9,7 +9,7 @@ use std::path::Path;
 use std::time::Duration;
 
 /// Commands the webview may send to the daemon.
-pub const ALLOWED: [&str; 9] = [
+pub const ALLOWED: [&str; 11] = [
     "status",
     "lock",
     "release",
@@ -19,11 +19,17 @@ pub const ALLOWED: [&str; 9] = [
     "restore",
     "select",
     "unselect",
+    "files",
+    "work-files",
 ];
 /// Commands that may download a lot and get the long timeout.
 const SLOW: [&str; 3] = ["download", "select", "unselect"];
+/// Commands that may ask the server and get the medium timeout.
+const MEDIUM: [&str; 2] = ["files", "work-files"];
 /// Answer timeout of ordinary commands.
 const SHORT_WAIT: Duration = Duration::from_secs(10);
+/// Answer timeout of `MEDIUM` commands.
+const MEDIUM_WAIT: Duration = Duration::from_secs(30);
 /// Answer timeout of `SLOW` commands.
 const LONG_WAIT: Duration = Duration::from_secs(120);
 /// Answer timeout of a liveness probe.
@@ -48,10 +54,13 @@ pub fn command(req: &Value) -> Result<&str, String> {
 ///
 /// Call: `timeout_for(cmd)`.
 /// Expects: a command name.
-/// Output: 120 s for `download`/`select`/`unselect`, else 10 s.
+/// Output: 120 s for `download`/`select`/`unselect`, 30 s for
+/// `files`/`work-files`, else 10 s.
 pub fn timeout_for(cmd: &str) -> Duration {
     if SLOW.contains(&cmd) {
         LONG_WAIT
+    } else if MEDIUM.contains(&cmd) {
+        MEDIUM_WAIT
     } else {
         SHORT_WAIT
     }
@@ -236,6 +245,18 @@ mod tests {
         for cmd in ["download", "select", "unselect"] {
             assert_eq!(timeout_for(cmd), Duration::from_secs(120));
         }
+        for cmd in ["files", "work-files"] {
+            assert_eq!(timeout_for(cmd), Duration::from_secs(30));
+        }
+    }
+
+    #[test]
+    fn browse_commands_are_allowed() {
+        assert_eq!(ALLOWED.len(), 11);
+        for cmd in ["files", "work-files"] {
+            assert_eq!(command(&json!({"cmd": cmd})), Ok(cmd));
+        }
+        assert!(command(&json!({"cmd": "wait"})).is_err());
     }
 
     /// Tells whether a daemon of the given config file is running.
@@ -258,7 +279,8 @@ mod tests {
     /// Expects: `COGNIFLY_HEARTWOOD_CONFIG` (a ready config.toml) and
     /// `COGNIFLY_HEARTWOOD_BIN` (the `heartwood` binary).
     /// Output: the real start path (`prepare`) runs our own daemon,
-    /// `status` answers `ok` + `running`, and stop leaves no child.
+    /// `status` answers `ok` + `running`, `work-files` of an unknown
+    /// work is `ok` with empty locks and versions, stop leaves no child.
     /// Without `COGNIFLY_HEARTWOOD_CONFIG` it returns early (skip).
     #[tokio::test]
     #[ignore = "needs a live Heartwood dev server (docs/heartwood.md)"]
@@ -285,6 +307,12 @@ mod tests {
         let got = call(&socket, &req, Duration::from_secs(10)).await.unwrap();
         assert_eq!(got["ok"], json!(true), "{got}");
         assert_eq!(got["running"], json!(true), "{got}");
+        // An unknown work is not an error: empty locks and versions.
+        let work = json!({"cmd": "work-files", "workId": "cognifly:zad_000000000000"});
+        let got = call(&socket, &work, Duration::from_secs(30)).await.unwrap();
+        assert_eq!(got["ok"], json!(true), "{got}");
+        assert_eq!(got["locks"], json!([]), "{got}");
+        assert_eq!(got["versions"], json!([]), "{got}");
         sup.stop(Phase::Disabled).await;
         assert!(!daemon_alive(&config.path), "daemon left after stop");
     }

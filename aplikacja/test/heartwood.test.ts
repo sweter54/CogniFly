@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  checkReply, fileCounts, forgetLocked, groupBySpace, hwMessage, isUnderRoot, lockedPaths, parseStatus, parseVersions, rememberLocked, workIdFor,
+  checkReply, fileCounts, groupBySpace, hwMessage, isSpacePath, isUnderRoot, locksBySpace, parseBrowse, parseStatus, parseVersions, parseWorkFiles, workIdFor,
 } from '../src/logic/heartwood.js';
-import { memoryStore } from '../src/logic/storage.js';
 import { STATUS_REPLY } from './helpers.js';
 
 
@@ -61,24 +60,18 @@ describe('hwMessage', () => {
   ])('%s', (code, message, text) => expect(hwMessage(code, message)).toBe(text));
 });
 
-describe('locked paths memory', () => {
-  it('remembers without duplicates and forgets', () => {
-    const store = memoryStore();
-    expect(lockedPaths(store, 'zad_1')).toEqual([]);
-    rememberLocked(store, 'zad_1', ['/a', '/b']);
-    rememberLocked(store, 'zad_1', ['/b', '/c']);
-    rememberLocked(store, 'zad_2', ['/z']);
-    expect(lockedPaths(store, 'zad_1')).toEqual(['/a', '/b', '/c']);
-    forgetLocked(store, 'zad_1', ['/a', '/b']);
-    expect(lockedPaths(store, 'zad_1')).toEqual(['/c']);
-    forgetLocked(store, 'zad_1', ['/c']);
-    expect(JSON.parse(store.getItem('cognifly.heartwood.locks')!)).toEqual({ zad_2: ['/z'] });
-  });
+describe('space paths', () => {
+  it.each([
+    ['a.docx', false, true], ['Oferty/a.docx', false, true], ['', false, false], ['a/', false, false],
+    ['/a', false, false], ['a//b', false, false], ['../a', false, false], ['a/./b', false, false], ['a\u0000b', false, false],
+    ['', true, true], ['Oferty/', true, true], ['Oferty', true, true], ['/', true, false], ['a//', true, false], ['../', true, false],
+  ])('%j (folder %s) → %s', (path, folderOk, ok) => expect(isSpacePath(path, folderOk)).toBe(ok));
 
-  it('ignores corrupt storage', () => {
-    const store = memoryStore();
-    store.setItem('cognifly.heartwood.locks', '{"zad_1": [1, "/a"]}');
-    expect(lockedPaths(store, 'zad_1')).toEqual(['/a']);
+  it('groups work locks by space in order of first appearance', () => {
+    const lock = (space: string, path: string) => ({ space, path, folder: false, by: 'u', at: '', workId: 'w', writer: null, localPath: null });
+    expect(locksBySpace([lock('ws:a', 'x'), lock('ws:b', 'y'), lock('ws:a', 'z')])).toEqual([
+      { space: 'ws:a', paths: ['x', 'z'] }, { space: 'ws:b', paths: ['y'] },
+    ]);
   });
 });
 
@@ -97,4 +90,79 @@ describe('parseVersions', () => {
     expect(parseVersions([v, { seq: 'x' }, null])).toEqual([v]);
     expect(parseVersions('x')).toEqual([]);
   });
+});
+
+const LOCK = {
+  ws: 'w1', space: 'ws:w1', path: 'Oferty/a.docx', workId: 'cognifly:zad_0123456789ab', folder: false,
+  by: 'u1', at: '2026-11-19T10:00:00Z', writer: 'u1', localPath: '/R/pilot/w1/Oferty/a.docx',
+};
+const VERSION = {
+  space: 'ws:w1', path: 'Oferty/a.docx', seq: 7, versionId: 'v7', sha256: 'ab', size: 3, author: 'u1',
+  workId: 'cognifly:zad_0123456789ab', at: '2026-11-19T11:00:00Z', kind: 'put', localPath: null,
+};
+const WORK = { ok: true, writer: 'u1', closed: false, locks: [LOCK], hiddenLocks: 2, versions: [VERSION], cursor: 'c1' };
+
+describe('parseWorkFiles', () => {
+  it('reads the contract shape with localPath', () => {
+    const w = parseWorkFiles(WORK)!;
+    expect(w).toMatchObject({ writer: 'u1', closed: false, hiddenLocks: 2, cursor: 'c1' });
+    expect(w.locks).toEqual([{
+      space: 'ws:w1', path: 'Oferty/a.docx', folder: false, by: 'u1', at: '2026-11-19T10:00:00Z',
+      workId: 'cognifly:zad_0123456789ab', writer: 'u1', localPath: '/R/pilot/w1/Oferty/a.docx',
+    }]);
+    expect(w.versions).toEqual([{
+      space: 'ws:w1', path: 'Oferty/a.docx', seq: 7, author: 'u1', at: '2026-11-19T11:00:00Z', kind: 'put', localPath: null,
+    }]);
+  });
+
+  it('reads an unknown work as empty lists', () => {
+    expect(parseWorkFiles({ ok: true, writer: null, closed: false, locks: [], hiddenLocks: 0, versions: [] }))
+      .toEqual({ writer: null, closed: false, locks: [], hiddenLocks: 0, versions: [] });
+  });
+
+  it('drops bad rows one by one and treats a missing localPath as null', () => {
+    const { localPath: _l, ...noLocal } = LOCK;
+    const w = parseWorkFiles({
+      ...WORK,
+      locks: [LOCK, { ...LOCK, folder: 'x' }, { ...LOCK, writer: 5 }, null, noLocal],
+      versions: [VERSION, { ...VERSION, kind: 'zap' }, { ...VERSION, seq: -1 }, { ...VERSION, kind: 'move', fromPath: 'b.docx' }],
+    })!;
+    expect(w.locks).toHaveLength(2);
+    expect(w.locks[1]!.localPath).toBeNull();
+    expect(w.versions.map((v) => v.kind)).toEqual(['put', 'move']);
+    expect(w.versions[1]!.fromPath).toBe('b.docx');
+  });
+
+  it.each([
+    null, 'x', [], { ok: false, code: 'NETWORK' }, { ...WORK, writer: 1 }, { ...WORK, closed: 'no' },
+    { ...WORK, hiddenLocks: -1 }, { ...WORK, locks: 'x' }, { ...WORK, versions: {} }, { ...WORK, cursor: 3 },
+  ])('refuses junk %j', (v) => expect(parseWorkFiles(v)).toBeNull());
+});
+
+const ENTRY = { path: 'T/a.txt', localPath: '/R/pilot/w1/T/a.txt', folder: false, size: 3, state: 'free', lockFolder: false };
+const BROWSE = {
+  ok: true, space: 'ws:w1', folder: 'T', selected: true,
+  entries: [{ path: 'T/X', localPath: null, folder: true, state: 'locked', workId: 'wk:1', writer: 'ola', lockFolder: true }, ENTRY],
+};
+
+describe('parseBrowse', () => {
+  it('reads one folder level', () => {
+    const b = parseBrowse(BROWSE)!;
+    expect(b).toMatchObject({ space: 'ws:w1', folder: 'T', selected: true });
+    expect(b.entries[0]).toEqual({ path: 'T/X', localPath: null, folder: true, state: 'locked', workId: 'wk:1', writer: 'ola', lockFolder: true });
+    expect(b.entries[1]).toEqual(ENTRY);
+  });
+
+  it('drops bad entries one by one', () => {
+    const b = parseBrowse({
+      ...BROWSE,
+      entries: [ENTRY, { ...ENTRY, state: 'gone' }, { ...ENTRY, size: 'big' }, { ...ENTRY, folder: 1 }, { ...ENTRY, localPath: 4 }, 'x'],
+    })!;
+    expect(b.entries).toEqual([ENTRY]);
+  });
+
+  it.each([
+    null, 7, { ok: false, code: 'NOT_FOUND' }, { ...BROWSE, space: 1 }, { ...BROWSE, folder: null },
+    { ...BROWSE, selected: 'yes' }, { ...BROWSE, entries: 'x' },
+  ])('refuses junk %j', (v) => expect(parseBrowse(v)).toBeNull());
 });

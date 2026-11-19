@@ -7,7 +7,7 @@ import type { FetchFn } from '../src/logic/http.js';
 import { memoryStore } from '../src/logic/storage.js';
 import type { InboxView } from '../src/windows/protocol.js';
 import { rpcClient, rpcServer, RpcError } from '../src/logic/rpc.js';
-import { memoryBus, memoryVault, STATUS_REPLY } from './helpers.js';
+import { jwt, memoryBus, memoryVault, STATUS_REPLY } from './helpers.js';
 
 const NOW = 50_000_000;
 const id = (n: number) => `zad_${String(n).padStart(12, '0')}`;
@@ -16,6 +16,19 @@ const json = (status: number, body: unknown) => new Response(JSON.stringify(body
 const goodSession = JSON.stringify({ accessToken: 'A', refreshToken: 'R', expiresAt: NOW + 3_600_000, email: 'm@x.pl' });
 
 const ROOT = '/Users/m/Heartwood';
+
+/** Stored session whose access token carries `sub`. */
+const sessionOf = (sub: string) => JSON.stringify({ accessToken: jwt({ sub }), refreshToken: 'R', expiresAt: NOW + 3_600_000, email: 'm@x.pl' });
+/** One lock row of a `work-files` reply. */
+const LOCK_W1 = { space: 'ws:w1', path: 'a.docx', folder: false, by: 'u-me', at: '2026-11-19T10:00:00Z', workId: `cognifly:${id(7)}`, writer: 'u-me', localPath: null };
+/** One version row of a `work-files` reply. */
+const version = (seq: number) => ({ space: 'ws:w1', path: 'a.docx', seq, author: 'u-me', at: '2026-11-19T10:00:00Z', kind: 'put', localPath: null });
+/** A `work-files` reply page. */
+const workFiles = (versions: unknown[], cursor?: string): HwReply => ({
+  ok: true, writer: 'u-me', closed: false, locks: [LOCK_W1], hiddenLocks: 1, versions, ...(cursor ? { cursor } : {}),
+});
+/** Daemon calls other than the background `status` reads. */
+const daemonCalls = (hw: { calls: HwRequest[] }) => hw.calls.filter((r) => r.cmd !== 'status');
 
 /**
  * Fake Heartwood port: scripted state, picked files and replies.
@@ -86,6 +99,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
     render: (v) => void views.push(v),
     showScreen: vi.fn(async () => undefined),
     openUrl: vi.fn(async () => undefined),
+    revealFolder: vi.fn(async () => undefined),
     pickFolder: vi.fn(async (): Promise<string | null> => '/Users/m/repo'),
     now: () => NOW,
   };
@@ -398,17 +412,34 @@ describe('Controller', () => {
       expect(hw.calls).toEqual([]);
     });
 
-    it('lockFiles locks with the work id and remembers; releaseFiles releases them and forgets', async () => {
+    it('lockFiles locks the picked files per space with the work id and keeps no memory', async () => {
+      const { c, hw, ports } = setup({ inbox: [] });
+      await c.start();
+      const picked = [`${ROOT}/pilot/w1/a.docx`, `${ROOT}/pilot/w2/b.xlsx`];
+      hw.picked = picked;
+      expect(await c.handlers()['task.lockFiles']!({ id: lockId })).toEqual({ paths: picked });
+      expect(daemonCalls(hw)).toEqual([
+        { cmd: 'lock', workId: `cognifly:${lockId}`, paths: [picked[0]] },
+        { cmd: 'lock', workId: `cognifly:${lockId}`, paths: [picked[1]] },
+      ]);
+      expect(ports.store.getItem('cognifly.heartwood.locks')).toBeNull();
+    });
+
+    it('lockFiles and releaseFiles send at most 98 paths per request', async () => {
       const { c, hw } = setup({ inbox: [] });
       await c.start();
-      const h = c.handlers();
-      hw.picked = [`${ROOT}/pilot/w1/a.docx`, `${ROOT}/pilot/w1/b.xlsx`];
-      expect(await h['task.lockFiles']!({ id: lockId })).toEqual({ paths: hw.picked });
-      expect(hw.calls).toContainEqual({ cmd: 'lock', workId: `cognifly:${lockId}`, paths: hw.picked });
-      expect(await h['task.lockedFiles']!({ id: lockId })).toEqual({ paths: hw.picked });
-      expect(await h['task.releaseFiles']!({ id: lockId })).toEqual({ paths: hw.picked });
-      expect(hw.calls).toContainEqual({ cmd: 'release', paths: hw.picked });
-      expect(await h['task.lockedFiles']!({ id: lockId })).toEqual({ paths: [] });
+      hw.picked = Array.from({ length: 150 }, (_, i) => `${ROOT}/pilot/w1/f${i}.docx`);
+      await c.handlers()['task.lockFiles']!({ id: lockId });
+      expect(daemonCalls(hw).filter((r) => r.cmd === 'lock').map((r) => (r.paths as string[]).length)).toEqual([98, 52]);
+      hw.calls = [];
+      const locks = Array.from({ length: 150 }, (_, i) => ({ ...LOCK_W1, path: `f${i}.docx` }));
+      hw.reply = (req) => {
+        if (req.cmd === 'work-files') return { ...workFiles([]), locks };
+        if (req.cmd === 'release') return { ok: true, space: req.space, paths: req.paths };
+        return STATUS_REPLY;
+      };
+      await c.handlers()['task.releaseFiles']!({ id: lockId });
+      expect(daemonCalls(hw).filter((r) => r.cmd === 'release').map((r) => (r.paths as string[]).length)).toEqual([98, 52]);
     });
 
     it('a cancelled picker locks nothing; a bad task id is refused', async () => {
@@ -420,13 +451,139 @@ describe('Controller', () => {
       expect(hw.calls).toEqual([]);
     });
 
-    it('a daemon refusal surfaces as its code and nothing is remembered', async () => {
+    it('a daemon refusal surfaces as its code', async () => {
       const { c, hw } = setup({ inbox: [] });
       await c.start();
       hw.picked = [`${ROOT}/pilot/w1/a.docx`];
       hw.reply = () => ({ ok: false, code: 'LOCKED', message: 'Plik blokuje Ania.' });
       await expect(c.handlers()['task.lockFiles']!({ id: lockId })).rejects.toMatchObject({ code: 'LOCKED' });
-      expect(await c.handlers()['task.lockedFiles']!({ id: lockId })).toEqual({ paths: [] });
+    });
+
+    it('task.files calls work-files with the work id, merges version pages and returns me', async () => {
+      const { c, hw } = setup({ inbox: [], session: sessionOf('u-me') });
+      await c.start();
+      hw.reply = (req) => {
+        if (req.cmd !== 'work-files') return STATUS_REPLY;
+        if (req.cursor === undefined) return workFiles([version(3)], 'p2');
+        return workFiles([version(2), { bad: true }]);
+      };
+      const r = await c.handlers()['task.files']!({ id: lockId });
+      expect(daemonCalls(hw)).toEqual([
+        { cmd: 'work-files', workId: `cognifly:${lockId}` },
+        { cmd: 'work-files', workId: `cognifly:${lockId}`, cursor: 'p2' },
+      ]);
+      expect(r).toEqual({
+        id: lockId,
+        me: 'u-me',
+        files: { writer: 'u-me', closed: false, locks: [LOCK_W1], hiddenLocks: 1, versions: [version(3), version(2)] },
+      });
+    });
+
+    it('task.files stops after 20 pages and keeps the cursor; a bad reply is BAD_RESPONSE', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      hw.reply = (req) => (req.cmd === 'work-files' ? workFiles([version(1)], 'more') : STATUS_REPLY);
+      const r = await c.handlers()['task.files']!({ id: lockId }) as { files: { versions: unknown[]; cursor?: string }; me: unknown };
+      expect(daemonCalls(hw)).toHaveLength(20);
+      expect(r.files.versions).toHaveLength(20);
+      expect(r.files.cursor).toBe('more');
+      expect(r.me).toBeNull();
+      hw.reply = (req) => (req.cmd === 'work-files' ? { ok: true, writer: 5 } : STATUS_REPLY);
+      await expect(c.handlers()['task.files']!({ id: lockId })).rejects.toMatchObject({ code: 'BAD_RESPONSE' });
+      await expect(c.handlers()['task.files']!({ id: 'zad_x' })).rejects.toMatchObject({ code: 'BAD_TASK_ID' });
+    });
+
+    it('releaseFiles without a path releases every visible lock, one call per space', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      const locks = [LOCK_W1, { ...LOCK_W1, path: 'Oferty', folder: true }, { ...LOCK_W1, space: 'ws:w2', path: 'b.xlsx' }];
+      hw.reply = (req) => {
+        if (req.cmd === 'work-files') return { ...workFiles([]), locks };
+        if (req.cmd === 'release') return { ok: true, space: req.space, paths: req.paths };
+        return STATUS_REPLY;
+      };
+      expect(await c.handlers()['task.releaseFiles']!({ id: lockId })).toEqual({ paths: ['a.docx', 'Oferty', 'b.xlsx'] });
+      expect(daemonCalls(hw).filter((r) => r.cmd === 'release')).toEqual([
+        { cmd: 'release', space: 'ws:w1', paths: ['a.docx', 'Oferty'] },
+        { cmd: 'release', space: 'ws:w2', paths: ['b.xlsx'] },
+      ]);
+    });
+
+    it('releaseFiles with space and path releases one lock; a bad path is refused first', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      hw.calls = [];
+      const h = c.handlers();
+      expect(await h['task.releaseFiles']!({ id: lockId, space: 'ws:w1', path: 'Oferty/a.docx' })).toEqual({ paths: ['Oferty/a.docx'] });
+      expect(daemonCalls(hw)).toEqual([{ cmd: 'release', space: 'ws:w1', paths: ['Oferty/a.docx'] }]);
+      hw.calls = [];
+      for (const path of ['../a', '/abs', 'a//b', 'a/', '', 'a\u0007b']) {
+        await expect(h['task.releaseFiles']!({ id: lockId, space: 'ws:w1', path })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      }
+      await expect(h['task.releaseFiles']!({ id: lockId, space: '', path: 'a' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(hw.calls).toEqual([]);
+    });
+
+    it('files.tree passes space and folder and returns the parsed level', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      const entry = { path: 'Oferty/a.docx', localPath: null, folder: false, state: 'free' };
+      hw.reply = (req) => (req.cmd === 'files' ? { ok: true, space: 'ws:w1', folder: 'Oferty', selected: false, entries: [entry, 7] } : STATUS_REPLY);
+      const h = c.handlers();
+      expect(await h['files.tree']!({ space: 'ws:w1', folder: 'Oferty' })).toEqual({ space: 'ws:w1', folder: 'Oferty', selected: false, entries: [entry] });
+      await h['files.tree']!({ space: 'ws:w1' });
+      expect(daemonCalls(hw)).toEqual([{ cmd: 'files', space: 'ws:w1', folder: 'Oferty' }, { cmd: 'files', space: 'ws:w1' }]);
+      hw.calls = [];
+      await expect(h['files.tree']!({ space: 'ws:w1', folder: '../x' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(h['files.tree']!({ space: 'x'.repeat(201) })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(daemonCalls(hw)).toEqual([]);
+      hw.reply = () => ({ ok: true, space: 'ws:w1' });
+      await expect(h['files.tree']!({ space: 'ws:w1' })).rejects.toMatchObject({ code: 'BAD_RESPONSE' });
+    });
+
+    it('files.lockFor checks the task id and path before locking with space and work id', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      hw.calls = [];
+      const h = c.handlers();
+      await expect(h['files.lockFor']!({ taskId: 'x', space: 'ws:w1', path: 'a.docx' })).rejects.toMatchObject({ code: 'BAD_TASK_ID' });
+      await expect(h['files.lockFor']!({ taskId: lockId, space: 'ws:w1', path: '../a.docx' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(h['files.lockFor']!({ taskId: lockId, space: 'ws:w1', path: 'a/../b' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(daemonCalls(hw)).toEqual([]);
+      expect(await h['files.lockFor']!({ taskId: lockId, space: 'ws:w1', path: 'Oferty/a.docx' })).toEqual({ ok: true });
+      expect(await h['files.lockFor']!({ taskId: lockId, space: 'ws:w1', path: 'Oferty', folder: true })).toEqual({ ok: true });
+      expect(daemonCalls(hw)).toEqual([
+        { cmd: 'lock', space: 'ws:w1', workId: `cognifly:${lockId}`, paths: ['Oferty/a.docx'] },
+        { cmd: 'lock', space: 'ws:w1', workId: `cognifly:${lockId}`, paths: ['Oferty'], folder: true },
+      ]);
+    });
+
+    it('request release, history and download work with a space path', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      hw.reply = (req) => {
+        if (req.cmd === 'history') return { ok: true, versions: [] };
+        if (req.cmd === 'download') return { ok: true, copy: '/Users/m/Downloads/a.docx' };
+        return { ok: true };
+      };
+      hw.calls = [];
+      const h = c.handlers();
+      expect(await h['files.requestRelease']!({ space: 'ws:w1', path: 'a.docx' })).toEqual({ ok: true });
+      expect(await h['files.history']!({ space: 'ws:w1', path: 'Oferty/' })).toEqual({ versions: [], path: 'Oferty/' });
+      expect(await h['files.history']!({ space: 'ws:w1', path: '' })).toEqual({ versions: [], path: '' });
+      expect(await h['files.download']!({ space: 'ws:w1', path: 'a.docx', version: 2 })).toEqual({ copy: '/Users/m/Downloads/a.docx' });
+      expect(daemonCalls(hw)).toEqual([
+        { cmd: 'request-release', space: 'ws:w1', path: 'a.docx' },
+        { cmd: 'history', space: 'ws:w1', path: 'Oferty/' },
+        { cmd: 'history', space: 'ws:w1', path: '' },
+        { cmd: 'download', space: 'ws:w1', path: 'a.docx', version: 2 },
+      ]);
+      hw.calls = [];
+      await expect(h['files.requestRelease']!({ space: 'ws:w1', path: 'a/' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(h['files.download']!({ space: 'ws:w1', path: 'a/', version: 2 })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(h['files.history']!({ space: 'ws:w1', path: '../' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(h['files.history']!({ space: 'ws:w1', path: `${ROOT}/pilot/w1/a.docx` })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(daemonCalls(hw)).toEqual([]);
     });
 
     it('a transport failure (string code from invoke) surfaces as its code', async () => {
@@ -521,6 +678,54 @@ describe('Controller', () => {
       hw.startError = null;
       await c.poll();
       expect(c.current().files.counts.conflicts).toBe(2); // retried at the next poll
+    });
+
+    it('files.reveal opens the local folder of a selected space under the root', async () => {
+      const { c, hw, ports } = setup({ inbox: [] });
+      const spaces = [{ space: 'ws:w1', folder: `${ROOT}/pilot/w1`, lastSeq: 1, serverSeq: 1, unsent: 0 }];
+      hw.reply = (req) => (req.cmd === 'status' ? { ...STATUS_REPLY, spaces } : { ok: true });
+      await c.start();
+      const h = c.handlers();
+      expect(await h['files.reveal']!({ space: 'ws:w1', folder: '' })).toEqual({ ok: true });
+      await h['files.reveal']!({ space: 'ws:w1', folder: 'Oferty/2026/' });
+      expect(ports.revealFolder).toHaveBeenNthCalledWith(1, `${ROOT}/pilot/w1`);
+      expect(ports.revealFolder).toHaveBeenNthCalledWith(2, `${ROOT}/pilot/w1/Oferty/2026`);
+      await h['files.reveal']!({ space: 'ws:w1', folder: 'Narzedzia/Evil.app' });
+      expect(ports.revealFolder).toHaveBeenLastCalledWith(`${ROOT}/pilot/w1/Narzedzia/Evil.app`);
+      expect(ports.openUrl).not.toHaveBeenCalled();
+    });
+
+    it('files.reveal refuses bad folders, unselected spaces and paths outside the root', async () => {
+      const { c, hw, ports } = setup({ inbox: [] });
+      const spaces = [{ space: 'ws:w1', folder: `${ROOT}/pilot/w1`, lastSeq: 1, serverSeq: 1, unsent: 0 }, { space: 'ws:x', folder: '/tmp/x', lastSeq: 1, serverSeq: 1, unsent: 0 }];
+      hw.reply = (req) => (req.cmd === 'status' ? { ...STATUS_REPLY, spaces } : { ok: true });
+      await c.start();
+      const h = c.handlers();
+      await expect(h['files.reveal']!({ space: 'ws:w1', folder: '../x' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(h['files.reveal']!({ space: 'ws:w1', folder: 7 })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(h['files.reveal']!({ space: 'ws:w2', folder: '' })).rejects.toMatchObject({ code: 'NOT_LOCAL' });
+      await expect(h['files.reveal']!({ space: 'ws:x', folder: '' })).rejects.toMatchObject({ code: 'OUTSIDE' });
+      expect(ports.revealFolder).not.toHaveBeenCalled();
+      vi.mocked(ports.revealFolder).mockRejectedValueOnce('Not allowed to open path');
+      await expect(h['files.reveal']!({ space: 'ws:w1', folder: '' })).rejects.toMatchObject({ code: 'OPEN_FAILED' });
+    });
+
+    it('files.reveal passes on the daemon error instead of NOT_LOCAL', async () => {
+      const { c, ports } = setup({ inbox: [] });
+      await c.start();
+      (ports.heartwood.call as ReturnType<typeof vi.fn>).mockRejectedValueOnce('TIMEOUT');
+      await expect(c.handlers()['files.reveal']!({ space: 'ws:w1', folder: '' })).rejects.toMatchObject({ code: 'TIMEOUT' });
+      expect(ports.revealFolder).not.toHaveBeenCalled();
+    });
+
+    it('task.focus shows the task in the inbox and checks the id', async () => {
+      const { ports } = setup({ inbox: [task(1)] });
+      ports.store.setItem('cognifly.config', JSON.stringify({ ...DEFAULT_CONFIG, workFolder: '/Users/m' }));
+      const c = new Controller(ports);
+      await c.start();
+      expect(await c.handlers()['task.focus']!({ id: id(1) })).toEqual({ ok: true });
+      expect(ports.showScreen).toHaveBeenLastCalledWith('inbox', id(1));
+      await expect(c.handlers()['task.focus']!({ id: 'zle' })).rejects.toMatchObject({ code: 'BAD_TASK_ID' });
     });
 
     it('logout stops the daemon and clears the files view', async () => {

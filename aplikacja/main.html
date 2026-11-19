@@ -125,11 +125,22 @@
                 <option value="zrobione">Zrobione</option>
               </select>
             </div>
-            <div class="files actions start" hidden>
-              <button type="button" class="lock secondary">Zablokuj pliki…</button>
-              <button type="button" class="release secondary" hidden>Zwolnij</button>
-            </div>
-            <ul class="locked" hidden></ul>
+            <details class="task-files" hidden>
+              <summary>Pliki zadania</summary>
+              <div class="actions start">
+                <button type="button" class="files-lock secondary" hidden>Zablokuj pliki…</button>
+                <button type="button" class="release-all secondary" hidden>Zwolnij wszystkie</button>
+              </div>
+              <p class="files-error" hidden></p>
+              <h3>Zablokowane</h3>
+              <ul class="file-locks rows"></ul>
+              <p class="locks-empty muted" hidden>Brak zablokowanych plików.</p>
+              <p class="hidden-note muted" hidden></p>
+              <h3>Zmienione w zadaniu</h3>
+              <ul class="file-changes rows"></ul>
+              <p class="changes-empty muted" hidden>Brak zmian w tym zadaniu.</p>
+              <p class="closed-note muted" hidden>Zadanie zamknięte — blokady zwolnione.</p>
+            </details>
             <form class="reject-form actions" hidden>
               <input class="reason" maxlength="200" required placeholder="Powód odrzucenia" aria-label="Powód odrzucenia">
               <button type="submit">Odrzuć</button>
@@ -157,6 +168,20 @@
         <p id="files-banner" class="banner" hidden></p>
         <ul id="files-issues" class="rows"></ul>
         <div id="files-body" hidden>
+          <h2>Przeglądaj przestrzeń</h2>
+          <div class="actions start tree-bar">
+            <select id="tree-space" aria-label="Przestrzeń"></select>
+            <label class="check"><input type="checkbox" id="tree-locked" /> Tylko zablokowane</label>
+            <button type="button" id="tree-reveal" class="secondary" hidden>Otwórz w Finderze</button>
+          </div>
+          <form id="tree-other" class="actions start" novalidate hidden>
+            <input name="space" spellcheck="false" placeholder="np. ws:nazwa" aria-label="Inna przestrzeń" required />
+            <button type="submit">Pokaż</button>
+            <button type="button" id="tree-other-cancel" class="secondary">Anuluj</button>
+          </form>
+          <nav id="tree-crumbs" class="crumbs" aria-label="Folder"></nav>
+          <ul id="tree-rows" class="rows"></ul>
+          <p id="tree-note" class="muted" hidden></p>
           <h2>Przestrzenie</h2>
           <ul id="files-spaces" class="rows"></ul>
           <div class="actions start"><button type="button" id="space-open" class="secondary">Wybierz przestrzeń…</button></div>

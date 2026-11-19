@@ -1,7 +1,8 @@
-// Helpers shared by the visible windows (settings, login, inbox):
+// Helpers shared by the visible windows (settings, login, inbox, files):
 // typed rpc calls, Polish messages for error codes and DOM utilities.
 // Text from the network is always set via `textContent`.
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { fileErrorText } from '../logic/files-view.js';
 import { rpcClient, RpcError } from '../logic/rpc.js';
 import type { Method, Methods } from './protocol.js';
 import { currentLabel, tauriBus } from './tauri-bus.js';
@@ -197,4 +198,67 @@ export function armed(button: HTMLButtonElement, question: string, action: () =>
     if (takePrimed(button)) void action();
     else prime(button, question);
   });
+}
+
+/** Status line text with its kind. */
+export type Said = { text: string; kind: 'info' | 'ok' | 'error' };
+
+/**
+ * Builds an element with text.
+ *
+ * Call: `el('span', text, 'muted')`.
+ * Expects: a tag name; text is data (set via `textContent`).
+ * Output: the element.
+ */
+export function el<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, cls?: string): HTMLElementTagNameMap[K] {
+  const node = document.createElement(tag);
+  node.textContent = text;
+  if (cls) node.className = cls;
+  return node;
+}
+
+/**
+ * Builds a button that is not a form submit.
+ *
+ * Call: `button('Zwolnij', 'secondary')`.
+ * Expects: the label and optional classes.
+ * Output: the `<button type="button">`.
+ */
+export function button(label: string, cls?: string): HTMLButtonElement {
+  const b = el('button', label, cls);
+  b.type = 'button';
+  return b;
+}
+
+/**
+ * Builds one list row from its parts.
+ *
+ * Call: `row(el('strong', path), el('span', note))`.
+ * Expects: nodes in display order.
+ * Output: the `<li>`.
+ */
+export function row(...parts: Node[]): HTMLLIElement {
+  const li = document.createElement('li');
+  li.append(...parts);
+  return li;
+}
+
+/**
+ * Runs a file action from a button and shows its outcome.
+ *
+ * Call: `await runFileAction(button, action)`.
+ * Expects: an action resolving to the text to show.
+ * Output: none; the button is disabled meanwhile; errors become
+ * `hwMessage` texts.
+ */
+export async function runFileAction(b: HTMLButtonElement, action: () => Promise<Said>): Promise<void> {
+  b.disabled = true;
+  try {
+    const said = await action();
+    setStatus(said.text, said.kind);
+  } catch (e) {
+    setStatus(fileErrorText(e), 'error');
+  } finally {
+    b.disabled = false;
+  }
 }

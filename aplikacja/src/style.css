@@ -77,5 +77,18 @@ fieldset label { display: flex; gap: 8px; align-items: center; font-weight: 400;
 .rows .state { color: var(--muted); }
 .path { overflow-wrap: anywhere; }
 #history-path { margin: 8px 0 6px; color: var(--muted); }
-.task .files { margin-top: 6px; }
-.task .locked { margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+.task-files { margin-top: 8px; }
+.task-files summary { cursor: pointer; font-weight: 500; }
+.task-files h3 { font-size: 13px; margin: 10px 0 4px; }
+.task-files p { margin: 4px 0; }
+.files-error { color: var(--error); }
+.rows .versions { flex-basis: 100%; margin: 4px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
+.rows .versions li { display: list-item; border: 0; padding: 0; }
+.rows li button.link { padding: 0; font-size: 12px; }
+.rows li button.link:first-of-type { margin-left: 0; }
+.tree-bar { flex-wrap: wrap; margin: 0 0 8px; }
+.check { display: flex; gap: 6px; align-items: center; font-weight: 400; }
+.crumbs { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin: 0 0 8px; overflow-wrap: anywhere; }
+.task-pick { padding: 3px 6px; font-size: 12px; margin-left: auto; }
+#tree-other { margin: 0 0 8px; }
+#tree-other input { flex: 1; min-width: 0; }
