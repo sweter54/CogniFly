@@ -1,9 +1,11 @@
-// Extra task controls of the inbox: Claude thread, rejection and the
-// sender's choices for a rejected task. Person text (the reason) is
-// shown with textContent only: it is data.
+// Extra task controls of the inbox: Claude thread, rejection, the
+// sender's choices for a rejected task and file locks. Person text
+// (the reason) and file paths are shown with textContent only: data.
 import type { Person, Task } from '@cognifly/wspolne/api';
+import { canLockFiles, fileErrorText } from '../../logic/files-view.js';
+import type { HwState } from '../../logic/heartwood.js';
 import { canReject, isAcceptor } from '../../logic/inbox-view.js';
-import type { Call } from '../ui.js';
+import { armed, PICKER_WAIT_MS, type Call } from '../ui.js';
 
 /** Outcome message of a user action. */
 export type Outcome = { text: string; kind: 'ok' | 'error' };
@@ -226,33 +228,6 @@ export function wireReturned(
 }
 
 /**
- * Makes a button ask for a second click before a final action.
- *
- * Call: `armed(button, 'Na pewno…?', action)`.
- * Expects: a visible button.
- * Output: none; the first click changes the label for 5 s, a second
- * click in that time runs the action.
- */
-function armed(button: HTMLButtonElement, question: string, action: () => Promise<void>): void {
-  const label = button.textContent ?? '';
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  button.addEventListener('click', () => {
-    if (timer === undefined) {
-      button.textContent = question;
-      timer = setTimeout(() => {
-        button.textContent = label;
-        timer = undefined;
-      }, 5_000);
-      return;
-    }
-    clearTimeout(timer);
-    timer = undefined;
-    button.textContent = label;
-    void action();
-  });
-}
-
-/**
  * Tells whether the "who accepts it" form is open for a task.
  * Call: `acceptorFormOpen(id)` while building the list.
  * Expects: a task id. Output: true when it should be reopened.
@@ -269,4 +244,64 @@ export function acceptorFormOpen(taskId: string): boolean {
 export function closeAcceptorForm(li: HTMLElement, taskId: string): void {
   drafts.delete(`.accept-form:${taskId}`);
   part<HTMLFormElement>(li, '.accept-form').hidden = true;
+}
+
+/**
+ * Shows the paths this computer locked for a task.
+ * Call: `showLocked(li, paths)`. Expects: the task template markup.
+ * Output: none; "Zwolnij" shows only with locked paths.
+ */
+function showLocked(li: HTMLElement, paths: readonly string[]): void {
+  part<HTMLButtonElement>(li, '.release').hidden = paths.length === 0;
+  part<HTMLUListElement>(li, '.locked').replaceChildren(...paths.map((p) => {
+    const row = document.createElement('li');
+    row.textContent = p;
+    return row;
+  }));
+}
+
+/**
+ * Runs a file call for a task, then shows its locked paths again.
+ *
+ * Call: `lockAction(report, run, reload)`.
+ * Expects: `run` resolves to the success text; `reload` redraws the
+ * locked paths (also after a failure: a release may be partial).
+ * Output: none; file errors become `hwMessage` texts.
+ */
+function lockAction(report: Report, run: () => Promise<string>, reload: () => Promise<void>): Promise<void> {
+  return report(async () => {
+    try {
+      return { text: await run(), kind: 'ok' };
+    } catch (e) {
+      return { text: fileErrorText(e), kind: 'error' };
+    } finally {
+      await reload();
+    }
+  });
+}
+
+/**
+ * Sets up "Zablokuj pliki…" and "Zwolnij" with the locked paths.
+ *
+ * Call: `wireFiles(li, task, me, state, call, report)`.
+ * Expects: the user's person id and the Heartwood supervisor state.
+ * Output: none; shown only when `canLockFiles`; the lock waits for
+ * the file dialog up to 10 minutes; outcomes go to the status line.
+ */
+export function wireFiles(li: HTMLElement, task: Task, me: string | null, state: HwState, call: Call, report: Report): void {
+  const show = canLockFiles(task, me, state);
+  part<HTMLElement>(li, '.files').hidden = !show;
+  part<HTMLElement>(li, '.locked').hidden = !show;
+  if (!show) return;
+  const reload = () => call('task.lockedFiles', { id: task.id }).then((r) => showLocked(li, r.paths)).catch(() => undefined);
+  showLocked(li, []);
+  void reload();
+  part<HTMLButtonElement>(li, '.lock').addEventListener('click', () => void lockAction(report, async () => {
+    const { paths } = await call('task.lockFiles', { id: task.id }, PICKER_WAIT_MS);
+    return paths.length ? `Zablokowane pliki: ${paths.length}.` : 'Nie wybrano plików.';
+  }, reload));
+  part<HTMLButtonElement>(li, '.release').addEventListener('click', () => void lockAction(report, async () => {
+    const { paths } = await call('task.releaseFiles', { id: task.id });
+    return `Zwolniono pliki: ${paths.length}.`;
+  }, reload));
 }

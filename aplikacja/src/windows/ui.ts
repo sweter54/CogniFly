@@ -131,8 +131,10 @@ export async function hideSelf(): Promise<void> {
   await getCurrentWebviewWindow().hide();
 }
 
-/** How long to wait for the user in the folder dialog. */
-const PICKER_WAIT_MS = 10 * 60_000;
+/** How long to wait for the user in a system file dialog. */
+export const PICKER_WAIT_MS = 10 * 60_000;
+/** How long to wait for a slow Heartwood command (up to 120 s). */
+export const DAEMON_WAIT_MS = 130_000;
 
 /**
  * Asks the background window to show the folder picker.
@@ -146,4 +148,53 @@ const PICKER_WAIT_MS = 10 * 60_000;
 export async function pickFolder(call: Call, currentPath: string): Promise<string | null> {
   const { path } = await call('config.pickFolder', { current: currentPath }, PICKER_WAIT_MS);
   return path;
+}
+
+/** Buttons that show a question and wait for a second click. */
+const primed = new WeakMap<HTMLButtonElement, { label: string; timer: ReturnType<typeof setTimeout> }>();
+
+/**
+ * Shows a question on a button for 5 s.
+ *
+ * Call: `prime(button, 'Na pewno…?')`; check with `takePrimed`.
+ * Expects: a visible button.
+ * Output: none; the label comes back after 5 s.
+ */
+export function prime(button: HTMLButtonElement, question: string): void {
+  const label = primed.get(button)?.label ?? button.textContent ?? '';
+  clearTimeout(primed.get(button)?.timer);
+  button.textContent = question;
+  primed.set(button, { label, timer: setTimeout(() => takePrimed(button), 5_000) });
+}
+
+/**
+ * Ends a question shown by `prime`.
+ *
+ * Call: `takePrimed(button)` on the next click.
+ * Expects: any button.
+ * Output: true when the question was still shown (the click
+ * confirms it); the label is restored either way.
+ */
+export function takePrimed(button: HTMLButtonElement): boolean {
+  const p = primed.get(button);
+  if (!p) return false;
+  clearTimeout(p.timer);
+  primed.delete(button);
+  button.textContent = p.label;
+  return true;
+}
+
+/**
+ * Makes a button ask for a second click before a final action.
+ *
+ * Call: `armed(button, 'Na pewno…?', action)`.
+ * Expects: a visible button.
+ * Output: none; the first click shows the question for 5 s, a
+ * second click in that time runs the action.
+ */
+export function armed(button: HTMLButtonElement, question: string, action: () => Promise<void>): void {
+  button.addEventListener('click', () => {
+    if (takePrimed(button)) void action();
+    else prime(button, question);
+  });
 }

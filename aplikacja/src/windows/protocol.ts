@@ -7,7 +7,7 @@ import type { FilesView, HwVersion } from '../logic/heartwood.js';
 export const WINDOWS = { background: 'background', main: 'main' } as const;
 
 /** Screens of the main window. */
-export type Screen = 'login' | 'inbox' | 'settings';
+export type Screen = 'login' | 'inbox' | 'files' | 'settings';
 
 /** Event pushed to the main window after every view change. */
 export const INBOX_EVENT = 'cognifly://inbox';

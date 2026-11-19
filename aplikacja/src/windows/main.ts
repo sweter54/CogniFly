@@ -1,7 +1,8 @@
-// Main window: one place that guides the user (login), shows the inbox
-// and the settings. Switches screens on tray / notification requests
-// and keeps the header in sync with the session.
+// Main window: one place that guides the user (login), shows the
+// inbox, the files and the settings. Switches screens on tray /
+// notification requests and keeps the header in sync with the session.
 import { INBOX_EVENT, SCREEN_EVENT, type InboxView, type Screen } from './protocol.js';
+import { mountFiles } from './screens/files.js';
 import { mountInbox } from './screens/inbox.js';
 import { mountLogin } from './screens/login.js';
 import { mountReviewRequest } from './screens/review-request.js';
@@ -10,7 +11,7 @@ import { installErrorLog, reportError } from './diagnostics.js';
 import { tauriBus } from './tauri-bus.js';
 import { byId, connect, messageFor, setStatus } from './ui.js';
 
-const SCREENS: Screen[] = ['login', 'inbox', 'settings'];
+const SCREENS: Screen[] = ['login', 'inbox', 'files', 'settings'];
 
 /**
  * Updates the header for the session state.
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
   let current: Screen = 'login';
   const login = mountLogin(call, () => view.workFolder !== '');
   const inbox = mountInbox(call);
+  const files = mountFiles(call);
   mountReviewRequest(call, () => view.osoba, () => inbox.refresh());
   const settings = mountSettings(call, () => go(view.loggedIn ? 'inbox' : 'login'));
 
@@ -77,6 +79,8 @@ async function main(): Promise<void> {
   function go(screen: Screen): void {
     current = needsSetup(view) ? 'login' : screen;
     showOnly(current);
+    if (current === 'files') files.show(view.files);
+    else files.hide();
     if (current === 'inbox') inbox.render(view);
     if (current === 'settings') {
       settings.showFolder(view.workFolder);
@@ -97,6 +101,7 @@ async function main(): Promise<void> {
     renderHeader(view);
     if (loggedOut) go('login');
     else if (current === 'inbox') inbox.render(view);
+    else if (current === 'files') files.render(view.files);
     else if (current === 'settings') settings.showFolder(view.workFolder);
   }
 

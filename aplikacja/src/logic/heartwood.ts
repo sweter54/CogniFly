@@ -91,6 +91,7 @@ const MESSAGES: Readonly<Record<string, string>> = {
   NOT_INSTALLED: 'Heartwood nie jest zainstalowany na tym komputerze.',
   DISABLED: 'Pliki nie są jeszcze włączone w tej wersji CogniFly.',
   TIMEOUT: 'Heartwood nie odpowiada.',
+  OUTSIDE: 'Można wybrać tylko pliki z folderu Heartwood.',
 };
 
 /**

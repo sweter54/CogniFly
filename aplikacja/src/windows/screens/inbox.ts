@@ -3,9 +3,10 @@
 import type { Person, Task, UserSettableState } from '@cognifly/wspolne/api';
 import { onRender, requestHighlight, type Highlight } from '../../logic/highlight.js';
 import { displayOrder, isFinished, selectValue, taskNote } from '../../logic/inbox-view.js';
+import type { HwState } from '../../logic/heartwood.js';
 import type { InboxView } from '../protocol.js';
 import { byId, messageFor, setStatus, type Call } from '../ui.js';
-import { acceptorFormOpen, askAcceptor, closeAcceptorForm, wireAcceptor, wireReject, wireReturned, wireThread, type Outcome } from './task-actions.js';
+import { acceptorFormOpen, askAcceptor, closeAcceptorForm, wireAcceptor, wireFiles, wireReject, wireReturned, wireThread, type Outcome } from './task-actions.js';
 
 /** Polish names of task states. */
 const STATE_NAMES: Record<string, string> = {
@@ -94,6 +95,7 @@ const WORKING_STATES = ['wziete', 'w_trakcie', 'do_akceptacji'];
  */
 export function mountInbox(call: Call): InboxScreen {
   let me: string | null = null;
+  let filesState: HwState = 'disabled';
   let peopleList: Promise<Person[]> | null = null;
 
   /**
@@ -164,6 +166,7 @@ export function mountInbox(call: Call): InboxScreen {
     wireReject(li, task, me, call, act);
     wireAcceptor(li, task, me, call, act);
     wireReturned(li, task, mine, people, call, act);
+    wireFiles(li, task, me, filesState, call, report);
     take.addEventListener('click', () => void act(() => takeTask(call, task.id)));
     state.addEventListener('change', () => {
       if (state.value === 'do_akceptacji') return askAcceptor(li, task, people, call, act, () => (state.value = selectValue(task)));
@@ -185,6 +188,7 @@ export function mountInbox(call: Call): InboxScreen {
    */
   function render(view: InboxView): void {
     me = view.osoba;
+    filesState = view.files.info.state;
     const ordered = displayOrder(view.tasks);
     const done = ordered.filter(isFinished);
     const active = document.activeElement?.matches('.reason') ? document.activeElement : null;
