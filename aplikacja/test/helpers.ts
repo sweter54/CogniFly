@@ -56,3 +56,24 @@ export function memoryVault(initial: string | null = null): Vault & { value(): s
 export function header(call: Recorded, name: string): string | undefined {
   return (call.init.headers as Record<string, string>)[name];
 }
+
+/** A `status` reply shaped like contract section 9. */
+export const STATUS_REPLY = {
+  ok: true,
+  running: true,
+  connected: true,
+  spaces: [
+    { space: 'ws:w1', folder: 'wspolne', lastSeq: 5, serverSeq: 7, unsent: 3 },
+    { space: 'prv:michal', folder: 'Prywatne', lastSeq: 2, serverSeq: null, unsent: 4 },
+  ],
+  pending: [{ space: 'ws:w1', op: 'put', path: 'a.txt', toPath: null, status: 'waiting', message: null }],
+  conflicts: [
+    { space: 'ws:w1', path: 'b.docx', copyPath: 'b (konflikt).docx', at: '2026-11-19T10:00:00Z', message: 'Ktoś zmienił plik.' },
+    { space: 'ws:w1', path: 'c.docx', copyPath: 'c (konflikt).docx', at: '2026-11-19T10:01:00Z', message: 'Ktoś zmienił plik.' },
+  ],
+  skipped: [
+    { space: 'ws:w1', path: 'x:y', reason: 'name:NAME_INVALID', reasonText: 'nieprawidłowa nazwa', suggestion: 'x_y', hint: 'zmień nazwę na „x_y”' },
+    { space: 'ws:w1', path: 'big.iso', reason: 'too_large', reasonText: 'za duży', suggestion: null, hint: null },
+  ],
+  issues: [{ space: '', message: 'Brak połączenia z serwerem.' }],
+};

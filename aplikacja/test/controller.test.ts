@@ -2,16 +2,51 @@ import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../src/logic/config.js';
 import { Controller, waitingCount, type Ports } from '../src/logic/controller.js';
 import { NetworkError } from '../src/logic/errors.js';
+import type { HeartwoodPort, HwInfo, HwReply, HwRequest } from '../src/logic/heartwood.js';
 import type { FetchFn } from '../src/logic/http.js';
 import { memoryStore } from '../src/logic/storage.js';
 import type { InboxView } from '../src/windows/protocol.js';
-import { memoryVault } from './helpers.js';
+import { memoryVault, STATUS_REPLY } from './helpers.js';
 
 const NOW = 50_000_000;
 const id = (n: number) => `zad_${String(n).padStart(12, '0')}`;
 const task = (n: number, stan = 'nowe') => ({ id: id(n), firma: 'pilot', zdarzenieId: 'e', kandydaci: ['michal'], stan, utworzono: '', opis: `Review PR #${n}` });
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status });
 const goodSession = JSON.stringify({ accessToken: 'A', refreshToken: 'R', expiresAt: NOW + 3_600_000, email: 'm@x.pl' });
+
+const ROOT = '/Users/m/Heartwood';
+
+/**
+ * Fake Heartwood port: scripted state, picked files and replies.
+ *
+ * Call: `fakeHeartwood()`; mutate `hw.state`, `hw.picked`, `hw.reply`.
+ * Expects: nothing.
+ * Output: the port plus its mutable script and recorded calls.
+ */
+function fakeHeartwood() {
+  const hw = {
+    state: 'running' as HwInfo['state'],
+    startError: null as string | null,
+    picked: [] as string[],
+    reply: (req: HwRequest): HwReply => (req.cmd === 'status' ? STATUS_REPLY : { ok: true, paths: req.paths ?? [] }),
+    calls: [] as HwRequest[],
+  };
+  const info = (): HwInfo => ({ state: hw.state, root: ROOT, restarts: 0, lastError: null });
+  const port: HeartwoodPort = {
+    start: vi.fn(async () => {
+      if (hw.startError) throw hw.startError;
+      return info();
+    }),
+    stop: vi.fn(async () => undefined),
+    info: vi.fn(async () => info()),
+    call: vi.fn(async (req: HwRequest) => {
+      hw.calls.push(req);
+      return hw.reply(req);
+    }),
+    pickFiles: vi.fn(async () => hw.picked),
+  };
+  return { hw, port };
+}
 
 /** Fake backend: routes by URL; `inbox` is mutable between polls. */
 function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
@@ -35,7 +70,9 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
     return json(404, { kod: 'NIE_ZNALEZIONO' });
   });
   const views: InboxView[] = [];
+  const { hw, port } = fakeHeartwood();
   const ports: Ports = {
+    heartwood: port,
     store: memoryStore(),
     vault: memoryVault(opts.session === undefined ? goodSession : opts.session),
     fetch,
@@ -46,7 +83,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
     pickFolder: vi.fn(async (): Promise<string | null> => '/Users/m/repo'),
     now: () => NOW,
   };
-  return { c: new Controller(ports), ports, state, views };
+  return { c: new Controller(ports), ports, state, views, hw };
 }
 
 describe('Controller', () => {
@@ -310,5 +347,133 @@ describe('Controller', () => {
     ]);
     await expect(h['task.sendBack']!({ id: id(1), reason: '' })).rejects.toMatchObject({ code: 'ZLY_POWOD' });
     await expect(h['inbox.setState']!({ id: id(1), state: 'do_akceptacji', acceptor: 'a b' })).rejects.toMatchObject({ code: 'ZLA_OSOBA' });
+  });
+
+  describe('files (Heartwood)', () => {
+    const lockId = id(7);
+
+    it('after login starts the daemon for the company; disabled does not break the inbox', async () => {
+      const { c, ports, hw } = setup({ inbox: [task(1)] });
+      hw.state = 'disabled';
+      hw.startError = 'DISABLED';
+      const v = await c.start();
+      expect(ports.heartwood.start).toHaveBeenCalledWith('', '', 'pilot');
+      expect(v.tasks).toHaveLength(1);
+      expect(v.files.info.state).toBe('disabled');
+      expect(v.files.status).toBeNull();
+      expect(hw.calls).toEqual([]);
+      await c.poll();
+      expect(ports.heartwood.start).toHaveBeenCalledTimes(1);
+    });
+
+    it('running daemon: status is read at each poll and counted', async () => {
+      const { c } = setup({ inbox: [] });
+      const v = await c.start();
+      expect(v.files.status?.connected).toBe(true);
+      expect(v.files.counts).toEqual({ conflicts: 2, unsent: 7 });
+      expect(await c.handlers()['files.get']!({})).toEqual(v.files);
+    });
+
+    it('a company change restarts the daemon with the new org', async () => {
+      const { c, state, ports } = setup({ inbox: [] });
+      state.firmy = [{ firma: 'pilot', osoba: 'michal' }, { firma: 'acme', osoba: 'mr' }];
+      await c.start();
+      await c.handlers()['config.setCompany']!({ company: 'acme' });
+      await c.poll();
+      expect(ports.heartwood.start).toHaveBeenLastCalledWith('', '', 'acme');
+    });
+
+    it('lock refuses paths outside root without calling the daemon', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      hw.calls = [];
+      hw.picked = [`${ROOT}/pilot/w1/a.docx`, '/Users/m/Desktop/x.docx'];
+      await expect(c.handlers()['task.lockFiles']!({ id: lockId })).rejects.toMatchObject({ code: 'OUTSIDE' });
+      expect(hw.calls).toEqual([]);
+    });
+
+    it('lockFiles locks with the work id and remembers; releaseFiles releases them and forgets', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      const h = c.handlers();
+      hw.picked = [`${ROOT}/pilot/w1/a.docx`, `${ROOT}/pilot/w1/b.xlsx`];
+      expect(await h['task.lockFiles']!({ id: lockId })).toEqual({ paths: hw.picked });
+      expect(hw.calls).toContainEqual({ cmd: 'lock', workId: `cognifly:${lockId}`, paths: hw.picked });
+      expect(await h['task.lockedFiles']!({ id: lockId })).toEqual({ paths: hw.picked });
+      expect(await h['task.releaseFiles']!({ id: lockId })).toEqual({ paths: hw.picked });
+      expect(hw.calls).toContainEqual({ cmd: 'release', paths: hw.picked });
+      expect(await h['task.lockedFiles']!({ id: lockId })).toEqual({ paths: [] });
+    });
+
+    it('a cancelled picker locks nothing; a bad task id is refused', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      hw.calls = [];
+      expect(await c.handlers()['task.lockFiles']!({ id: lockId })).toEqual({ paths: [] });
+      await expect(c.handlers()['task.lockFiles']!({ id: 'x' })).rejects.toMatchObject({ code: 'BAD_TASK_ID' });
+      expect(hw.calls).toEqual([]);
+    });
+
+    it('a daemon refusal surfaces as its code and nothing is remembered', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      hw.picked = [`${ROOT}/pilot/w1/a.docx`];
+      hw.reply = () => ({ ok: false, code: 'LOCKED', message: 'Plik blokuje Ania.' });
+      await expect(c.handlers()['task.lockFiles']!({ id: lockId })).rejects.toMatchObject({ code: 'LOCKED' });
+      expect(await c.handlers()['task.lockedFiles']!({ id: lockId })).toEqual({ paths: [] });
+    });
+
+    it('a transport failure (string code from invoke) surfaces as its code', async () => {
+      const { c, ports } = setup({ inbox: [] });
+      await c.start();
+      (ports.heartwood.call as ReturnType<typeof vi.fn>).mockRejectedValueOnce('NOT_RUNNING');
+      await expect(c.handlers()['files.history']!({ path: `${ROOT}/pilot/w1/a.docx` })).rejects.toMatchObject({ code: 'NOT_RUNNING' });
+    });
+
+    it('history, download and restore pass checked params to the daemon', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      const path = `${ROOT}/pilot/w1/a.docx`;
+      const version = { seq: 3, versionId: 'v3', sha256: 'ab', size: 1, author: 'ania', at: '2026-11-19T10:00:00Z', kind: 'put' };
+      hw.reply = (req) => {
+        if (req.cmd === 'history') return { ok: true, space: 'ws:w1', path: 'a.docx', versions: [version] };
+        if (req.cmd === 'download') return { ok: true, copy: `${ROOT}/pilot/w1/a (v3).docx` };
+        return { ok: true };
+      };
+      const h = c.handlers();
+      expect(await h['files.history']!({ path })).toEqual({ versions: [version], path });
+      expect(await h['files.download']!({ path, version: 3 })).toEqual({ copy: `${ROOT}/pilot/w1/a (v3).docx` });
+      expect(await h['files.restore']!({ path, version: 3 })).toEqual({ ok: true });
+      expect(hw.calls).toContainEqual({ cmd: 'restore', path, version: 3 });
+      await expect(h['files.download']!({ path, version: -1 })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(h['files.history']!({ path: '/etc/passwd' })).rejects.toMatchObject({ code: 'OUTSIDE' });
+    });
+
+    it('select and unselect pass space, topics and confirmation', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      const h = c.handlers();
+      expect(await h['files.select']!({ space: 'w1', topics: ['umowy'] })).toEqual({ ok: true });
+      expect(await h['files.unselect']!({ space: 'w1', yes: true })).toEqual({ ok: true });
+      expect(hw.calls).toContainEqual({ cmd: 'select', space: 'w1', topics: ['umowy'] });
+      expect(hw.calls).toContainEqual({ cmd: 'unselect', space: 'w1', yes: true });
+      await expect(h['files.select']!({ space: '' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    });
+
+    it('pickPath returns a picked file under root, null on cancel', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      expect(await c.handlers()['files.pickPath']!({})).toEqual({ path: null });
+      hw.picked = [`${ROOT}/pilot/w1/a.docx`];
+      expect(await c.handlers()['files.pickPath']!({})).toEqual({ path: `${ROOT}/pilot/w1/a.docx` });
+    });
+
+    it('logout stops the daemon and clears the files view', async () => {
+      const { c, ports } = setup({ inbox: [] });
+      await c.start();
+      await c.handlers()['session.logout']!({});
+      expect(ports.heartwood.stop).toHaveBeenCalled();
+      expect(c.current().files.status).toBeNull();
+    });
   });
 });

@@ -101,21 +101,35 @@ export function notificationBody(opis: string): string {
 }
 
 /** What the tray title reflects. */
-export interface TrayState { loggedIn: boolean; offline: boolean; waiting: number }
+export interface TrayState { loggedIn: boolean; offline: boolean; waiting: number; conflicts: number; unsent: number }
 
 /**
- * Text shown next to the menu-bar icon.
+ * Text shown next to the menu-bar icon (D12).
  *
  * Call: `trayTitle(state)`.
- * Expects: the latest poll state.
- * Output: `''` when logged out or nothing waits, `'!'` when offline
- * with nothing known, otherwise the count (`99+` above 99).
+ * Expects: the latest poll state and file counts.
+ * Output: `''` when logged out or nothing to show; else the parts
+ * that apply, space-separated: the task count (`'!'` when offline
+ * with no tasks), ` ⚠<conflicts>` and ` ↑<unsent>` — e.g. `3 ⚠2 ↑5`
+ * or `⚠1`. Counts above 99 show as `99+`.
  */
 export function trayTitle(state: TrayState): string {
   if (!state.loggedIn) return '';
-  if (state.offline && state.waiting === 0) return '!';
-  if (state.waiting === 0) return '';
-  return state.waiting > 99 ? '99+' : String(state.waiting);
+  const tasks = state.waiting > 0 ? capped(state.waiting) : state.offline ? '!' : '';
+  const conflicts = state.conflicts > 0 ? `⚠${capped(state.conflicts)}` : '';
+  const unsent = state.unsent > 0 ? `↑${capped(state.unsent)}` : '';
+  return [tasks, conflicts, unsent].filter(Boolean).join(' ');
+}
+
+/**
+ * Short form of a count.
+ *
+ * Call: `capped(n)`.
+ * Expects: a positive integer.
+ * Output: the number, or `99+` above 99.
+ */
+function capped(n: number): string {
+  return n > 99 ? '99+' : String(n);
 }
 
 /**

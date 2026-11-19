@@ -10,11 +10,19 @@ describe('config', () => {
       region: 'eu-central-1',
       company: 'pilot',
       workFolder: '',
+      heartwoodUrl: '',
+      heartwoodWsUrl: '',
     });
   });
 
   it('accepts an absolute work folder and strips its trailing slash', () => {
     expect(validateConfig({ ...DEFAULT_CONFIG, workFolder: ' /Users/m/repo/ ' })).toEqual({ ok: true, config: { ...DEFAULT_CONFIG, workFolder: '/Users/m/repo' } });
+  });
+
+  it('accepts empty Heartwood addresses (files disabled) and wss for the socket', () => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, heartwoodUrl: '', heartwoodWsUrl: '' }).ok).toBe(true);
+    const r = validateConfig({ ...DEFAULT_CONFIG, heartwoodUrl: 'https://hw.example.com/', heartwoodWsUrl: 'wss://ws.example.com' });
+    expect(r).toEqual({ ok: true, config: { ...DEFAULT_CONFIG, heartwoodUrl: 'https://hw.example.com', heartwoodWsUrl: 'wss://ws.example.com' } });
   });
 
   it('trims values and strips trailing slashes', () => {
@@ -26,6 +34,8 @@ describe('config', () => {
     ['apiUrl', 'http://insecure.example.com'],
     ['apiUrl', 'https://user:pw@a.example.com'],
     ['apiUrl', 'https://a.example.com/?q=1'],
+    ['heartwoodUrl', 'http://hw.example.com'],
+    ['heartwoodWsUrl', 'ws://hw.example.com'],
     ['clientId', 'abc-def'],
     ['region', 'Frankfurt'],
     ['company', 'Pilot!'],

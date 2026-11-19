@@ -101,11 +101,15 @@ describe('notificationBody', () => {
 
 describe('trayTitle', () => {
   it.each([
-    [{ loggedIn: false, offline: false, waiting: 3 }, ''],
-    [{ loggedIn: true, offline: false, waiting: 0 }, ''],
-    [{ loggedIn: true, offline: true, waiting: 0 }, '!'],
-    [{ loggedIn: true, offline: true, waiting: 2 }, '2'],
-    [{ loggedIn: true, offline: false, waiting: 150 }, '99+'],
+    [{ loggedIn: false, offline: false, waiting: 3, conflicts: 1, unsent: 1 }, ''],
+    [{ loggedIn: true, offline: false, waiting: 0, conflicts: 0, unsent: 0 }, ''],
+    [{ loggedIn: true, offline: true, waiting: 0, conflicts: 0, unsent: 0 }, '!'],
+    [{ loggedIn: true, offline: true, waiting: 2, conflicts: 0, unsent: 0 }, '2'],
+    [{ loggedIn: true, offline: false, waiting: 150, conflicts: 0, unsent: 0 }, '99+'],
+    [{ loggedIn: true, offline: false, waiting: 3, conflicts: 2, unsent: 5 }, '3 ⚠2 ↑5'],
+    [{ loggedIn: true, offline: false, waiting: 0, conflicts: 1, unsent: 0 }, '⚠1'],
+    [{ loggedIn: true, offline: false, waiting: 0, conflicts: 0, unsent: 4 }, '↑4'],
+    [{ loggedIn: true, offline: true, waiting: 0, conflicts: 0, unsent: 4 }, '! ↑4'],
   ])('%j → %s', (state, title) => expect(trayTitle(state)).toBe(title));
 });
 

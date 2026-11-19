@@ -8,6 +8,7 @@ import { fetch as httpFetch } from '@tauri-apps/plugin-http';
 import { openUrl as openWithOs } from '@tauri-apps/plugin-opener';
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
 import { taskFromAppLink } from '../../logic/app-link.js';
+import type { HeartwoodPort, HwInfo, HwReply } from '../../logic/heartwood.js';
 import type { FetchFn } from '../../logic/http.js';
 import { reportError } from '../diagnostics.js';
 import type { Vault } from '../../logic/session.js';
@@ -118,6 +119,32 @@ export async function pickFolder(startAt: string): Promise<string | null> {
   });
   return typeof chosen === 'string' ? chosen : null;
 }
+
+/**
+ * Shows the macOS picker for files under the Heartwood root.
+ *
+ * Call: as `HeartwoodPort.pickFiles`.
+ * Expects: the root folder (the dialog starts there).
+ * Output: the chosen absolute paths, `[]` when cancelled; the
+ * controller still checks that each lies under the root.
+ */
+async function pickFiles(root: string): Promise<string[]> {
+  const chosen = await openDialog({ multiple: true, directory: false, title: 'Wybierz pliki', defaultPath: root });
+  if (Array.isArray(chosen)) return chosen;
+  return typeof chosen === 'string' ? [chosen] : [];
+}
+
+/**
+ * Heartwood daemon backed by the Rust `heartwood_*` commands.
+ * Rejections carry code strings (`DISABLED`, `NOT_RUNNING`, …).
+ */
+export const heartwoodPort: HeartwoodPort = {
+  start: (serverUrl, wsUrl, org) => invoke<HwInfo>('heartwood_start', { serverUrl, wsUrl, org }),
+  stop: () => invoke<void>('heartwood_stop'),
+  info: () => invoke<HwInfo>('heartwood_info'),
+  call: (request) => invoke<HwReply>('heartwood_call', { request }),
+  pickFiles,
+};
 
 /**
  * Routes `cognifly://` links to a handler.
