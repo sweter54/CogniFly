@@ -60,11 +60,30 @@ Lambda `HeartwoodZdarzenia` i reguła EventBridge na zdarzenia `heartwood`
 (`lock.release_requested`, `change.rejected`, `lock.broken`, `quota.near`,
 `quota.exceeded`), kolejka `cognifly-test-heartwood-dlq` (nieudane rekordy
 strumienia i zdarzenia reguły) oraz alarmy błędów obu funkcji i tej kolejki.
-Konstrukcja samego Heartwood w tym stosie to osobny krok
-przy wdrożeniu (wymaga zgody Michała i decyzji o pakowaniu prywatnego repo).
-Wdrożenia na AWS nie ma. Konstrukcja Heartwood musi dostać szynę CogniFly
-(`eventBus: szyna`), bo inaczej publikuje zdarzenia na innej szynie i reguła
-`RegulaHeartwood` nigdy się nie uruchomi.
+Serwer Heartwood nie jest częścią stosu CogniFly. Instancja testowa to osobny
+stos `heartwood-test` (repo Heartwood, `infra/bin/cognifly-test.ts`), na puli
+Cognito i szynie `cognifly-test` CogniFly:
+
+| Co | Wartość |
+|---|---|
+| API HTTP (`intUrl`) | `https://eohqtq0t3j.execute-api.eu-central-1.amazonaws.com` |
+| WebSocket | `wss://s0ulscfugh.execute-api.eu-central-1.amazonaws.com/prod` |
+| `intApiArn` | `arn:aws:execute-api:eu-central-1:167702900577:eohqtq0t3j` |
+
+Adresy HTTP i WebSocket są wbudowane w aplikację (`DEFAULT_CONFIG`).
+
+### Przejściowo: przepięcie na Platformę
+
+Według projektu Platformy (`~/Documents/Platforma`, rozdz. 8) to układ
+przejściowy:
+- rejestr firm i osób Heartwood zasila docelowo Tożsamość (zdarzenia na hubie),
+  a nie skrypt `zasil-heartwood.ts`; skrypt zostaje dla przestrzeni i praw;
+- Heartwood publikuje na hub, więc `RegulaHeartwood` przejdzie na hub;
+- CogniFly dostaje nową pulę i klienta `cognifly` — nowe `sub`, rejestr osób
+  odtwarzany ze zdarzeń Tożsamości;
+- źródłem prawdy o zadaniach będzie CDC, więc stan pracy (strumień zadań)
+  przejdzie do CDC albo będzie liczony z jego zdarzeń;
+- aplikacja i demon sprawdzają `GET /access` przed pracą i co 5 min.
 
 ### Zasilanie rejestru (D6)
 

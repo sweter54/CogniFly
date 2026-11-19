@@ -25,8 +25,9 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   region: 'eu-central-1',
   company: 'pilot',
   workFolder: '',
-  heartwoodUrl: '',
-  heartwoodWsUrl: '',
+  // Heartwood test (stack heartwood-test, Heartwood repo); same pool.
+  heartwoodUrl: 'https://eohqtq0t3j.execute-api.eu-central-1.amazonaws.com',
+  heartwoodWsUrl: 'wss://s0ulscfugh.execute-api.eu-central-1.amazonaws.com/prod',
 });
 
 const STORE_KEY = 'cognifly.config';
