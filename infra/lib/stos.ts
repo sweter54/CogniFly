@@ -133,6 +133,16 @@ export class StosCogniFly extends Stack {
     });
 
     // --- Funkcje ---
+    /**
+     * Builds a Node 22 ARM Lambda with its own 14-day log group.
+     *
+     * Call: `wspolne('Api', 'api/index.ts', env, dlq?, timeout?)`.
+     * Expects: construct id `nazwa` (also gives function and log group
+     *   name `cognifly-test-<nazwa lowercased>`), entry path under
+     *   serwer/src, environment variables, an optional async-invoke DLQ
+     *   and an optional timeout (default 30 s).
+     * Output: the NodejsFunction (ESM bundle with source maps).
+     */
     const wspolne = (nazwa: string, wejscie: string, env: Record<string, string>, deadLetterQueue?: Queue, timeout = Duration.seconds(30)) => {
       const logi = new LogGroup(this, `${nazwa}Logi`, {
         logGroupName: `/aws/lambda/${PREFIKS}-${nazwa.toLowerCase()}`,

@@ -19,7 +19,6 @@ beforeAll(() => {
 
 const zasoby = (typ: string) => Object.entries<any>(json.Resources).filter(([, r]) => r.Type === typ);
 
-/** Logical id of the CloudFormation SSM parameter for `/platforma/test/<name>`. */
 /** Asserts that `EventBusName` of the named rule refers to the hub. */
 const naHubie = (j: Record<string, any>, regula: string) => {
   const [, r] = Object.entries<any>(j.Resources)
@@ -27,6 +26,7 @@ const naHubie = (j: Record<string, any>, regula: string) => {
   expect(JSON.stringify(r.Properties.EventBusName), regula).toContain(`"Ref":"${parametrSsm(j, 'hub/arn')}"`);
 };
 
+/** Logical id of the CloudFormation SSM parameter for `/platforma/test/<name>`. */
 const parametrSsm = (j: Record<string, any>, nazwa: string) => {
   const e = Object.entries<any>(j.Parameters ?? {}).find(([, p]) => p.Default === `/platforma/test/${nazwa}`);
   expect(e, nazwa).toBeDefined();
