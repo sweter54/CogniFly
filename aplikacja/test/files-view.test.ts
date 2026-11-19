@@ -1,7 +1,7 @@
 import type { Task } from '@cognifly/wspolne/api';
 import { describe, expect, it } from 'vitest';
 import {
-  canLockFiles, conflictRows, copiesLabel, fileErrorText, filesViewModel, folderCrumbs, lockableTasks, parseTopics, spaceChoices, spaceStatusText,
+  adoptErrorText, canLockFiles, conflictRows, copiesLabel, fileErrorText, filesViewModel, folderCrumbs, lockableTasks, parseTopics, spaceChoices, spaceStatusText,
   taskFilesModel, taskRefs, treeViewModel, untrackedRows, versionLine, versionsLabel, visibleRows,
 } from '../src/logic/files-view.js';
 import {
@@ -94,6 +94,17 @@ describe('fileErrorText', () => {
   it('uses app texts for app codes', () => expect(fileErrorText(new RpcError('TIMEOUT'))).toBe('Heartwood nie odpowiada.'));
   it('explains a path outside the root', () => expect(fileErrorText(new RpcError('OUTSIDE'))).toBe('Można wybrać tylko pliki z folderu Heartwood.'));
   it('names unknown errors', () => expect(fileErrorText(new Error('x'))).toBe('Nie udało się (UNEXPECTED).'));
+});
+
+describe('adoptErrorText', () => {
+  it('explains the unselected Zadania topic', () => {
+    expect(adoptErrorText(new RpcError('NOT_SELECTED', 'Temat nie jest wybrany.')))
+      .toBe('Temat Zadania nie jest wybrany na tym komputerze — wybierz go w Przestrzeniach.');
+  });
+  it('uses the file texts otherwise', () => {
+    expect(adoptErrorText(new RpcError('TASK_NOT_LOCKABLE'))).toBe('Do tego zadania nie można teraz dołączyć plików.');
+    expect(adoptErrorText(new Error('x'))).toBe('Nie udało się (UNEXPECTED).');
+  });
 });
 
 describe('canLockFiles', () => {
@@ -217,6 +228,11 @@ describe('treeViewModel', () => {
       ['d.txt', 'zablokowany — nikt nie pisze'], ['e.txt', 'czeka na wysłanie'], ['f.txt', 'konflikt'],
     ]);
     expect(m.rows[0]).toMatchObject({ path: 'T/a.txt', folder: false });
+  });
+
+  it('names an untracked file and offers no history or lock', () => {
+    const m = treeViewModel(browse([entry('T/n.txt', 'untracked')]), TASKS);
+    expect(m.rows[0]).toMatchObject({ stateText: 'nieśledzony', actions: ['open'], locked: false });
   });
 
   it('offers actions by state', () => {

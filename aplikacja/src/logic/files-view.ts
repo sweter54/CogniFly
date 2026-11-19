@@ -310,6 +310,21 @@ export function fileErrorText(e: unknown): string {
   return e instanceof RpcError ? hwMessage(e.code, e.detail) : hwMessage('UNEXPECTED');
 }
 
+/** Shown when `adopt` fails because `Zadania` is not selected. */
+const NOT_SELECTED_TASKS = 'Temat Zadania nie jest wybrany na tym komputerze — wybierz go w Przestrzeniach.';
+
+/**
+ * Polish text for a failed "Przenieś do zadania…".
+ *
+ * Call: `adoptErrorText(e)` in the catch of `files.adopt`.
+ * Expects: anything thrown by `call`.
+ * Output: the `Zadania` hint for `NOT_SELECTED` (only adopt moves
+ * files into that topic), else `fileErrorText(e)`.
+ */
+export function adoptErrorText(e: unknown): string {
+  return e instanceof RpcError && e.code === 'NOT_SELECTED' ? NOT_SELECTED_TASKS : fileErrorText(e);
+}
+
 /**
  * Tells whether a task offers "Zablokuj pliki…".
  *
@@ -527,13 +542,14 @@ function taskLink(workId: string | undefined, myTasks: readonly TaskRef[]): Tree
  * Call: `entryActions(entry, lockable)`.
  * Expects: a parsed entry; `lockable` false in private spaces.
  * Output: lock (free) or request release (locked) where locks
- * exist, history for files, open for entries with a local path.
+ * exist, history for tracked files (an untracked one has no
+ * versions), open for entries with a local path.
  */
 function entryActions(e: HwBrowseEntry, lockable: boolean): TreeAction[] {
   const out: TreeAction[] = [];
   if (lockable && e.state === 'free') out.push('lock');
   if (lockable && e.state === 'locked') out.push('requestRelease');
-  if (!e.folder) out.push('history');
+  if (!e.folder && e.state !== 'untracked') out.push('history');
   if (e.localPath !== null) out.push('open');
   return out;
 }
