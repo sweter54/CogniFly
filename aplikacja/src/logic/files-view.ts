@@ -4,7 +4,7 @@
 import { TASK_ID_PATTERN, type Task } from '@cognifly/wspolne/api';
 import {
   hwMessage, type FilesView, type HwBrowse, type HwBrowseEntry, type HwConflict, type HwEntryState, type HwInfo, type HwIssue,
-  type HwSkipped, type HwState, type HwVersion, type HwWorkFiles, type HwWorkLock, type HwWorkVersion, workIdFor,
+  type HwSkipped, type HwState, type HwStatus, type HwVersion, type HwWorkFiles, type HwWorkLock, type HwWorkVersion, workIdFor,
 } from './heartwood.js';
 import { RpcError } from './rpc.js';
 
@@ -25,9 +25,42 @@ export interface FilesModel {
   /** A status is known (the lists and actions make sense). */
   ready: boolean;
   spaces: SpaceRow[];
-  conflicts: HwConflict[];
+  /** New local files the daemon does not send ("Nieśledzone"). */
+  untracked: UntrackedRow[];
+  conflicts: ConflictRow[];
   skipped: HwSkipped[];
   issues: HwIssue[];
+}
+
+/** One untracked file of "Nieśledzone". */
+export interface UntrackedRow {
+  /** Absolute local path (what `files.adopt` takes). */
+  path: string;
+  /** `<ws>/<path>` for humans. */
+  label: string;
+  reasonText: string;
+  space: string;
+}
+
+/** One copy of a conflicting file. */
+export interface CopyRow { copyPath: string; when: string }
+
+/** One conflicting file of "Konflikty" (its conflicts grouped). */
+export interface ConflictRow {
+  /** `<ws>/<path>` for humans. */
+  label: string;
+  space: string;
+  path: string;
+  /** Newest copy on disk, `''` when none is left. */
+  copyPath: string;
+  message: string;
+  when: string;
+  /** Number of conflicts of the file. */
+  count: number;
+  /** E.g. "2 kopie". */
+  countText: string;
+  /** Copies on disk, newest first. */
+  copies: CopyRow[];
 }
 
 /** One lock row of "Pliki zadania". */
@@ -120,6 +153,7 @@ const CHANGE_NAMES: Record<HwVersion['kind'], string> = { ...KIND_NAMES, put: 'z
 /** Polish texts of entry states (`locked` adds the writer). */
 const STATE_TEXTS: Record<HwEntryState, string> = {
   free: 'wolny', writable: 'moje zadanie', locked: 'zablokowany', local_changed: 'czeka na wysłanie', conflict: 'konflikt',
+  untracked: 'nieśledzony',
 };
 
 /** Shown after "zablokowany —" when the work has no writer. */
@@ -146,7 +180,8 @@ export function filesViewModel(files: FilesView): FilesModel {
     spaces: (s?.spaces ?? []).map((sp) => ({
       label: sp.space, folder: sp.folder, synced: sp.serverSeq === null || sp.lastSeq === sp.serverSeq, unsent: sp.unsent,
     })),
-    conflicts: s?.conflicts ?? [],
+    untracked: untrackedRows(s),
+    conflicts: conflictRows(s),
     skipped: s?.skipped ?? [],
     issues: s?.issues ?? [],
   };
@@ -168,6 +203,52 @@ function bannerText(info: HwInfo, hasStatus: boolean, connected: boolean): strin
   if (info.state !== 'running') return null;
   if (!hasStatus) return hwMessage('TIMEOUT');
   return connected ? null : OFFLINE;
+}
+
+/**
+ * Rows of "Nieśledzone".
+ *
+ * Call: `untrackedRows(view.files.status)`.
+ * Expects: the last status or `null`.
+ * Output: one row per untracked file with its absolute local path
+ * (space folder + path); rows of spaces missing from `spaces[]`
+ * are skipped, as they cannot be moved from here.
+ */
+export function untrackedRows(s: HwStatus | null): UntrackedRow[] {
+  if (!s) return [];
+  const folders = new Map(s.spaces.map((sp) => [sp.space, sp.folder]));
+  return s.untracked.flatMap((u) => {
+    const folder = folders.get(u.space);
+    if (folder === undefined) return [];
+    return [{ path: `${folder}/${u.path}`, label: spacePath(u.space, u.path), reasonText: u.reasonText, space: u.space }];
+  });
+}
+
+/**
+ * Rows of "Konflikty".
+ *
+ * Call: `conflictRows(view.files.status)`.
+ * Expects: the last status or `null` (the daemon sends one
+ * conflict row per file).
+ * Output: one row per file with its count and copies.
+ */
+export function conflictRows(s: HwStatus | null): ConflictRow[] {
+  return (s?.conflicts ?? []).map((c: HwConflict) => ({
+    label: spacePath(c.space, c.path), space: c.space, path: c.path, copyPath: c.copyPath, message: c.message,
+    when: whenText(c.at), count: c.count, countText: copiesLabel(c.count),
+    copies: c.copies.map((k) => ({ copyPath: k.copyPath, when: whenText(k.at) })),
+  }));
+}
+
+/**
+ * Label of a file's number of conflict copies.
+ *
+ * Call: `copiesLabel(row.count)`.
+ * Expects: a count ≥ 1.
+ * Output: e.g. "1 kopia", "2 kopie", "5 kopii".
+ */
+export function copiesLabel(count: number): string {
+  return `${count} ${plural(count, 'kopia', 'kopie', 'kopii')}`;
 }
 
 /**

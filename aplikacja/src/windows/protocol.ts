@@ -1,7 +1,7 @@
 // Contract between UI windows and the background window: method names,
 // window labels and pushed events. Shared by both sides.
 import type { Task, UserSettableState } from '@cognifly/wspolne/api';
-import type { FilesView, HwBrowse, HwVersion, HwWorkFiles } from '../logic/heartwood.js';
+import type { FilesView, HwAdopted, HwBrowse, HwVersion, HwWorkFiles } from '../logic/heartwood.js';
 
 /** Window labels (must match tauri.conf.json and capabilities). */
 export const WINDOWS = { background: 'background', main: 'main' } as const;
@@ -76,6 +76,12 @@ export interface Methods {
   'files.requestRelease': { params: { space: string; path: string }; result: { ok: true } };
   /** Opens a folder of a selected space in Finder (`''` = its root). */
   'files.reveal': { params: { space: string; folder: string }; result: { ok: true } };
+  /** Moves untracked local files (one `ws:` space) into a task's folder. */
+  'files.adopt': { params: { paths: string[]; taskId: string }; result: HwAdopted };
+  /** Clears one conflict copy, or every conflict of a file. */
+  'files.resolve': { params: { copyPath: string } | { space: string; path: string }; result: { ok: true } };
+  /** Shows a conflict copy (under the root, in `Kopie konfliktów`). */
+  'files.revealCopy': { params: { copyPath: string }; result: { ok: true } };
   /** Shows a task in the inbox (like a `cognifly://` link). */
   'task.focus': { params: { id: string }; result: { ok: true } };
 }

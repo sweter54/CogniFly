@@ -734,6 +734,128 @@ describe('Controller', () => {
       expect(ports.revealFolder).not.toHaveBeenCalled();
     });
 
+    describe('adopt, resolve and conflict copies', () => {
+      const W1 = `${ROOT}/pilot/w1`;
+      const SPACES = [{ space: 'ws:w1', folder: W1, lastSeq: 1, serverSeq: 1, unsent: 0 }, { space: 'user:u-me', folder: `${ROOT}/pilot/Prywatne`, lastSeq: 1, serverSeq: 1, unsent: 0 }];
+      const mine = { ...task(7, 'wziete'), wlasciciel: 'michal', opis: 'Oferta: Acme/2026' };
+      const notMine = { ...task(8, 'wziete'), wlasciciel: 'ania' };
+      const dir = (path: string) => ({ path, localPath: null, folder: true, state: 'free', lockFolder: false });
+
+      /**
+       * Controller with a selected space, two tasks and a daemon that
+       * answers `files` with `zadania` and `adopt` like the contract.
+       */
+      async function adoptSetup(zadania: unknown = { ok: true, space: 'ws:w1', folder: 'Zadania', selected: true, entries: [] }) {
+        const t = setup({ workFolder: '/Users/m/repo', inbox: [mine, notMine] });
+        t.hw.reply = (req) => {
+          if (req.cmd === 'status') return { ...STATUS_REPLY, spaces: SPACES };
+          if (req.cmd === 'files') return zadania as HwReply;
+          if (req.cmd === 'adopt') {
+            const folder = `Zadania/${String(req.taskFolder)}`;
+            return { ok: true, space: 'ws:w1', folder, moved: (req.paths as string[]).map((from) => ({ from, to: `${W1}/${folder}/x` })) };
+          }
+          return { ok: true };
+        };
+        await t.c.start();
+        return t;
+      }
+
+      it('adopt requires an explicit task', async () => {
+        const { c, hw } = await adoptSetup();
+        const h = c.handlers();
+        const paths = [`${W1}/luzem.txt`];
+        await expect(h['files.adopt']!({ paths })).rejects.toMatchObject({ code: 'BAD_TASK_ID' });
+        await expect(h['files.adopt']!({ paths, taskId: '' })).rejects.toMatchObject({ code: 'BAD_TASK_ID' });
+        await expect(h['files.adopt']!({ paths, taskId: notMine.id })).rejects.toMatchObject({ code: 'TASK_NOT_LOCKABLE' });
+        await expect(h['files.adopt']!({ paths, taskId: id(99) })).rejects.toMatchObject({ code: 'TASK_NOT_LOCKABLE' });
+        expect(daemonCalls(hw)).toEqual([]);
+      });
+
+      it('adopt makes a new task folder from the description', async () => {
+        const { c, hw } = await adoptSetup();
+        const paths = [`${W1}/luzem.txt`, `${W1}/Oferty/nowy.docx`];
+        const r = await c.handlers()['files.adopt']!({ paths, taskId: mine.id });
+        const taskFolder = `Oferta Acme2026 (${mine.id})`;
+        expect(daemonCalls(hw)).toEqual([
+          { cmd: 'files', space: 'ws:w1', folder: 'Zadania' },
+          { cmd: 'adopt', paths, workId: `cognifly:${mine.id}`, taskFolder },
+        ]);
+        expect(r).toEqual({ folder: `Zadania/${taskFolder}`, moved: paths.map((from) => ({ from, to: `${W1}/Zadania/${taskFolder}/x` })) });
+      });
+
+      it('adopt reuses the existing folder of the task', async () => {
+        const entries = [dir('Zadania/Inna (zad_000000000001)'), dir(`Zadania/Stara nazwa (${mine.id})`)];
+        const { c, hw } = await adoptSetup({ ok: true, space: 'ws:w1', folder: 'Zadania', selected: true, entries });
+        await c.handlers()['files.adopt']!({ paths: [`${W1}/luzem.txt`], taskId: mine.id });
+        expect(daemonCalls(hw)[1]).toMatchObject({ cmd: 'adopt', taskFolder: `Stara nazwa (${mine.id})` });
+      });
+
+      it('adopt without a Zadania topic yet uses the new name', async () => {
+        const { c, hw } = await adoptSetup({ ok: false, code: 'NOT_FOUND', message: 'Nie ma tematu.' });
+        await c.handlers()['files.adopt']!({ paths: [`${W1}/luzem.txt`], taskId: mine.id });
+        expect(daemonCalls(hw)[1]).toMatchObject({ cmd: 'adopt', taskFolder: `Oferta Acme2026 (${mine.id})` });
+      });
+
+      it('adopt refuses bad paths before any daemon call', async () => {
+        const { c, hw } = await adoptSetup();
+        const h = c.handlers();
+        const taskId = mine.id;
+        await expect(h['files.adopt']!({ paths: [], taskId })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(h['files.adopt']!({ paths: 'x', taskId })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(h['files.adopt']!({ paths: ['/etc/passwd'], taskId })).rejects.toMatchObject({ code: 'OUTSIDE' });
+        await expect(h['files.adopt']!({ paths: [`${W1}/../x`], taskId })).rejects.toMatchObject({ code: 'OUTSIDE' });
+        await expect(h['files.adopt']!({ paths: [`${W1}/a`, `${ROOT}/pilot/w2/b`], taskId })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(h['files.adopt']!({ paths: [`${ROOT}/pilot/Prywatne/a`], taskId })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(h['files.adopt']!({ paths: [`${ROOT}/pilot/w9/a`], taskId })).rejects.toMatchObject({ code: 'NOT_LOCAL' });
+        expect(daemonCalls(hw)).toEqual([]);
+      });
+
+      it('adopt passes the daemon refusal with its Polish text', async () => {
+        const { c, hw } = await adoptSetup();
+        const base = hw.reply;
+        hw.reply = (req) => (req.cmd === 'adopt' ? { ok: false, code: 'LOCKED', message: 'Folder zadania blokuje Ania.' } : base(req));
+        const b = memoryBus();
+        await rpcServer(b('background'), c.handlers(), errorCode, errorDetail);
+        const call = await rpcClient(b('main'), 'main');
+        const err = await call('files.adopt', { paths: [`${W1}/luzem.txt`], taskId: mine.id }).catch((e: unknown) => e);
+        expect(err).toMatchObject({ code: 'LOCKED', detail: 'Folder zadania blokuje Ania.' });
+      });
+
+      it('resolve clears a whole file or one copy', async () => {
+        const { c, hw } = await adoptSetup();
+        const h = c.handlers();
+        expect(await h['files.resolve']!({ space: 'ws:w1', path: 'b.docx' })).toEqual({ ok: true });
+        const copyPath = `${W1}/Kopie konfliktów/b (konflikt 2026-11-19 10-00).docx`;
+        await h['files.resolve']!({ copyPath });
+        expect(daemonCalls(hw)).toEqual([{ cmd: 'resolve', space: 'ws:w1', path: 'b.docx' }, { cmd: 'resolve', copyPath }]);
+      });
+
+      it('resolve takes exactly one target', async () => {
+        const { c, hw } = await adoptSetup();
+        const h = c.handlers();
+        const copyPath = `${W1}/Kopie konfliktów/b.docx`;
+        await expect(h['files.resolve']!({})).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(h['files.resolve']!({ copyPath, space: 'ws:w1', path: 'b.docx' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(h['files.resolve']!({ space: 'ws:w1', path: '../b' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        await expect(h['files.resolve']!({ copyPath: '/tmp/Kopie konfliktów/b.docx' })).rejects.toMatchObject({ code: 'OUTSIDE' });
+        expect(daemonCalls(hw)).toEqual([]);
+      });
+
+      it('revealCopy shows only conflict copies under the root', async () => {
+        const { c, ports } = await adoptSetup();
+        const h = c.handlers();
+        const copy = `${W1}/Oferty/Kopie konfliktów/b (konflikt 2026-11-19 10-00).docx`;
+        expect(await h['files.revealCopy']!({ copyPath: copy })).toEqual({ ok: true });
+        expect(ports.revealFolder).toHaveBeenCalledWith(copy);
+        await expect(h['files.revealCopy']!({ copyPath: `${W1}/Oferty/b.docx` })).rejects.toMatchObject({ code: 'NOT_COPY' });
+        await expect(h['files.revealCopy']!({ copyPath: '/tmp/Kopie konfliktów/b.docx' })).rejects.toMatchObject({ code: 'OUTSIDE' });
+        await expect(h['files.revealCopy']!({ copyPath: 7 })).rejects.toMatchObject({ code: 'OUTSIDE' });
+        expect(ports.revealFolder).toHaveBeenCalledTimes(1);
+        vi.mocked(ports.revealFolder).mockRejectedValueOnce('denied');
+        await expect(h['files.revealCopy']!({ copyPath: copy })).rejects.toMatchObject({ code: 'OPEN_FAILED' });
+      });
+    });
+
     it('task.focus shows the task in the inbox and checks the id', async () => {
       const { ports } = setup({ workFolder: '/Users/m/repo', inbox: [task(1)] });
       ports.store.setItem('cognifly.config', JSON.stringify({ ...DEFAULT_CONFIG, workFolder: '/Users/m' }));

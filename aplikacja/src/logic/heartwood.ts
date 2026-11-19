@@ -13,7 +13,7 @@ export interface HwInfo { state: HwState; root: string; restarts: number; lastEr
 /** Commands the Rust side lets through to the daemon. */
 export type HwCommand =
   | 'status' | 'lock' | 'release' | 'request-release' | 'history' | 'download' | 'restore' | 'select' | 'unselect'
-  | 'files' | 'work-files';
+  | 'files' | 'work-files' | 'adopt' | 'resolve';
 
 /** One local API request line. */
 export interface HwRequest { cmd: HwCommand; [field: string]: unknown }
@@ -42,8 +42,24 @@ export interface HeartwoodPort {
 export interface HwSpace { space: string; folder: string; lastSeq: number; serverSeq: number | null; unsent: number }
 /** One outbox row. */
 export interface HwPending { space: string; op: string; path: string; toPath?: string; status: string; message?: string }
-/** One conflict with the local copy's path. */
-export interface HwConflict { space: string; path: string; copyPath: string; at: string; message: string }
+/** One conflict copy on disk. */
+export interface HwConflictCopy { copyPath: string; at: string }
+/**
+ * Conflicts of one file: the newest one's copy (`''` when none is on
+ * disk), time and message, how many there were and the copies.
+ */
+export interface HwConflict {
+  space: string;
+  path: string;
+  copyPath: string;
+  at: string;
+  message: string;
+  count: number;
+  /** Copies on disk, newest first. */
+  copies: HwConflictCopy[];
+}
+/** One new local file the daemon does not send (no lock / no topic). */
+export interface HwUntracked { space: string; path: string; folder: boolean; reason: string; reasonText: string }
 /** One skipped path with a Polish reason and hint. */
 export interface HwSkipped { space: string; path: string; reason: string; reasonText: string; suggestion?: string; hint?: string }
 /** One current problem (`space` empty = general). */
@@ -57,6 +73,7 @@ export interface HwStatus {
   pending: HwPending[];
   conflicts: HwConflict[];
   skipped: HwSkipped[];
+  untracked: HwUntracked[];
   issues: HwIssue[];
 }
 
@@ -111,7 +128,7 @@ export interface HwWorkFiles {
 }
 
 /** Lock state of a browsed entry. */
-export type HwEntryState = 'free' | 'writable' | 'locked' | 'local_changed' | 'conflict';
+export type HwEntryState = 'free' | 'writable' | 'locked' | 'local_changed' | 'conflict' | 'untracked';
 
 /** One entry of a browsed folder level (`files`). */
 export interface HwBrowseEntry {
@@ -149,7 +166,7 @@ const CODE = /^[A-Z][A-Z_]{0,39}$/;
 /** Longest daemon text sent to a window (characters). */
 export const MAX_REFUSAL_TEXT = 300;
 const VERSION_KINDS: readonly string[] = ['put', 'restore', 'move', 'delete'];
-const ENTRY_STATES: readonly string[] = ['free', 'writable', 'locked', 'local_changed', 'conflict'];
+const ENTRY_STATES: readonly string[] = ['free', 'writable', 'locked', 'local_changed', 'conflict', 'untracked'];
 
 /** Polish texts of app-side codes; daemon refusals bring their own. */
 const MESSAGES: Readonly<Record<string, string>> = {
@@ -162,6 +179,8 @@ const MESSAGES: Readonly<Record<string, string>> = {
   OUTSIDE: 'Można wybrać tylko pliki z folderu Heartwood.',
   NOT_LOCAL: 'Tej przestrzeni nie ma na tym komputerze.',
   OPEN_FAILED: 'Nie udało się pokazać folderu w Finderze.',
+  TASK_NOT_LOCKABLE: 'Do tego zadania nie można teraz dołączyć plików.',
+  NOT_COPY: 'To nie jest kopia konfliktu.',
 };
 
 /**
@@ -177,11 +196,57 @@ export function parseStatus(v: unknown): HwStatus | null {
   if (!o || o.ok === false || typeof o.running !== 'boolean' || typeof o.connected !== 'boolean') return null;
   const spaces = list(o.spaces, parseSpace);
   const pending = list(o.pending, (x) => texts(x, ['space', 'op', 'path', 'status'], ['toPath', 'message']) as HwPending | null);
-  const conflicts = list(o.conflicts, (x) => texts(x, ['space', 'path', 'copyPath', 'at', 'message']) as HwConflict | null);
+  const conflicts = list(o.conflicts, parseConflict);
   const skipped = list(o.skipped, (x) => texts(x, ['space', 'path', 'reason', 'reasonText'], ['suggestion', 'hint']) as HwSkipped | null);
+  const untracked = o.untracked === undefined ? [] : list(o.untracked, parseUntracked);
   const issues = list(o.issues, (x) => texts(x, ['space', 'message']) as HwIssue | null);
-  if (!spaces || !pending || !conflicts || !skipped || !issues) return null;
-  return { running: o.running, connected: o.connected, spaces, pending, conflicts, skipped, issues };
+  if (!spaces || !pending || !conflicts || !skipped || !untracked || !issues) return null;
+  return { running: o.running, connected: o.connected, spaces, pending, conflicts, skipped, untracked, issues };
+}
+
+/**
+ * Reads one conflict row (one file).
+ *
+ * Call: `parseConflict(row)` via `list`.
+ * Expects: anything; an older daemon sends no `count`/`copies`,
+ * then the row counts as one conflict with its `copyPath` (if any).
+ * Output: the row, or `null` when a field is missing or mistyped.
+ */
+function parseConflict(v: unknown): HwConflict | null {
+  const t = texts(v, ['space', 'path', 'copyPath', 'at', 'message']);
+  const o = record(v);
+  if (!t || !o) return null;
+  if (o.count !== undefined && !isCount(o.count)) return null;
+  const copies = o.copies === undefined ? (t.copyPath ? [{ copyPath: t.copyPath, at: t.at! }] : []) : list(o.copies, parseCopy);
+  if (!copies) return null;
+  const count = (o.count as number | undefined) ?? 1;
+  return { space: t.space!, path: t.path!, copyPath: t.copyPath!, at: t.at!, message: t.message!, count, copies };
+}
+
+/**
+ * Reads one conflict copy.
+ *
+ * Call: `parseCopy(item)` via `list`.
+ * Expects: anything.
+ * Output: `{ copyPath, at }`, or `null` when malformed.
+ */
+function parseCopy(v: unknown): HwConflictCopy | null {
+  const t = texts(v, ['copyPath', 'at']);
+  return t ? { copyPath: t.copyPath!, at: t.at! } : null;
+}
+
+/**
+ * Reads one untracked file row.
+ *
+ * Call: `parseUntracked(row)` via `list`.
+ * Expects: anything.
+ * Output: the row, or `null` when a field is missing or mistyped.
+ */
+function parseUntracked(v: unknown): HwUntracked | null {
+  const t = texts(v, ['space', 'path', 'reason', 'reasonText']);
+  const o = record(v);
+  if (!t || !o || typeof o.folder !== 'boolean') return null;
+  return { space: t.space!, path: t.path!, folder: o.folder, reason: t.reason!, reasonText: t.reasonText! };
 }
 
 /**
@@ -571,4 +636,80 @@ export const FILES_FOLDER = 'Pliki';
 export function heartwoodRoot(workFolder: string): string {
   const base = workFolder.replace(/\/+$/, '');
   return base ? `${base}/${FILES_FOLDER}` : '';
+}
+
+/** Topic holding the task folders in a space. */
+export const TASKS_TOPIC = 'Zadania';
+
+/** Longest description part of a task folder name (code points). */
+const TASK_NAME_MAX = 60;
+
+/** Name folders reserved by the client for conflict copies. */
+const COPY_FOLDERS: readonly string[] = ['kopie konfliktów', '.heartwood-kopie'];
+
+/**
+ * Folder name of a task inside `Zadania`.
+ *
+ * Call: `taskFolderName(task)`.
+ * Expects: a task with a checked id; any description.
+ * Output: the description in NFC without `/\:*?"<>|` and control
+ * characters, spaces collapsed, leading `.`/`~`/`$` dropped (hidden
+ * or ignored names), cut to 60 code points without a trailing space,
+ * then ` (<id>)`; only `(<id>)` when nothing is left.
+ */
+export function taskFolderName(task: { id: string; opis: string }): string {
+  const clean = task.opis.normalize('NFC').replace(/[/\\:*?"<>|\p{Cc}]/gu, (c) => (/\s/.test(c) ? ' ' : ''));
+  const flat = clean.replace(/\s+/g, ' ').replace(/^[\s.~$]+/, '');
+  const head = Array.from(flat).slice(0, TASK_NAME_MAX).join('').trimEnd();
+  return head ? `${head} (${task.id})` : `(${task.id})`;
+}
+
+/**
+ * Finds the task's folder already in `Zadania`.
+ *
+ * Call: `existingTaskFolder(level, taskId)`.
+ * Expects: the parsed `files` level of `Zadania`; a checked id.
+ * Output: the name of the first folder ending with `(<id>)`
+ * (alone or after a space), or `null`.
+ */
+export function existingTaskFolder(level: HwBrowse, taskId: string): string | null {
+  for (const e of level.entries) {
+    const name = e.path.split('/').pop() ?? '';
+    if (e.folder && (name === `(${taskId})` || name.endsWith(` (${taskId})`))) return name;
+  }
+  return null;
+}
+
+/**
+ * Checks a conflict copy path before it is revealed or resolved.
+ *
+ * Call: `isConflictCopy(path, root)`.
+ * Expects: any string; the Heartwood root.
+ * Output: true for a path under the root (`isUnderRoot`) with a
+ * `Kopie konfliktów` (case-insensitive, NFC) or `.heartwood-kopie`
+ * folder above its last segment.
+ */
+export function isConflictCopy(path: string, root: string): boolean {
+  if (!isUnderRoot(path, root)) return false;
+  const base = root.replace(/\/+$/, '');
+  const folders = path.slice(base.length + 1).split('/').slice(0, -1);
+  return folders.some((f) => COPY_FOLDERS.includes(f.normalize('NFC').toLocaleLowerCase('und')));
+}
+
+/** The `adopt` answer the windows get. */
+export interface HwAdopted { folder: string; moved: { from: string; to: string }[] }
+
+/**
+ * Reads the `adopt` reply.
+ *
+ * Call: `parseAdopt(reply)`.
+ * Expects: anything (untrusted JSON from the daemon).
+ * Output: the task folder and the moved files (bad rows dropped),
+ * or `null` for a malformed reply.
+ */
+export function parseAdopt(v: unknown): HwAdopted | null {
+  const o = record(v);
+  if (!o || typeof o.folder !== 'string' || !Array.isArray(o.moved)) return null;
+  const moved = rows(o.moved, (m) => texts(m, ['from', 'to']) as { from: string; to: string } | null);
+  return { folder: o.folder, moved };
 }

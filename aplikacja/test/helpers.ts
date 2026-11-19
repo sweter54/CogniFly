@@ -69,12 +69,19 @@ export const STATUS_REPLY = {
   ],
   pending: [{ space: 'ws:w1', op: 'put', path: 'a.txt', toPath: null, status: 'waiting', message: null }],
   conflicts: [
-    { space: 'ws:w1', path: 'b.docx', copyPath: 'b (konflikt).docx', at: '2026-11-19T10:00:00Z', message: 'Ktoś zmienił plik.' },
+    {
+      space: 'ws:w1', path: 'b.docx', copyPath: 'b (konflikt).docx', at: '2026-11-19T10:00:00Z', message: 'Ktoś zmienił plik.', count: 2,
+      copies: [{ copyPath: 'b (konflikt).docx', at: '2026-11-19T10:00:00Z' }, { copyPath: 'b (konflikt 2).docx', at: '2026-11-18T09:00:00Z' }],
+    },
     { space: 'ws:w1', path: 'c.docx', copyPath: 'c (konflikt).docx', at: '2026-11-19T10:01:00Z', message: 'Ktoś zmienił plik.' },
   ],
   skipped: [
     { space: 'ws:w1', path: 'x:y', reason: 'name:NAME_INVALID', reasonText: 'nieprawidłowa nazwa', suggestion: 'x_y', hint: 'zmień nazwę na „x_y”' },
     { space: 'ws:w1', path: 'big.iso', reason: 'too_large', reasonText: 'za duży', suggestion: null, hint: null },
+  ],
+  untracked: [
+    { space: 'ws:w1', path: 'Oferty/nowy.docx', folder: false, reason: 'no_lock', reasonText: 'brak blokady — dołącz do zadania, żeby wysłać' },
+    { space: 'ws:w1', path: 'luzem.txt', folder: false, reason: 'no_topic', reasonText: 'poza tematem — przenieś do zadania' },
   ],
   issues: [{ space: '', message: 'Brak połączenia z serwerem.' }],
 };

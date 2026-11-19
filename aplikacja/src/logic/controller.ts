@@ -8,10 +8,11 @@ import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, 
 import { isSafeFolder, loadConfig, saveChoices, type AppConfig, type UserChoices } from './config.js';
 import { claudeLink, threadLink } from './claude-link.js';
 import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
+import { canLockFiles } from './files-view.js';
 import {
-  checkReply, DISABLED_INFO, heartwoodRoot, filesView, groupBySpace, hwError, inBatches, isSpacePath, isUnderRoot, locksBySpace, parseBrowse, parseStatus,
-  parseVersions, parseWorkFiles, workIdFor, type FilesView, type HeartwoodPort, type HwBrowse, type HwInfo, type HwReply,
-  type HwRequest, type HwStatus, type HwWorkFiles,
+  checkReply, DISABLED_INFO, existingTaskFolder, heartwoodRoot, filesView, groupBySpace, hwError, inBatches, isConflictCopy, isSpacePath, isUnderRoot,
+  locksBySpace, parseAdopt, parseBrowse, parseStatus, parseVersions, parseWorkFiles, taskFolderName, TASKS_TOPIC, workIdFor, type FilesView,
+  type HeartwoodPort, type HwAdopted, type HwBrowse, type HwInfo, type HwReply, type HwRequest, type HwStatus, type HwWorkFiles,
 } from './heartwood.js';
 import type { FetchFn } from './http.js';
 import { clearSeen, loadSeen, notificationBody, notificationTitle, pickNew, saveSeen, waitingTasks } from './notify.js';
@@ -28,6 +29,8 @@ const FINAL_START_CODES: readonly string[] = ['DISABLED', 'NOT_INSTALLED', 'BAD_
 const MAX_NAME = 200;
 /** Most `work-files` pages read for one task (100 versions each). */
 const MAX_WORK_PAGES = 20;
+/** Most files moved into a task by one `files.adopt`. */
+const MAX_ADOPT_PATHS = 1000;
 
 /** Platform effects used by the controller. */
 export interface Ports {
@@ -254,6 +257,12 @@ export class Controller {
         return { ok: true };
       },
       'files.reveal': async (p) => this.reveal(treeParams(p)),
+      'files.adopt': async (p) => this.adopt(taskIdParam(p, 'taskId'), field(p, 'paths')),
+      'files.resolve': async (p) => {
+        await this.fileAction({ cmd: 'resolve', ...(await this.resolveTarget(p)) });
+        return { ok: true };
+      },
+      'files.revealCopy': async (p) => this.revealCopy(field(p, 'copyPath')),
       'task.focus': async (p) => {
         await this.focusTask(taskIdParam(p));
         return { ok: true };
@@ -539,6 +548,124 @@ export class Controller {
     const path = sub ? `${base}/${sub}` : base;
     if (!isUnderRoot(path, await this.filesRoot())) throw new AppError('OUTSIDE');
     await this.ports.revealFolder(path).catch(() => {
+      throw new AppError('OPEN_FAILED');
+    });
+    return { ok: true };
+  }
+
+  /**
+   * Moves untracked files into a task's folder (`adopt`).
+   *
+   * Call: rpc `files.adopt`.
+   * Expects: a task id the user chose (never guessed here) and the
+   * absolute local paths of files in one `ws:` space.
+   * Output: the task folder and the moved files.
+   * Throws: `TASK_NOT_LOCKABLE` for a task the user cannot lock
+   * files for, `BAD_REQUEST`/`OUTSIDE`/`NOT_LOCAL` for bad paths
+   * (all before any daemon call but `status`), the daemon's code,
+   * `BAD_RESPONSE` for an odd reply.
+   */
+  private async adopt(taskId: string, rawPaths: unknown): Promise<HwAdopted> {
+    const task = this.view.tasks.find((t) => t.id === taskId);
+    if (!task || !canLockFiles(task, this.view.osoba, this.view.files.info.state)) throw new AppError('TASK_NOT_LOCKABLE');
+    const paths = await this.adoptPaths(rawPaths);
+    const space = await this.workspaceOf(paths[0]!);
+    const taskFolder = (await this.existingFolder(space, taskId)) ?? taskFolderName(task);
+    const reply = await this.fileAction({ cmd: 'adopt', paths, workId: workIdFor(taskId), taskFolder });
+    const adopted = parseAdopt(reply);
+    if (!adopted) throw new AppError('BAD_RESPONSE');
+    return adopted;
+  }
+
+  /**
+   * Checks the paths of `files.adopt`.
+   *
+   * Call: `await this.adoptPaths(params.paths)`.
+   * Expects: anything.
+   * Output: the paths, all under the root and in one space folder.
+   * Throws: `BAD_REQUEST` for no list, an empty or too long list or
+   * several spaces; `OUTSIDE` for a path outside the root.
+   */
+  private async adoptPaths(v: unknown): Promise<string[]> {
+    if (!Array.isArray(v) || v.length === 0 || v.length > MAX_ADOPT_PATHS) throw new AppError('BAD_REQUEST');
+    const root = await this.filesRoot();
+    if (!v.every((p) => typeof p === 'string' && isUnderRoot(p, root))) throw new AppError('OUTSIDE');
+    const paths = v as string[];
+    if (groupBySpace(paths, root).length !== 1) throw new AppError('BAD_REQUEST');
+    return paths;
+  }
+
+  /**
+   * The workspace a local path belongs to.
+   *
+   * Call: `await this.workspaceOf(path)`.
+   * Expects: a path checked by `isUnderRoot`.
+   * Output: the `ws:` id whose local folder (fresh `status`)
+   * holds the path.
+   * Throws: `NOT_LOCAL` when no selected space holds it,
+   * `BAD_REQUEST` for a private space (no tasks there).
+   */
+  private async workspaceOf(path: string): Promise<string> {
+    const status = parseStatus(await this.hwCall({ cmd: 'status' }));
+    const space = status?.spaces.find((s) => path.startsWith(`${s.folder.replace(/\/+$/, '')}/`))?.space;
+    if (!space) throw new AppError('NOT_LOCAL');
+    if (!space.startsWith('ws:')) throw new AppError('BAD_REQUEST');
+    return space;
+  }
+
+  /**
+   * Name of the task's folder already in `Zadania`.
+   *
+   * Call: `await this.existingFolder(space, taskId)`.
+   * Expects: a `ws:` space id and a checked task id.
+   * Output: the folder name ending with `(<id>)`, or `null` when
+   * there is none (also when `Zadania` does not exist yet).
+   * Throws: other daemon codes and `BAD_RESPONSE`.
+   */
+  private async existingFolder(space: string, taskId: string): Promise<string | null> {
+    try {
+      return existingTaskFolder(await this.tree({ space, folder: TASKS_TOPIC }), taskId);
+    } catch (e) {
+      if (e instanceof AppError && e.code === 'NOT_FOUND') return null;
+      throw e;
+    }
+  }
+
+  /**
+   * Reads what `files.resolve` clears.
+   *
+   * Call: `await this.resolveTarget(params)`.
+   * Expects: exactly one of `copyPath` (one copy) or `space` +
+   * `path` (every conflict of the file).
+   * Output: `{ copyPath }` or `{ space, path }`.
+   * Throws: `BAD_REQUEST` for none, both or a bad space path;
+   * `OUTSIDE` for a copy path that is not a conflict copy under
+   * the root.
+   */
+  private async resolveTarget(params: unknown): Promise<{ copyPath: string } | { space: string; path: string }> {
+    const copyPath = field(params, 'copyPath');
+    const byFile = field(params, 'space') !== undefined || field(params, 'path') !== undefined;
+    if ((copyPath === undefined) === !byFile) throw new AppError('BAD_REQUEST');
+    if (byFile) return spacePathParams(params);
+    if (typeof copyPath !== 'string' || !isConflictCopy(copyPath, await this.filesRoot())) throw new AppError('OUTSIDE');
+    return { copyPath };
+  }
+
+  /**
+   * Shows one conflict copy in Finder.
+   *
+   * Call: rpc `files.revealCopy`.
+   * Expects: anything as the copy path.
+   * Output: `{ ok: true }`; Finder only selects the file.
+   * Throws: `OUTSIDE` for a path outside the root, `NOT_COPY` for
+   * one outside a `Kopie konfliktów` folder, `OPEN_FAILED` when
+   * the OS refuses.
+   */
+  private async revealCopy(copyPath: unknown): Promise<{ ok: true }> {
+    const root = await this.filesRoot();
+    if (typeof copyPath !== 'string' || !isUnderRoot(copyPath, root)) throw new AppError('OUTSIDE');
+    if (!isConflictCopy(copyPath, root)) throw new AppError('NOT_COPY');
+    await this.ports.revealFolder(copyPath).catch(() => {
       throw new AppError('OPEN_FAILED');
     });
     return { ok: true };

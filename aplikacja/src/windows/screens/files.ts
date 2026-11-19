@@ -2,8 +2,10 @@
 // skipped files and the version history of one file. Paths, names and
 // reasons come from the daemon: they are data and go into the page via
 // textContent only.
-import { fileErrorText, filesViewModel, parseTopics, spaceStatusText, versionLine, type FilesModel, type SpaceRow } from '../../logic/files-view.js';
-import type { FilesView, HwConflict, HwIssue, HwSkipped, HwVersion } from '../../logic/heartwood.js';
+import {
+  fileErrorText, filesViewModel, parseTopics, spaceStatusText, versionLine, type ConflictRow, type FilesModel, type SpaceRow,
+} from '../../logic/files-view.js';
+import type { FilesView, HwIssue, HwSkipped, HwVersion } from '../../logic/heartwood.js';
 import { RpcError } from '../../logic/rpc.js';
 import type { InboxView } from '../protocol.js';
 import {
@@ -69,7 +71,7 @@ function spaceRow(call: Call, space: SpaceRow): HTMLLIElement {
  * Call: `conflictRow(c)`. Expects: a conflict.
  * Output: path, "Kopia: <copyPath>" and the daemon's message.
  */
-function conflictRow(c: HwConflict): HTMLLIElement {
+function conflictRow(c: ConflictRow): HTMLLIElement {
   return row(el('strong', c.path, 'path'), el('span', `Kopia: ${c.copyPath}`, 'path'), el('span', c.message, 'muted'));
 }
 
