@@ -281,23 +281,28 @@ export function mountFiles(call: Call): FilesScreen {
 
   /**
    * Asks for a fresh status and draws it.
-   * Call: `refresh()`. Expects: nothing.
-   * Output: none; skipped while the window is hidden.
+   * Call: `refresh(manual)`; `manual` = the user clicked „Odśwież”.
+   * Expects: nothing.
+   * Output: none; errors are shown only for a manual refresh (the
+   * banner covers the periodic one); periodic ones are skipped while
+   * the window is hidden.
    */
-  function refresh(): void {
-    if (document.hidden) return;
-    call('files.refresh', {}).then(render).catch((e) => setStatus(fileErrorText(e), 'error'));
+  function refresh(manual: boolean): void {
+    if (!manual && document.hidden) return;
+    call('files.refresh', {}).then(render).catch((e) => {
+      if (manual) setStatus(fileErrorText(e), 'error');
+    });
   }
 
   wireSelect(call);
   wireHistory(call);
-  byId('files-refresh').addEventListener('click', refresh);
+  byId('files-refresh').addEventListener('click', () => refresh(true));
   return {
     render,
     show(files) {
       render(files);
       clearInterval(timer);
-      timer = setInterval(refresh, REFRESH_MS);
+      timer = setInterval(() => refresh(false), REFRESH_MS);
     },
     hide() {
       clearInterval(timer);

@@ -5,7 +5,7 @@ import type { Person, Task } from '@cognifly/wspolne/api';
 import { canLockFiles, fileErrorText } from '../../logic/files-view.js';
 import type { HwState } from '../../logic/heartwood.js';
 import { canReject, isAcceptor } from '../../logic/inbox-view.js';
-import { armed, PICKER_WAIT_MS, type Call } from '../ui.js';
+import { armed, DAEMON_WAIT_MS, PICKER_WAIT_MS, type Call } from '../ui.js';
 
 /** Outcome message of a user action. */
 export type Outcome = { text: string; kind: 'ok' | 'error' };
@@ -286,7 +286,8 @@ function lockAction(report: Report, run: () => Promise<string>, reload: () => Pr
  * Call: `wireFiles(li, task, me, state, call, report)`.
  * Expects: the user's person id and the Heartwood supervisor state.
  * Output: none; shown only when `canLockFiles`; the lock waits for
- * the file dialog up to 10 minutes; outcomes go to the status line.
+ * the file dialog up to 10 minutes, the release (one daemon call per
+ * space) up to 130 s; outcomes go to the status line.
  */
 export function wireFiles(li: HTMLElement, task: Task, me: string | null, state: HwState, call: Call, report: Report): void {
   const show = canLockFiles(task, me, state);
@@ -301,7 +302,7 @@ export function wireFiles(li: HTMLElement, task: Task, me: string | null, state:
     return paths.length ? `Zablokowane pliki: ${paths.length}.` : 'Nie wybrano plików.';
   }, reload));
   part<HTMLButtonElement>(li, '.release').addEventListener('click', () => void lockAction(report, async () => {
-    const { paths } = await call('task.releaseFiles', { id: task.id });
+    const { paths } = await call('task.releaseFiles', { id: task.id }, DAEMON_WAIT_MS);
     return `Zwolniono pliki: ${paths.length}.`;
   }, reload));
 }
