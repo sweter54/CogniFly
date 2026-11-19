@@ -132,7 +132,7 @@ async function subUzytkownika(cog: Pick<CognitoIdentityProviderClient, 'send'>, 
 
 export interface Dane {
   zapiszTozsamosc(sub: string, firma: string, osobaId: string): Promise<void>;
-  zapiszOsobe(firma: string, osoba: string, o: { email: string; rola: 'admin' | 'czlonek' }): Promise<void>;
+  zapiszOsobe(firma: string, osoba: string, o: { email: string; rola: 'admin' | 'czlonek'; sub?: string }): Promise<void>;
   zapiszKontakt(firma: string, osoba: string, k: { email?: string; discordWebhookRef?: string }): Promise<void>;
   zapiszRegule(r: Regula): Promise<void>;
   kontaktOsoby(firma: string, osoba: string): Promise<{ email?: string; discordWebhookRef?: string }>;
@@ -179,7 +179,7 @@ export async function zasiej(
   for (const o of osoby) {
     const sub = await subUzytkownika(cog, pula, o.email);
     await dane.zapiszTozsamosc(sub, FIRMA, o.osobaId);
-    await dane.zapiszOsobe(FIRMA, o.osobaId, { email: o.email, rola: o === michal ? 'admin' : 'czlonek' });
+    await dane.zapiszOsobe(FIRMA, o.osobaId, { email: o.email, rola: o === michal ? 'admin' : 'czlonek', sub });
     // Kontakt scalamy z istniejącym: ponowny przebieg bez --discord-* nie może zgubić discordWebhookRef.
     const istniejacy = await dane.kontaktOsoby(FIRMA, o.osobaId);
     let discordWebhookRef = istniejacy.discordWebhookRef;

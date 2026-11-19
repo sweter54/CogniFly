@@ -89,6 +89,27 @@ export async function osobyFirmy(firma: string): Promise<{ osoba: string; github
 }
 
 /**
+ * Lists the full person records of a company.
+ *
+ * Call: `await rejestrOsob(firma)`.
+ * Expects: a company id.
+ * Output: `{osoba, email, rola, sub?}` per `OSOBA#` record, sorted by
+ * person id; empty when none.
+ */
+export async function rejestrOsob(
+  firma: string,
+): Promise<{ osoba: string; email: string; rola: 'admin' | 'czlonek'; sub?: string }[]> {
+  return (await wszystkie(firma, 'OSOBA#'))
+    .map((it) => ({
+      osoba: (it.sk as string).slice('OSOBA#'.length),
+      email: it.email as string,
+      rola: it.rola as 'admin' | 'czlonek',
+      ...(typeof it.sub === 'string' ? { sub: it.sub } : {}),
+    }))
+    .sort((a, b) => a.osoba.localeCompare(b.osoba));
+}
+
+/**
  * Lists the admins of a company.
  *
  * Call: `await adminiFirmy(firma)`.

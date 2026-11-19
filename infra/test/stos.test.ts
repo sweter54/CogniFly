@@ -268,3 +268,44 @@ describe('stos CogniFly', () => {
     expect(f.Properties.Tags).toContainEqual({ Key: 'Project', Value: 'cognifly' });
   });
 });
+
+describe('stos z kontekstem heartwood', () => {
+  const HW = JSON.stringify({ intUrl: 'https://hw.example.com/prod', intApiArn: 'arn:aws:execute-api:eu-west-1:111122223333:abc123' });
+
+  test('bez kontekstu heartwood brak strumienia i funkcji Heartwood', () => {
+    t.resourceCountIs('AWS::Lambda::EventSourceMapping', 0);
+    expect(json.Resources[zasoby('AWS::DynamoDB::Table')[0]![0]].Properties.StreamSpecification).toBeUndefined();
+    expect(JSON.stringify(json)).not.toContain('Heartwood');
+  });
+
+  test('z kontekstem: strumień, mapowanie, reguła i uprawnienie Invoke', () => {
+    const t2 = Template.fromStack(zbuduj({ ...KONTEKST, heartwood: HW }));
+    t2.hasResourceProperties('AWS::DynamoDB::Table', { StreamSpecification: { StreamViewType: 'NEW_AND_OLD_IMAGES' } });
+    t2.hasResourceProperties('AWS::Lambda::EventSourceMapping', {
+      FunctionName: { Ref: Match.stringLikeRegexp('HeartwoodPraca') },
+      FunctionResponseTypes: ['ReportBatchItemFailures'], MaximumRetryAttempts: 10, BisectBatchOnFunctionError: true,
+    });
+    t2.hasResourceProperties('AWS::Events::Rule', {
+      EventPattern: {
+        source: ['heartwood'],
+        'detail-type': ['lock.release_requested', 'change.rejected', 'lock.broken', 'quota.near', 'quota.exceeded'],
+      },
+    });
+    t2.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: { Statement: Match.arrayWith([Match.objectLike({
+        Action: 'execute-api:Invoke', Resource: 'arn:aws:execute-api:eu-west-1:111122223333:abc123/*/*/int/*',
+      })]) },
+    });
+    for (const n of ['HeartwoodPraca', 'HeartwoodZdarzenia']) {
+      t2.hasResourceProperties('AWS::Lambda::Function', {
+        FunctionName: `cognifly-test-${n.toLowerCase()}`,
+        Environment: { Variables: Match.objectLike({ HEARTWOOD_INT_URL: 'https://hw.example.com/prod' }) },
+      });
+    }
+  });
+
+  test('zły kontekst heartwood -> czytelny błąd', () => {
+    expect(() => zbuduj({ ...KONTEKST, heartwood: '{nie json' })).toThrow(/"heartwood"/);
+    expect(() => zbuduj({ ...KONTEKST, heartwood: '{"intUrl":"https://x"}' })).toThrow(/intApiArn/);
+  });
+});
