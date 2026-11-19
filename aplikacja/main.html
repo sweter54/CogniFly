@@ -201,7 +201,7 @@
           <ul id="files-skipped" class="rows"></ul>
           <h2>Historia wersji</h2>
           <div class="actions start"><button type="button" id="history-pick" class="secondary">Wybierz plik…</button></div>
-          <p id="history-path" class="path"></p>
+          <p id="history-path"></p>
           <ul id="files-versions" class="rows"></ul>
         </div>
       </section>
@@ -219,7 +219,7 @@
         <h2>Folder pracy</h2>
         <p class="hint">Tu CogniFly i Claude trzymają pliki zadań; tu otwiera się sesja „Pracuj w Claude”.</p>
         <div class="folder-row">
-          <input id="work-folder" aria-label="Folder pracy" readonly />
+          <code id="work-folder" class="path muted" aria-label="Folder pracy"></code>
           <button type="button" id="pick-folder" class="secondary">Wybierz…</button>
         </div>
         <div class="actions"><button type="button" id="settings-back">Gotowe</button></div>

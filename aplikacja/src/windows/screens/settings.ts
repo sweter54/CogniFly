@@ -2,7 +2,7 @@
 // when I belong to several), the work folder and "change account".
 // Connection values are built into the app and not shown here.
 import type { Methods } from '../protocol.js';
-import { byId, messageFor, pickFolder, setStatus, type Call } from '../ui.js';
+import { byId, messageFor, pickFolder, setPath, setStatus, type Call } from '../ui.js';
 
 /** Account data shown on the screen. */
 type Account = Methods['account.get']['result'];
@@ -48,16 +48,16 @@ function renderCompany(account: Account): void {
 /**
  * Picks a folder and saves it at once.
  *
- * Call: `await changeFolder(call, input)` on "Wybierz…".
- * Expects: the read-only folder input.
+ * Call: `await changeFolder(call, shown)` on "Wybierz…".
+ * Expects: the element showing the folder (full path in `title`).
  * Output: none; cancel keeps the old folder; errors are shown.
  */
-async function changeFolder(call: Call, input: HTMLInputElement): Promise<void> {
+async function changeFolder(call: Call, shown: HTMLElement): Promise<void> {
   try {
-    const path = await pickFolder(call, input.value);
+    const path = await pickFolder(call, shown.title);
     if (path === null) return;
     await call('config.setWorkFolder', { path });
-    input.value = path;
+    setPath(shown, path);
     setStatus('Zapisano folder pracy.', 'ok');
   } catch (e) {
     setStatus(messageFor(e), 'error');
@@ -88,7 +88,7 @@ async function changeCompany(call: Call, company: string): Promise<void> {
  * Output: a handle to load the data and show the folder.
  */
 export function mountSettings(call: Call, back: () => void): SettingsScreen {
-  const folder = byId<HTMLInputElement>('work-folder');
+  const folder = byId('work-folder');
   byId('pick-folder').addEventListener('click', () => void changeFolder(call, folder));
   byId<HTMLSelectElement>('company-select').addEventListener('change', (ev) => {
     void changeCompany(call, (ev.target as HTMLSelectElement).value);
@@ -104,7 +104,7 @@ export function mountSettings(call: Call, back: () => void): SettingsScreen {
       renderCompany(account);
     },
     showFolder(path) {
-      folder.value = path;
+      setPath(folder, path);
     },
   };
 }

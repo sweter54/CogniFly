@@ -1,11 +1,10 @@
 // Inbox screen: the user's tasks with "biorę" and state changes.
 // Task text is inserted with textContent only (it is data).
 import type { Person, Task, UserSettableState } from '@cognifly/wspolne/api';
-import { onRender, requestHighlight, type Highlight } from '../../logic/highlight.js';
 import { displayOrder, isFinished, selectValue, taskNote } from '../../logic/inbox-view.js';
 import type { HwState } from '../../logic/heartwood.js';
 import type { InboxView } from '../protocol.js';
-import { byId, messageFor, setStatus, type Call } from '../ui.js';
+import { byId, flasher, messageFor, setStatus, type Call } from '../ui.js';
 import { acceptorFormOpen, askAcceptor, closeAcceptorForm, wireAcceptor, wireReject, wireReturned, wireThread, type Outcome } from './task-actions.js';
 import { wireFiles } from './task-files.js';
 
@@ -201,7 +200,7 @@ export function mountInbox(call: Call): InboxScreen {
     title.hidden = done.length === 0;
     title.textContent = `Zakończone (${done.length})`;
     setStatus(statusText(view), view.offline ? 'error' : 'info');
-    applyHighlight();
+    flash.apply();
   }
 
   /**
@@ -213,9 +212,6 @@ export function mountInbox(call: Call): InboxScreen {
     call('inbox.refresh', {}).then(render).catch((e) => setStatus(messageFor(e), 'error'));
   }
 
-  let pending: Highlight | null = null;
-  let endTimer: ReturnType<typeof setTimeout> | undefined;
-
   /**
    * Finds the list element of a task.
    * Call: `taskElement(id)`. Expects: a task id.
@@ -225,36 +221,7 @@ export function mountInbox(call: Call): InboxScreen {
     return Array.from(document.querySelectorAll<HTMLElement>('.task')).find((el) => el.dataset.id === taskId);
   }
 
-  /**
-   * Applies the pending highlight to the current list.
-   * Call: after every render and when a highlight is requested.
-   * Expects: nothing. Output: none; on start the task scrolls into
-   * view, gets focus and flashes; redraws keep the flash until it
-   * ends (redraws replace the elements).
-   */
-  function applyHighlight(): void {
-    const li = pending ? taskElement(pending.id) : undefined;
-    const { next, flash } = onRender(pending, li !== undefined, Date.now());
-    pending = next;
-    if (!li || flash === 'none') return;
-    li.classList.add('flash');
-    if (flash !== 'start') return;
-    li.tabIndex = -1;
-    if (!document.activeElement?.matches('input, textarea, select')) li.focus({ preventScroll: true }); // don't steal typing
-    li.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    clearTimeout(endTimer);
-    endTimer = setTimeout(endHighlight, (next?.until ?? Date.now()) - Date.now());
-  }
-
-  /**
-   * Ends the flash on whatever element shows the task now.
-   * Call: by the timer. Expects: nothing. Output: none.
-   */
-  function endHighlight(): void {
-    const id = pending?.id;
-    pending = onRender(pending, false, Date.now()).next;
-    if (id && !pending) taskElement(id)?.classList.remove('flash');
-  }
+  const flash = flasher(taskElement, '.task.flash');
 
   /**
    * Draws attention to one task for 5 s.
@@ -264,10 +231,7 @@ export function mountInbox(call: Call): InboxScreen {
    * Output: none.
    */
   function highlight(taskId: string): void {
-    for (const el of Array.from(document.querySelectorAll('.task.flash'))) el.classList.remove('flash');
-    pending = requestHighlight(taskId, Date.now());
-    applyHighlight();
-    if (pending && pending.until === undefined) refresh();
+    if (!flash.request(taskId)) refresh();
   }
 
   byId('refresh').addEventListener('click', refresh);

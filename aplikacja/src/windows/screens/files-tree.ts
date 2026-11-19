@@ -6,7 +6,7 @@ import {
 } from '../../logic/files-view.js';
 import type { FilesView, HwBrowse } from '../../logic/heartwood.js';
 import type { InboxView, Methods } from '../protocol.js';
-import { button, byId, DAEMON_WAIT_MS, el, messageFor, row, runFileAction, setStatus, type Call } from '../ui.js';
+import { button, byId, DAEMON_WAIT_MS, el, messageFor, pathEl, row, runFileAction, setPath, setStatus, type Call } from '../ui.js';
 
 /** Handle returned by `mountTree`. */
 export interface SpaceTree {
@@ -149,8 +149,11 @@ export function mountTree(call: Call, showHistory: ShowHistory): SpaceTree {
    * Output: the `<li>`; a folder name opens the folder.
    */
   function treeRow(r: TreeRow, b: HwBrowse): HTMLLIElement {
-    const name = r.folder ? button(`${r.name}/`, 'link path') : el('strong', r.name, 'path');
-    if (r.folder) name.addEventListener('click', () => open(b.space, r.path));
+    const name = r.folder ? button('', 'link') : pathEl('strong', r.name);
+    if (r.folder) {
+      setPath(name, `${r.name}/`);
+      name.addEventListener('click', () => open(b.space, r.path));
+    }
     const li = row(name, el('span', r.stateText, 'state'));
     if (r.taskLink) li.append(taskLinkButton(r.taskLink));
     li.append(el('span', '', 'spacer'));

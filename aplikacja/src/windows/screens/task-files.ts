@@ -3,7 +3,7 @@
 // they are data and go into the page via textContent only.
 import { fileErrorText, taskFilesModel, versionLine, versionsLabel, type ChangeRow, type LockRow, type TaskFilesModel } from '../../logic/files-view.js';
 import type { HwState } from '../../logic/heartwood.js';
-import { button, DAEMON_WAIT_MS, el, PICKER_WAIT_MS, row, runFileAction, type Call, type Said } from '../ui.js';
+import { button, DAEMON_WAIT_MS, el, pathEl, PICKER_WAIT_MS, row, runFileAction, type Call, type Said } from '../ui.js';
 
 /** How often an open section reads the task's files again. */
 const REFRESH_MS = 15_000;
@@ -116,7 +116,7 @@ function act(b: HTMLButtonElement, call: Call, taskId: string, action: () => Pro
  * Output: the `<li>`.
  */
 function lockRow(call: Call, taskId: string, l: LockRow, canEdit: boolean): HTMLLIElement {
-  const li = row(el('strong', l.label, 'path'), el('span', `${l.who} · ${l.when}`, 'muted'));
+  const li = row(pathEl('strong', l.label), el('span', `${l.who} · ${l.when}`, 'muted'));
   if (!canEdit) return li;
   const release = button('Zwolnij', 'secondary');
   release.addEventListener('click', () => void act(release, call, taskId, async () => {
@@ -154,7 +154,7 @@ function changeRow(call: Call, taskId: string, c: ChangeRow): HTMLLIElement {
     else openVersions.add(key);
   });
   const who = el('span', `${c.who} · ${c.when}`, 'muted');
-  return row(el('strong', c.label, 'path'), el('span', c.kindText, 'state'), who, toggle, el('span', '', 'spacer'), download, list);
+  return row(pathEl('strong', c.label), el('span', c.kindText, 'state'), who, toggle, el('span', '', 'spacer'), download, list);
 }
 
 /**

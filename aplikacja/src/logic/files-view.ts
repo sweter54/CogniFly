@@ -7,6 +7,7 @@ import {
   type HwSkipped, type HwState, type HwStatus, type HwVersion, type HwWorkFiles, type HwWorkLock, type HwWorkVersion, workIdFor,
 } from './heartwood.js';
 import { RpcError } from './rpc.js';
+import { plural } from './text.js';
 
 /** One selected space as a row of the screen. */
 export interface SpaceRow {
@@ -244,6 +245,17 @@ export function conflictRows(s: HwStatus | null): ConflictRow[] {
 }
 
 /**
+ * Stable id of a conflicting file (tray link → highlighted row).
+ *
+ * Call: `conflictKey(row.space, row.path)`.
+ * Expects: a space id and a path in it.
+ * Output: a string that differs for every space + path pair.
+ */
+export function conflictKey(space: string, path: string): string {
+  return JSON.stringify([space, path]);
+}
+
+/**
  * Label of a file's number of conflict copies.
  *
  * Call: `copiesLabel(row.count)`.
@@ -441,7 +453,7 @@ function spacePath(space: string, path: string): string {
  * Expects: a space id.
  * Output: the workspace name, "Prywatne" for `user:…`, else as is.
  */
-function spaceName(space: string): string {
+export function spaceName(space: string): string {
   if (space.startsWith('ws:')) return space.slice('ws:'.length);
   return space.startsWith('user:') ? 'Prywatne' : space;
 }
@@ -457,20 +469,6 @@ function spaceName(space: string): string {
 function hiddenLocksNote(n: number): string | null {
   if (n <= 0) return null;
   return `${n} ${plural(n, 'blokada', 'blokady', 'blokad')} w tematach, do których nie masz dostępu`;
-}
-
-/**
- * Polish plural form for a count.
- *
- * Call: `plural(n, 'zapis', 'zapisy', 'zapisów')`.
- * Expects: an integer ≥ 0 and the three forms.
- * Output: `one` for 1, `few` for 2–4 (not 12–14) in the last
- * digits, else `many`.
- */
-export function plural(n: number, one: string, few: string, many: string): string {
-  if (n === 1) return one;
-  const tens = n % 100;
-  return n % 10 >= 2 && n % 10 <= 4 && (tens < 12 || tens > 14) ? few : many;
 }
 
 /**
