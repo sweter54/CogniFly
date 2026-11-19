@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createServer } from 'node:http';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { builtinModules } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +12,7 @@ import { TASK_ID_PATTERN } from '../../wspolne/src/api.ts';
 import { wywolaj, NARZEDZIA } from '../mcp/narzedzia.mjs';
 import { utworzSerwer } from '../mcp/zadania.mjs';
 import { ID_ZADANIA } from '../cli/lib/api.mjs';
+import { zbuduj, PLIK_WYJSCIOWY } from '../mcp/zbuduj.mjs';
 
 const WTYCZKA = join(dirname(fileURLToPath(import.meta.url)), '..');
 const Z1 = 'zad_aaaaaaaaaaaa', Z2 = 'zad_bbbbbbbbbbbb', Z3 = 'zad_cccccccccccc';
@@ -270,7 +273,72 @@ describe('serwer MCP', () => {
 
   it('.mcp.json uruchamia serwer z katalogu wtyczki; wersja 0.7.0', () => {
     const mcp = JSON.parse(readFileSync(join(WTYCZKA, '.mcp.json'), 'utf8'));
-    expect(mcp.mcpServers['cognifly-zadania']).toEqual({ command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/mcp/zadania.mjs'] });
+    expect(mcp.mcpServers['cognifly-zadania']).toEqual({ command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/mcp/dist/zadania.mjs'] });
     expect(JSON.parse(readFileSync(join(WTYCZKA, '.claude-plugin', 'plugin.json'), 'utf8')).version).toBe('0.7.0');
   });
+});
+
+/**
+ * Lists module specifiers the bundle loads at run time.
+ *
+ * Call: `specyfikatory(kod)`.
+ * Expects: the bundle source.
+ * Output: specifiers of static/dynamic imports, re-exports and real
+ * `require(...)` calls (ajv's code strings like `'require("x")'`
+ * are skipped: a quote or backtick before `require`).
+ */
+function specyfikatory(kod) {
+  const wzory = [
+    /^\s*import\s[^'"]*?from\s*["']([^"']+)["']/gm,
+    /^\s*import\s*["']([^"']+)["']/gm,
+    /^\s*export\s[^'"]*?from\s*["']([^"']+)["']/gm,
+    /\bimport\(\s*["']([^"']+)["']\s*\)/g,
+    /(?<![\w$.'"`])require\(\s*["']([^"']+)["']\s*\)/g,
+    /__require\(\s*["']([^"']+)["']\s*\)/g,
+  ];
+  return wzory.flatMap((w) => [...kod.matchAll(w)].map((m) => m[1]));
+}
+
+describe('pakiet mcp/dist/zadania.mjs (wtyczka bez node_modules)', () => {
+  const wbudowany = (s) => s.startsWith('node:') || builtinModules.includes(s);
+
+  it('istnieje i ładuje tylko moduły wbudowane Node', () => {
+    expect(existsSync(PLIK_WYJSCIOWY)).toBe(true);
+    const kod = readFileSync(PLIK_WYJSCIOWY, 'utf8');
+    const obce = specyfikatory(kod).filter((s) => !wbudowany(s));
+    expect(obce).toEqual([]);
+    expect(specyfikatory(kod).length).toBeGreaterThan(0);
+  });
+
+  it('wykrywanie obcych importów działa', () => {
+    expect(specyfikatory('import { z } from "zod";\nconst a = require("ajv");\nx = \'require("ajv/y")\';'))
+      .toEqual(['zod', 'ajv']);
+  });
+
+  it('jest aktualny (ponowne zbudowanie daje ten sam plik)', async () => {
+    const plik = await zbuduj(join(tmp, 'zadania.mjs'));
+    expect(readFileSync(plik, 'utf8') === readFileSync(PLIK_WYJSCIOWY, 'utf8'),
+      'Pakiet nieaktualny: npm run build:mcp -w wtyczka').toBe(true);
+  }, 30_000);
+
+  it('działa przez stdio: wersja wtyczki i błąd bez sesji', async () => {
+    const wiadomosci = [
+      { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '0' } } },
+      { jsonrpc: '2.0', method: 'notifications/initialized' },
+      { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'moje_zadania', arguments: {} } },
+    ];
+    const odpowiedzi = await new Promise((ok, zle) => {
+      const p = spawn(process.execPath, [PLIK_WYJSCIOWY], { env: { PATH: process.env.PATH, ...env }, stdio: ['pipe', 'pipe', 'ignore'] });
+      let out = '';
+      p.stdout.on('data', (c) => {
+        out += c;
+        const linie = out.split('\n').filter(Boolean);
+        if (linie.length >= 2) { p.kill(); ok(linie.map((l) => JSON.parse(l))); }
+      });
+      p.on('error', zle);
+      p.stdin.write(wiadomosci.map((m) => JSON.stringify(m)).join('\n') + '\n');
+    });
+    expect(odpowiedzi[0].result.serverInfo).toEqual({ name: 'cognifly-zadania', version: '0.7.0' });
+    expect(odpowiedzi[1].result).toEqual({ content: [{ type: 'text', text: 'Zaloguj się: cognifly zaloguj' }], isError: true });
+  }, 15_000);
 });

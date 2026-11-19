@@ -7,10 +7,14 @@
     "cognifly": "cli/cognifly.mjs"
   },
   "scripts": {
-    "test": "vitest run --passWithNoTests"
+    "test": "vitest run --passWithNoTests",
+    "build:mcp": "node mcp/zbuduj.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
     "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "esbuild": "0.21.5"
   }
 }

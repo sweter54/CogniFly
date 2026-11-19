@@ -12,15 +12,18 @@ import { NARZEDZIA, OPISY_ARGUMENTOW, wywolaj } from './narzedzia.mjs';
  * Reads the plugin version for the MCP handshake.
  *
  * Call: `wersja()`.
- * Output: `version` of `.claude-plugin/plugin.json`, or `0.0.0`.
+ * Expects: `.claude-plugin/plugin.json` one or two levels up (the
+ * source in `mcp/`, the bundle in `mcp/dist/`).
+ * Output: its `version`, or `0.0.0`.
  */
 function wersja() {
-  try {
-    const plik = new URL('../.claude-plugin/plugin.json', import.meta.url);
-    return String(JSON.parse(readFileSync(plik, 'utf8')).version ?? '0.0.0');
-  } catch {
-    return '0.0.0';
+  for (const gora of ['../', '../../']) {
+    try {
+      const plik = new URL(`${gora}.claude-plugin/plugin.json`, import.meta.url);
+      return String(JSON.parse(readFileSync(plik, 'utf8')).version ?? '0.0.0');
+    } catch { /* try the next level */ }
   }
+  return '0.0.0';
 }
 
 /**
