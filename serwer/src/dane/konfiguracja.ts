@@ -7,7 +7,7 @@ import { klient, nazwaTabeli } from './tabela.js';
  *   REGULA#<id>      -> { regula }
  *   ROLA#<nazwa>     -> { osoby: string[] }
  *   KONTAKT#<osoba>  -> { email?, discordWebhookRef? }
- *   OSOBA#<osoba>    -> { email, rola: 'admin' | 'czlonek' }
+ *   OSOBA#<osoba>    -> { email, rola: 'admin' | 'czlonek', sub? }
  *   GITHUB#<login>   -> { osoba }   (login małymi literami)
  */
 const pk = (firma: string) => `FIRMA#${firma}#KONF`;
@@ -66,8 +66,17 @@ export const zapiszRole = (firma: string, nazwa: string, osoby: string[]) => wst
 export const zapiszKontakt = (firma: string, osoba: string, k: { email?: string; discordWebhookRef?: string }) =>
   wstaw(firma, `KONTAKT#${osoba}`, { ...k });
 
-export const zapiszOsobe = (firma: string, osoba: string, o: { email: string; rola: 'admin' | 'czlonek' }) =>
-  wstaw(firma, `OSOBA#${osoba}`, { ...o });
+export const zapiszOsobe = (
+  firma: string, osoba: string, o: { email: string; rola: 'admin' | 'czlonek'; sub?: string },
+) => wstaw(firma, `OSOBA#${osoba}`, { ...o });
+
+/** Identyfikator `sub` osoby (użytkownik Cognito) albo null, gdy brak. */
+export async function subOsoby(firma: string, osoba: string): Promise<string | null> {
+  const r = await klient().send(
+    new GetCommand({ TableName: nazwaTabeli(), Key: { pk: pk(firma), sk: `OSOBA#${osoba}` }, ConsistentRead: true }),
+  );
+  return typeof r.Item?.sub === 'string' ? r.Item.sub : null;
+}
 
 /** Członkowie firmy z loginem GitHub (jeśli powiązany), posortowani po id; bez e-maili. */
 export async function osobyFirmy(firma: string): Promise<{ osoba: string; github?: string }[]> {

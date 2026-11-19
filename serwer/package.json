@@ -15,9 +15,11 @@
     "@aws-sdk/client-sesv2": "^3.1169.0",
     "@aws-sdk/credential-provider-node": "^3.972.97",
     "@aws-sdk/lib-dynamodb": "^3.1169.0",
+    "@aws-sdk/util-dynamodb": "^3.996.9",
     "@smithy/signature-v4": "^5.7.5"
   },
   "devDependencies": {
+    "@types/aws-lambda": "^8.10.164",
     "aws-sdk-client-mock": "^4.1.0"
   }
 }

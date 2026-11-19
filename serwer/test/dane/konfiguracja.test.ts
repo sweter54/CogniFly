@@ -2,7 +2,7 @@ import { beforeAll, afterAll, describe, expect, test } from 'vitest';
 import type { Regula } from '@cognifly/wspolne';
 import { ustawTabeleTestowa } from './pomocnik.js';
 import {
-  regulyFirmy, roleFirmy, kontaktOsoby, zapiszRegule, zapiszRole, zapiszKontakt, zapiszOsobe,
+  regulyFirmy, roleFirmy, kontaktOsoby, zapiszRegule, zapiszRole, zapiszKontakt, zapiszOsobe, subOsoby,
 } from '../../src/dane/konfiguracja.js';
 
 const tabela = ustawTabeleTestowa('cognifly-test-konfiguracja');
@@ -48,5 +48,12 @@ describe('konfiguracja', () => {
     await zapiszOsobe('f1', 'ola', { email: 'ola@x.pl', rola: 'admin' });
     expect((await regulyFirmy('f1')).length).toBeGreaterThan(0);
     expect(await roleFirmy('f1')).toHaveProperty('dev');
+  });
+  test('osoba: sub zapisany i odczytany, brak = null', async () => {
+    await zapiszOsobe('f1', 'michal', { email: 'm@x.pl', rola: 'admin', sub: 's1' });
+    await zapiszOsobe('f1', 'bezsub', { email: 'b@x.pl', rola: 'czlonek' });
+    expect(await subOsoby('f1', 'michal')).toBe('s1');
+    expect(await subOsoby('f1', 'bezsub')).toBeNull();
+    expect(await subOsoby('f1', 'nikt')).toBeNull();
   });
 });
