@@ -1,5 +1,6 @@
 // Test doubles shared by the logic tests.
 import type { FetchFn } from '../src/logic/http.js';
+import type { Bus } from '../src/logic/rpc.js';
 import type { Vault } from '../src/logic/session.js';
 
 /** One scripted answer: a response or a thrown error. */
@@ -77,3 +78,25 @@ export const STATUS_REPLY = {
   ],
   issues: [{ space: '', message: 'Brak połączenia z serwerem.' }],
 };
+
+/**
+ * In-memory event bus: routes events by target window label.
+ *
+ * Call: `const b = memoryBus(); rpcServer(b('background'), …)`.
+ * Expects: nothing.
+ * Output: a factory of `Bus` per window label; payloads are cloned.
+ */
+export function memoryBus(): (label: string) => Bus {
+  const listeners = new Map<string, Map<string, ((p: unknown) => void)[]>>();
+  return (label: string): Bus => ({
+    async emitTo(target, event, payload) {
+      for (const h of listeners.get(target)?.get(event) ?? []) h(structuredClone(payload));
+    },
+    async listen(event, handler) {
+      const byEvent = listeners.get(label) ?? new Map();
+      listeners.set(label, byEvent);
+      byEvent.set(event, [...(byEvent.get(event) ?? []), handler]);
+      return () => undefined;
+    },
+  });
+}

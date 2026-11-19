@@ -1,7 +1,8 @@
 // Heartwood file sync as seen by the app: the platform port, the
 // local API types (contract section 9) and pure helpers. Paths, names
 // and reasons from the daemon are data, never control text.
-import { AppError } from './errors.js';
+import { AppError, RefusalError } from './errors.js';
+import { oneLine } from './notify.js';
 import { readJson, writeJson, type KeyValueStore } from './storage.js';
 
 /** Daemon state reported by the Rust supervisor. */
@@ -80,6 +81,8 @@ export const DISABLED_INFO: Readonly<HwInfo> = Object.freeze({ state: 'disabled'
 
 const LOCKS_KEY = 'cognifly.heartwood.locks';
 const CODE = /^[A-Z][A-Z_]{0,39}$/;
+/** Longest daemon text sent to a window (characters). */
+export const MAX_REFUSAL_TEXT = 300;
 const VERSION_KINDS: readonly string[] = ['put', 'restore', 'move', 'delete'];
 
 /** Polish texts of app-side codes; daemon refusals bring their own. */
@@ -311,12 +314,15 @@ export function hwError(e: unknown): unknown {
  * Call: `checkReply(reply)` after `call`.
  * Expects: the reply JSON.
  * Output: none for `ok: true`.
- * Throws: `AppError(code)` for a refusal (`BAD_RESPONSE` when the
- * code is missing or not a plain code).
+ * Throws: `RefusalError(code, text)` for a refusal; `text` is the
+ * daemon's message on one line, at most `MAX_REFUSAL_TEXT` chars.
+ * A missing or odd code becomes `BAD_RESPONSE` without text.
  */
 export function checkReply(reply: HwReply): void {
   if (reply.ok === true) return;
-  throw new AppError(typeof reply.code === 'string' && CODE.test(reply.code) ? reply.code : 'BAD_RESPONSE');
+  if (typeof reply.code !== 'string' || !CODE.test(reply.code)) throw new RefusalError('BAD_RESPONSE', undefined);
+  const text = typeof reply.message === 'string' ? Array.from(oneLine(reply.message)).slice(0, MAX_REFUSAL_TEXT).join('') : '';
+  throw new RefusalError(reply.code, text || undefined);
 }
 
 /**

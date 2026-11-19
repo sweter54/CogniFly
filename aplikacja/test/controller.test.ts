@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CONFIG } from '../src/logic/config.js';
 import { Controller, waitingCount, type Ports } from '../src/logic/controller.js';
-import { NetworkError } from '../src/logic/errors.js';
+import { errorCode, errorDetail, NetworkError } from '../src/logic/errors.js';
 import type { HeartwoodPort, HwInfo, HwReply, HwRequest } from '../src/logic/heartwood.js';
 import type { FetchFn } from '../src/logic/http.js';
 import { memoryStore } from '../src/logic/storage.js';
 import type { InboxView } from '../src/windows/protocol.js';
-import { memoryVault, STATUS_REPLY } from './helpers.js';
+import { rpcClient, rpcServer, RpcError } from '../src/logic/rpc.js';
+import { memoryBus, memoryVault, STATUS_REPLY } from './helpers.js';
 
 const NOW = 50_000_000;
 const id = (n: number) => `zad_${String(n).padStart(12, '0')}`;
@@ -27,6 +28,7 @@ function fakeHeartwood() {
   const hw = {
     state: 'running' as HwInfo['state'],
     startError: null as string | null,
+    startGate: Promise.resolve() as Promise<void>,
     picked: [] as string[],
     reply: (req: HwRequest): HwReply => (req.cmd === 'status' ? STATUS_REPLY : { ok: true, paths: req.paths ?? [] }),
     calls: [] as HwRequest[],
@@ -34,10 +36,14 @@ function fakeHeartwood() {
   const info = (): HwInfo => ({ state: hw.state, root: ROOT, restarts: 0, lastError: null });
   const port: HeartwoodPort = {
     start: vi.fn(async () => {
+      await hw.startGate;
       if (hw.startError) throw hw.startError;
+      hw.state = 'running';
       return info();
     }),
-    stop: vi.fn(async () => undefined),
+    stop: vi.fn(async () => {
+      hw.state = 'disabled';
+    }),
     info: vi.fn(async () => info()),
     call: vi.fn(async (req: HwRequest) => {
       hw.calls.push(req);
@@ -466,6 +472,55 @@ describe('Controller', () => {
       expect(await c.handlers()['files.pickPath']!({})).toEqual({ path: null });
       hw.picked = [`${ROOT}/pilot/w1/a.docx`];
       expect(await c.handlers()['files.pickPath']!({})).toEqual({ path: `${ROOT}/pilot/w1/a.docx` });
+    });
+
+    it('a daemon refusal reaches the window with its code and Polish text', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      hw.picked = [`${ROOT}/pilot/w1/a.docx`];
+      hw.reply = () => ({ ok: false, code: 'LOCKED', message: 'Plik blokuje Ania.' });
+      const b = memoryBus();
+      await rpcServer(b('background'), c.handlers(), errorCode, errorDetail);
+      const call = await rpcClient(b('main'), 'main');
+      const err = await call('task.lockFiles', { id: lockId }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(RpcError);
+      expect(err).toMatchObject({ code: 'LOCKED', detail: 'Plik blokuje Ania.' });
+      expect(await call('task.lockFiles', { id: 'x' }).catch((e: unknown) => e)).toMatchObject({ code: 'BAD_TASK_ID', detail: undefined });
+    });
+
+    it('logout during an in-flight start: the next login starts the daemon again', async () => {
+      const { c, ports, hw } = setup({ inbox: [] });
+      let open!: () => void;
+      hw.startGate = new Promise((r) => { open = r; });
+      const starting = c.start();
+      await vi.waitFor(() => expect(ports.heartwood.start).toHaveBeenCalledTimes(1));
+      await c.logout();
+      open();
+      await starting;
+      expect(ports.heartwood.stop).toHaveBeenCalledTimes(2); // the late start is stopped again
+      expect(c.current().files.status).toBeNull();
+      const h = c.handlers();
+      await h['login.sendCode']!({ email: 'm@x.pl' });
+      await h['login.confirm']!({ code: '123456' });
+      await c.poll();
+      expect(ports.heartwood.start).toHaveBeenCalledTimes(2);
+      expect(c.current().files.counts).toEqual({ conflicts: 2, unsent: 7 });
+    });
+
+    it('a company change stops the old daemon; a failed new start shows no old status', async () => {
+      const { c, state, ports, hw } = setup({ inbox: [] });
+      state.firmy = [{ firma: 'pilot', osoba: 'michal' }, { firma: 'acme', osoba: 'mr' }];
+      await c.start();
+      expect(c.current().files.counts.conflicts).toBe(2);
+      hw.startError = 'NO_EXE';
+      await c.handlers()['config.setCompany']!({ company: 'acme' });
+      await c.poll();
+      expect(ports.heartwood.stop).toHaveBeenCalledTimes(1);
+      expect(ports.heartwood.start).toHaveBeenLastCalledWith('', '', 'acme');
+      expect(c.current().files).toMatchObject({ status: null, counts: { conflicts: 0, unsent: 0 } });
+      hw.startError = null;
+      await c.poll();
+      expect(c.current().files.counts.conflicts).toBe(2); // retried at the next poll
     });
 
     it('logout stops the daemon and clears the files view', async () => {

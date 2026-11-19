@@ -93,11 +93,23 @@ export function notificationTitle(task: Task): string {
  * `…` when cut); a generic text when nothing is left.
  */
 export function notificationBody(opis: string): string {
-  const clean = opis.replace(/[\p{Cc}\p{Zl}\p{Zp}\s]+/gu, ' ').trim();
+  const clean = oneLine(opis);
   if (!clean) return 'Masz nowe zadanie.';
   const chars = Array.from(clean);
   if (chars.length <= MAX_BODY_CHARS) return clean;
   return `${chars.slice(0, MAX_BODY_CHARS - 1).join('').trimEnd()}…`;
+}
+
+/**
+ * Collapses text to one clean line.
+ *
+ * Call: `oneLine(text)`.
+ * Expects: any string.
+ * Output: control characters, line breaks and runs of whitespace
+ * replaced by single spaces, trimmed.
+ */
+export function oneLine(text: string): string {
+  return text.replace(/[\p{Cc}\p{Zl}\p{Zp}\s]+/gu, ' ').trim();
 }
 
 /** What the tray title reflects. */

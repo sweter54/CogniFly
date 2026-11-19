@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  fileCounts, forgetLocked, groupBySpace, hwMessage, isUnderRoot, lockedPaths, parseStatus, parseVersions, rememberLocked, workIdFor,
+  checkReply, fileCounts, forgetLocked, groupBySpace, hwMessage, isUnderRoot, lockedPaths, parseStatus, parseVersions, rememberLocked, workIdFor,
 } from '../src/logic/heartwood.js';
 import { memoryStore } from '../src/logic/storage.js';
 import { STATUS_REPLY } from './helpers.js';
@@ -79,6 +79,15 @@ describe('locked paths memory', () => {
     const store = memoryStore();
     store.setItem('cognifly.heartwood.locks', '{"zad_1": [1, "/a"]}');
     expect(lockedPaths(store, 'zad_1')).toEqual(['/a']);
+  });
+});
+
+describe('checkReply', () => {
+  it('passes ok replies and turns refusals into codes with a clean text', () => {
+    expect(() => checkReply({ ok: true })).not.toThrow();
+    expect(() => checkReply({ ok: false, code: 'LOCKED', message: 'Plik\u0007 blokuje\nAnia.' })).toThrow(expect.objectContaining({ code: 'LOCKED', text: 'Plik blokuje Ania.' }));
+    expect(() => checkReply({ ok: false, code: 'LOCKED', message: 'x'.repeat(500) })).toThrow(expect.objectContaining({ text: 'x'.repeat(300) }));
+    expect(() => checkReply({ ok: false, code: 'zle kody' })).toThrow(expect.objectContaining({ code: 'BAD_RESPONSE', text: undefined }));
   });
 });
 

@@ -17,10 +17,11 @@ export interface Bus {
 
 /** Request envelope. */
 export interface RpcRequest { id: string; from: string; method: string; params: unknown }
-/** Reply envelope; `error` is a stable code, never a message. */
+/** Reply envelope; `error` is a stable code, never a raw message;
+ *  `message` is only a vetted text (e.g. a Heartwood refusal). */
 export type RpcReply =
   | { id: string; ok: true; value: unknown }
-  | { id: string; ok: false; error: string };
+  | { id: string; ok: false; error: string; message?: string };
 
 /** Server-side handler of one method. */
 export type Handler = (params: unknown) => Promise<unknown>;
@@ -28,11 +29,12 @@ export type Handler = (params: unknown) => Promise<unknown>;
 /** Error thrown on the client side with the server's code. */
 export class RpcError extends Error {
   /**
-   * Call: `new RpcError(code)`.
-   * Expects: a stable error code.
+   * Call: `new RpcError(code, detail?)`.
+   * Expects: a stable error code; optionally the vetted text the
+   * server sent with it (shown by the UI, e.g. via `hwMessage`).
    * Output: error whose message is the code.
    */
-  constructor(readonly code: string) {
+  constructor(readonly code: string, readonly detail?: string) {
     super(code);
     this.name = 'RpcError';
   }
@@ -46,8 +48,9 @@ export class RpcError extends Error {
  * that wait for the user (e.g. a file dialog).
  * Expects: `selfLabel` = label of the calling window.
  * Output: the handler's value.
- * Throws: `RpcError(code)` on a server error, `RpcError('TIMEOUT')`
- * after the per-call or default `timeoutMs` (20 s) without reply.
+ * Throws: `RpcError(code, detail?)` on a server error,
+ * `RpcError('TIMEOUT')` after the per-call or default `timeoutMs`
+ * (20 s) without reply.
  */
 export async function rpcClient(bus: Bus, selfLabel: string, timeoutMs = 20_000) {
   const pending = new Map<string, (r: RpcReply) => void>();
@@ -66,7 +69,7 @@ export async function rpcClient(bus: Bus, selfLabel: string, timeoutMs = 20_000)
     function settle(r: RpcReply) {
       clearTimeout(timer);
       pending.delete(id);
-      if (r.ok) resolve(r.value); else reject(new RpcError(r.error));
+      if (r.ok) resolve(r.value); else reject(new RpcError(r.error, r.message));
     }
     pending.set(id, settle);
     bus.emitTo(SERVER_WINDOW, REQUEST_EVENT, { id, from: selfLabel, method, params })
@@ -74,20 +77,24 @@ export async function rpcClient(bus: Bus, selfLabel: string, timeoutMs = 20_000)
   });
 }
 
+/** Maps a thrown value to a text safe to show, or `undefined`. */
+export type ToDetail = (e: unknown) => string | undefined;
+
 /**
  * Serves requests in the background window.
  *
- * Call: `await rpcServer(bus, handlers, toCode)`.
+ * Call: `await rpcServer(bus, handlers, toCode, toDetail?)`.
  * Expects: handlers keyed by method; `toCode` maps thrown values to
- * stable codes (must not leak messages or tokens).
+ * stable codes (must not leak messages or tokens); `toDetail` gives
+ * a vetted user text for the few errors that carry one.
  * Output: unlisten function. Unknown methods reply `UNKNOWN_METHOD`;
  * malformed envelopes are ignored.
  */
-export function rpcServer(bus: Bus, handlers: Record<string, Handler>, toCode: (e: unknown) => string) {
+export function rpcServer(bus: Bus, handlers: Record<string, Handler>, toCode: (e: unknown) => string, toDetail?: ToDetail) {
   return bus.listen(REQUEST_EVENT, async (payload) => {
     const req = payload as Partial<RpcRequest>;
     if (typeof req?.id !== 'string' || typeof req.from !== 'string' || typeof req.method !== 'string') return;
-    const reply = await runHandler(handlers, req as RpcRequest, toCode);
+    const reply = await runHandler(handlers, req as RpcRequest, toCode, toDetail);
     await bus.emitTo(req.from, REPLY_EVENT, reply).catch(() => undefined);
   });
 }
@@ -95,17 +102,19 @@ export function rpcServer(bus: Bus, handlers: Record<string, Handler>, toCode: (
 /**
  * Runs one handler and wraps the outcome.
  *
- * Call: `await runHandler(handlers, request, toCode)`.
+ * Call: `await runHandler(handlers, request, toCode, toDetail)`.
  * Expects: a well-formed request.
- * Output: the reply envelope (never throws).
+ * Output: the reply envelope (never throws); `message` only when
+ * `toDetail` returns a text.
  */
-async function runHandler(handlers: Record<string, Handler>, req: RpcRequest, toCode: (e: unknown) => string): Promise<RpcReply> {
+async function runHandler(handlers: Record<string, Handler>, req: RpcRequest, toCode: (e: unknown) => string, toDetail?: ToDetail): Promise<RpcReply> {
   const handler = Object.hasOwn(handlers, req.method) ? handlers[req.method] : undefined;
   if (!handler) return { id: req.id, ok: false, error: 'UNKNOWN_METHOD' };
   try {
     return { id: req.id, ok: true, value: await handler(req.params) };
   } catch (e) {
-    return { id: req.id, ok: false, error: toCode(e) };
+    const message = toDetail?.(e);
+    return message === undefined ? { id: req.id, ok: false, error: toCode(e) } : { id: req.id, ok: false, error: toCode(e), message };
   }
 }
 

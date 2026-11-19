@@ -288,42 +288,63 @@ export class Controller {
    */
   private async syncFiles(epoch: number): Promise<void> {
     if (!this.companies || !this.isCurrent(epoch)) return;
-    if (this.filesOrg !== this.config.company) await this.startFiles();
+    if (this.filesOrg !== this.config.company) await this.startFiles(epoch);
     await this.refreshFiles(epoch);
   }
 
   /**
    * Starts the daemon for the current company.
    *
-   * Call: `await this.startFiles()` from `syncFiles`.
-   * Expects: a session (the daemon asks this app for tokens).
+   * Call: `await this.startFiles(epoch)` from `syncFiles`.
+   * Expects: a session (the daemon asks this app for tokens) and the
+   * epoch of the calling poll.
    * Output: none; the company is remembered on success and on final
    * refusals (`DISABLED`, `NOT_INSTALLED`), so others retry at the
-   * next poll. Codes go to the log.
+   * next poll — but only if the session and company are unchanged
+   * after the await. A start that ends after a logout is stopped
+   * again. Codes go to the log.
    */
-  private async startFiles(): Promise<void> {
+  private async startFiles(epoch: number): Promise<void> {
     const org = this.config.company;
+    let code: string | null = null;
     try {
       await this.ports.heartwood.start(this.config.heartwoodUrl, this.config.heartwoodWsUrl, org);
-      this.filesOrg = org;
     } catch (e) {
-      const code = errorCode(hwError(e));
+      code = errorCode(hwError(e));
       this.ports.log?.(`heartwood start: ${code}`);
-      if (FINAL_START_CODES.includes(code)) this.filesOrg = org;
     }
+    if (!this.view.loggedIn) {
+      if (code === null) await this.stopDaemon();
+      return;
+    }
+    if (!this.isCurrent(epoch) || org !== this.config.company) return;
+    if (code === null || FINAL_START_CODES.includes(code)) this.filesOrg = org;
   }
 
   /**
    * Stops the daemon and clears the files view.
    *
-   * Call: `await this.stopFiles()` on logout or a revoked session.
+   * Call: `await this.stopFiles()` on logout, a revoked session or a
+   * company change.
    * Expects: nothing.
-   * Output: none (never throws); the next login starts it again.
+   * Output: none (never throws); the next poll of a live session
+   * starts it again; old status and counts are gone at once.
    */
   private async stopFiles(): Promise<void> {
     this.filesOrg = null;
-    await this.ports.heartwood.stop().catch((e: unknown) => this.ports.log?.(`heartwood stop: ${errorCode(hwError(e))}`));
+    await this.stopDaemon();
     this.update({ files: filesView(await this.hwInfo(), null) });
+  }
+
+  /**
+   * Asks the supervisor to stop the daemon.
+   *
+   * Call: `await this.stopDaemon()`.
+   * Expects: nothing.
+   * Output: none (never throws); failures go to the log.
+   */
+  private async stopDaemon(): Promise<void> {
+    await this.ports.heartwood.stop().catch((e: unknown) => this.ports.log?.(`heartwood stop: ${errorCode(hwError(e))}`));
   }
 
   /**
@@ -561,8 +582,9 @@ export class Controller {
    *
    * Call: rpc `config.setCompany`.
    * Expects: one of the companies from `GET /ja`.
-   * Output: `{ ok: true }`; tasks and notification memory reset and
-   * a poll for the new company starts.
+   * Output: `{ ok: true }`; tasks and notification memory reset, the
+   * old company's daemon stopped (its status cleared) and a poll for
+   * the new company starts (it starts the daemon again).
    * Throws: `AppError('BAD_COMPANY')` for any other value.
    */
   private async setCompany(company: string): Promise<{ ok: true }> {
@@ -571,6 +593,7 @@ export class Controller {
     this.applyChoices({ company });
     clearSeen(this.ports.store);
     this.update({ osoba: member.osoba, tasks: [] });
+    await this.stopFiles();
     void this.poll();
     return { ok: true };
   }

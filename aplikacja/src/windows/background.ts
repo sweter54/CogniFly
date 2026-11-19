@@ -1,7 +1,7 @@
 // Background window entry: wires the controller to Tauri (tray,
 // notifications, keychain, HTTP) and serves the UI windows.
 import { Controller, POLL_INTERVAL_MS } from '../logic/controller.js';
-import { errorCode } from '../logic/errors.js';
+import { errorCode, errorDetail } from '../logic/errors.js';
 import { rpcServer } from '../logic/rpc.js';
 import { heartwoodPort, keychainVault, listenAppLinks, notify, openUrl, pickFolder, pluginFetch, pushView, setupNotifications, showScreen } from './background/platform.js';
 import { createTray, type Tray } from './background/tray.js';
@@ -45,7 +45,7 @@ async function main(): Promise<void> {
   const controller = new Controller({
     store: localStorage, vault: keychainVault, fetch: pluginFetch, heartwood: heartwoodPort, notify, render, showScreen, openUrl, pickFolder, log: reportInfo,
   });
-  await rpcServer(tauriBus(), controller.handlers(), codeAndLog);
+  await rpcServer(tauriBus(), controller.handlers(), codeAndLog, errorDetail);
   tray = await createTray({
     openMain: () => void showScreen(controller.current().loggedIn ? 'inbox' : 'login'),
     openInbox: () => void showScreen('inbox'),

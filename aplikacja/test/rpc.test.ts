@@ -1,22 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { rpcClient, rpcServer, RpcError, type Bus } from '../src/logic/rpc.js';
-
-/** In-memory bus: routes events by target window label. */
-function bus() {
-  const listeners = new Map<string, Map<string, ((p: unknown) => void)[]>>();
-  const forWindow = (label: string): Bus => ({
-    async emitTo(target, event, payload) {
-      for (const h of listeners.get(target)?.get(event) ?? []) h(structuredClone(payload));
-    },
-    async listen(event, handler) {
-      const byEvent = listeners.get(label) ?? new Map();
-      listeners.set(label, byEvent);
-      byEvent.set(event, [...(byEvent.get(event) ?? []), handler]);
-      return () => undefined;
-    },
-  });
-  return forWindow;
-}
+import { rpcClient, rpcServer, RpcError } from '../src/logic/rpc.js';
+import { memoryBus as bus } from './helpers.js';
 
 describe('rpc', () => {
   it('routes a call to the background handler and back', async () => {
@@ -31,6 +15,17 @@ describe('rpc', () => {
     await rpcServer(b('background'), { boom: async () => { throw new Error('secret token abc'); } }, () => 'UNEXPECTED');
     const call = await rpcClient(b('login'), 'login');
     await expect(call('boom')).rejects.toEqual(new RpcError('UNEXPECTED'));
+  });
+
+  it('carries a detail text only when toDetail gives one', async () => {
+    const b = bus();
+    const detail = (e: unknown) => (e instanceof Error && e.message === 'refused' ? 'Plik blokuje Ania.' : undefined);
+    await rpcServer(b('background'), { refused: async () => { throw new Error('refused'); }, boom: async () => { throw new Error('x'); } }, () => 'LOCKED', detail);
+    const call = await rpcClient(b('main'), 'main');
+    const err = await call('refused').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(RpcError);
+    expect(err).toMatchObject({ code: 'LOCKED', detail: 'Plik blokuje Ania.' });
+    expect(await call('boom').catch((e: unknown) => e)).toMatchObject({ code: 'LOCKED', detail: undefined });
   });
 
   it('rejects unknown and prototype methods', async () => {
