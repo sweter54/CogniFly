@@ -70,6 +70,68 @@ export interface HwVersion {
   fromPath?: string;
 }
 
+/** One lock of a task's work (`work-files`, contract 3.5 and 9). */
+export interface HwWorkLock {
+  space: string;
+  path: string;
+  /** The lock covers a folder (everything below it). */
+  folder: boolean;
+  by: string;
+  at: string;
+  workId: string;
+  writer: string | null;
+  /** Absolute local path, `null` when not mirrored here. */
+  localPath: string | null;
+}
+
+/** One version saved under a task's work. */
+export interface HwWorkVersion {
+  space: string;
+  path: string;
+  seq: number;
+  author: string;
+  at: string;
+  kind: HwVersion['kind'];
+  fromPath?: string;
+  localPath: string | null;
+}
+
+/** The `work-files` answer (`WorkFilesResponse` + `localPath`). */
+export interface HwWorkFiles {
+  writer: string | null;
+  closed: boolean;
+  locks: HwWorkLock[];
+  hiddenLocks: number;
+  versions: HwWorkVersion[];
+  cursor?: string;
+}
+
+/** Lock state of a browsed entry. */
+export type HwEntryState = 'free' | 'writable' | 'locked' | 'local_changed' | 'conflict';
+
+/** One entry of a browsed folder level (`files`). */
+export interface HwBrowseEntry {
+  path: string;
+  localPath: string | null;
+  folder: boolean;
+  size?: number;
+  state: HwEntryState;
+  workId?: string;
+  writer?: string;
+  /** The deciding lock is a folder lock. */
+  lockFolder?: boolean;
+}
+
+/** The `files` answer: one level of a space folder. */
+export interface HwBrowse {
+  space: string;
+  /** Folder in its stored spelling, `''` for the root. */
+  folder: string;
+  /** The space (or a part of it) is selected here. */
+  selected: boolean;
+  entries: HwBrowseEntry[];
+}
+
 /** Counts shown next to the clock. */
 export interface FileCounts { conflicts: number; unsent: number }
 
@@ -84,6 +146,7 @@ const CODE = /^[A-Z][A-Z_]{0,39}$/;
 /** Longest daemon text sent to a window (characters). */
 export const MAX_REFUSAL_TEXT = 300;
 const VERSION_KINDS: readonly string[] = ['put', 'restore', 'move', 'delete'];
+const ENTRY_STATES: readonly string[] = ['free', 'writable', 'locked', 'local_changed', 'conflict'];
 
 /** Polish texts of app-side codes; daemon refusals bring their own. */
 const MESSAGES: Readonly<Record<string, string>> = {
@@ -137,8 +200,7 @@ function parseSpace(v: unknown): HwSpace | null {
  * Output: well-formed `VersionRecord`s only (others are dropped).
  */
 export function parseVersions(v: unknown): HwVersion[] {
-  if (!Array.isArray(v)) return [];
-  return v.map(parseVersion).filter((x): x is HwVersion => x !== null);
+  return Array.isArray(v) ? rows(v, parseVersion) : [];
 }
 
 /**
@@ -155,6 +217,98 @@ function parseVersion(v: unknown): HwVersion | null {
   if (o.fromSeq !== undefined && o.fromSeq !== null && !isCount(o.fromSeq)) return null;
   const from = isCount(o.fromSeq) ? { fromSeq: o.fromSeq } : {};
   return { ...t, seq: o.seq, size: o.size, ...from } as HwVersion;
+}
+
+/**
+ * Reads the `work-files` reply.
+ *
+ * Call: `parseWorkFiles(reply)`.
+ * Expects: anything (untrusted JSON from the daemon).
+ * Output: the work's files with malformed lock and version rows
+ * dropped one by one, or `null` for a refusal or a malformed top.
+ */
+export function parseWorkFiles(v: unknown): HwWorkFiles | null {
+  const o = record(v);
+  if (!o || o.ok === false || !isTextOrNull(o.writer) || typeof o.closed !== 'boolean') return null;
+  if (!isCount(o.hiddenLocks) || !Array.isArray(o.locks) || !Array.isArray(o.versions)) return null;
+  if (o.cursor !== undefined && o.cursor !== null && typeof o.cursor !== 'string') return null;
+  const cursor = typeof o.cursor === 'string' ? { cursor: o.cursor } : {};
+  const locks = rows(o.locks, parseWorkLock);
+  const versions = rows(o.versions, parseWorkVersion);
+  return { writer: o.writer, closed: o.closed, locks, hiddenLocks: o.hiddenLocks, versions, ...cursor };
+}
+
+/**
+ * Reads one lock of a work.
+ *
+ * Call: `parseWorkLock(row)` via `rows`.
+ * Expects: anything; `writer` and `localPath` missing count as null.
+ * Output: the lock, or `null` when a field is missing or mistyped.
+ */
+function parseWorkLock(v: unknown): HwWorkLock | null {
+  const t = texts(v, ['space', 'path', 'by', 'at', 'workId'], ['writer', 'localPath']);
+  const o = record(v);
+  if (!t || !o || typeof o.folder !== 'boolean') return null;
+  return {
+    space: t.space!, path: t.path!, folder: o.folder, by: t.by!, at: t.at!, workId: t.workId!,
+    writer: t.writer ?? null, localPath: t.localPath ?? null,
+  };
+}
+
+/**
+ * Reads one version saved under a work.
+ *
+ * Call: `parseWorkVersion(row)` via `rows`.
+ * Expects: anything.
+ * Output: the version (only the fields the app uses), or `null`
+ * when malformed.
+ */
+function parseWorkVersion(v: unknown): HwWorkVersion | null {
+  const t = texts(v, ['space', 'path', 'author', 'at', 'kind'], ['fromPath', 'localPath']);
+  const o = record(v);
+  if (!t || !o || !VERSION_KINDS.includes(t.kind!) || !isCount(o.seq)) return null;
+  const from = t.fromPath !== undefined ? { fromPath: t.fromPath } : {};
+  return {
+    space: t.space!, path: t.path!, seq: o.seq, author: t.author!, at: t.at!,
+    kind: t.kind as HwVersion['kind'], ...from, localPath: t.localPath ?? null,
+  };
+}
+
+/**
+ * Reads the `files` reply (one folder level).
+ *
+ * Call: `parseBrowse(reply)`.
+ * Expects: anything (untrusted JSON from the daemon).
+ * Output: the level with malformed entries dropped one by one, or
+ * `null` for a refusal or a malformed top.
+ */
+export function parseBrowse(v: unknown): HwBrowse | null {
+  const t = texts(v, ['space', 'folder']);
+  const o = record(v);
+  if (!t || !o || o.ok === false || typeof o.selected !== 'boolean' || !Array.isArray(o.entries)) return null;
+  return { space: t.space!, folder: t.folder!, selected: o.selected, entries: rows(o.entries, parseEntry) };
+}
+
+/**
+ * Reads one entry of a folder level.
+ *
+ * Call: `parseEntry(row)` via `rows`.
+ * Expects: anything; a missing `localPath` counts as null.
+ * Output: the entry with only present optional fields, or `null`
+ * when malformed.
+ */
+function parseEntry(v: unknown): HwBrowseEntry | null {
+  const t = texts(v, ['path', 'state'], ['localPath', 'workId', 'writer']);
+  const o = record(v);
+  if (!t || !o || typeof o.folder !== 'boolean' || !ENTRY_STATES.includes(t.state!)) return null;
+  if (o.size !== undefined && !isCount(o.size)) return null;
+  if (o.lockFolder !== undefined && typeof o.lockFolder !== 'boolean') return null;
+  const e: HwBrowseEntry = { path: t.path!, localPath: t.localPath ?? null, folder: o.folder, state: t.state as HwEntryState };
+  if (o.size !== undefined) e.size = o.size;
+  if (t.workId !== undefined) e.workId = t.workId;
+  if (t.writer !== undefined) e.writer = t.writer;
+  if (o.lockFolder !== undefined) e.lockFolder = o.lockFolder;
+  return e;
 }
 
 /**
@@ -193,6 +347,28 @@ function list<T>(v: unknown, parse: (item: unknown) => T | null): T[] | null {
   if (!Array.isArray(v)) return null;
   const out = v.map(parse);
   return out.every((x) => x !== null) ? (out as T[]) : null;
+}
+
+/**
+ * Parses the items of an array, dropping bad ones.
+ *
+ * Call: `rows(array, parseItem)`.
+ * Expects: an array.
+ * Output: the items `parse` accepted, order kept.
+ */
+function rows<T>(v: unknown[], parse: (item: unknown) => T | null): T[] {
+  return v.map(parse).filter((x): x is T => x !== null);
+}
+
+/**
+ * Checks a string or `null`.
+ *
+ * Call: `isTextOrNull(v)`.
+ * Expects: anything.
+ * Output: true for strings and `null`.
+ */
+function isTextOrNull(v: unknown): v is string | null {
+  return v === null || typeof v === 'string';
 }
 
 /**
@@ -329,6 +505,7 @@ export function checkReply(reply: HwReply): void {
 /**
  * Paths this computer locked for a task (D11).
  *
+ * @deprecated Replaced by `work-files`; removed in Task 2.
  * Call: `lockedPaths(store, taskId)`.
  * Expects: any store; corrupt entries are ignored.
  * Output: the remembered absolute paths (may be empty).
@@ -341,6 +518,7 @@ export function lockedPaths(store: KeyValueStore, taskId: string): string[] {
 /**
  * Remembers newly locked paths of a task.
  *
+ * @deprecated Replaced by `work-files`; removed in Task 2.
  * Call: `rememberLocked(store, taskId, paths)`.
  * Expects: paths the daemon locked.
  * Output: none; stored without duplicates, order kept.
@@ -352,6 +530,7 @@ export function rememberLocked(store: KeyValueStore, taskId: string, paths: read
 /**
  * Forgets released paths of a task.
  *
+ * @deprecated Replaced by `work-files`; removed in Task 2.
  * Call: `forgetLocked(store, taskId, paths)`.
  * Expects: paths the daemon released.
  * Output: none; a task without paths is removed from storage.
