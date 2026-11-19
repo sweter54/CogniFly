@@ -6,6 +6,7 @@
 //! by the UI.
 
 pub mod config;
+pub mod orphan;
 pub mod socket;
 pub mod supervisor;
 #[cfg(all(test, unix))]
