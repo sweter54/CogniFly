@@ -186,6 +186,83 @@ przestrzeni (wybrane na tym komputerze, „Inna przestrzeń…”) i filtrem
   (`openPath` uruchomiłby zsynchronizowane `X.app`). Błędy: `NOT_LOCAL`,
   `OUTSIDE`, `OPEN_FAILED`.
 
+### Nieśledzone i „Przenieś do zadania…”
+
+Sekcja „Nieśledzone” zakładki „Pliki” (`files.ts`, `untrackedRows` w
+`files-view.ts`) pokazuje pliki leżące w folderach przestrzeni, których
+Heartwood nie śledzi (pole `untracked` ze `status`). Powód („reason” i polski
+`reasonText`) zgłasza demon; aplikacja wstawia go jako tekst, nie interpretuje.
+Wiersze przestrzeni spoza `spaces[]` są pomijane (nie da się ich stąd przenieść).
+
+„Przenieś do zadania…” (`files.adopt`) zawsze pyta: pokazuje listę zadań, które
+użytkownik może blokować (`canLockFiles`), a ruszy dopiero po wyborze. Aplikacja
+niczego nie zgaduje. Kontroler sprawdza ścieżki (pod `root`, jedna przestrzeń
+`ws:`, do `MAX_ADOPT_PATHS`; przestrzeń prywatna `user:` odpada, bo nie ma w
+niej zadań) i woła `adopt` z `workId` = `cognifly:<id>` oraz `taskFolder`:
+
+- folder zadania to `Zadania/<opis> (zad_…)`; jeśli w `Zadania` jest już folder
+  kończący się na `(<id>)`, używany jest ten (`existingTaskFolder`);
+- nazwę buduje `taskFolderName`: opis w NFC bez `/\:*?"<>|` i znaków
+  sterujących, spacje zwinięte, bez wiodących `.`, `~`, `$`, do 60 znaków; bez
+  opisu zostaje samo `(<id>)`;
+- zastrzeżone nazwy Windows (con, prn, aux, nul, com1–9, lpt1–9) liczą się,
+  gdy opis (część przed pierwszą kropką) je zawiera — dostają prefiks `_`;
+  samo `aux` zostaje (staje się `aux (zad_…)`);
+- `NOT_SELECTED` (temat `Zadania` niewybrany na tym komputerze) daje
+  podpowiedź „wybierz go w Przestrzeniach” (`adoptErrorText`).
+
+### Konflikty
+
+Sekcja „Konflikty” grupuje konflikty per plik (demon wysyła jeden wiersz na
+plik): ścieżka, „N kopii”, „Pokaż kopie” i „Oznacz jako rozwiązane”. Kopie
+leżą obok pliku w `<temat>/Kopie konfliktów/` (także `.heartwood-kopie`).
+
+- „Pokaż kopie” (`files.revealCopy`) zaznacza najnowszą kopię w Finderze;
+  błędy: `OUTSIDE` (poza `root`), `NOT_COPY` (ścieżka nie jest kopią
+  konfliktu, `isConflictCopy`), `OPEN_FAILED`.
+- „Oznacz jako rozwiązane” (`files.resolve`) pyta: „Usunąć kopie konfliktu?
+  Upewnij się, że przepisałeś zmiany.” i usuwa wszystkie kopie pliku (`space` +
+  `path`); wariant z pojedynczą `copyPath` też wymaga ścieżki będącej kopią.
+
+### Pliki zadania w API serwera
+
+`GET /zadania/{id}/pliki` (`serwer/src/api/pliki.ts`) zwraca `{zadanie, pisze,
+zamkniete, blokady[], zmiany[]}` z `work-files` Heartwood, z osobami jako id
+CogniFly (po `sub`). Dostęp mają kandydat, właściciel i akceptujący zadania
+(inni: 403 `BRAK_DOSTEPU`; brak zadania: 404 `NIE_ZNALEZIONO`). Wpisy z cudzych
+przestrzeni prywatnych `user:` są pomijane. Bez Heartwood (brak
+`HEARTWOOD_INT_URL`, czyli bez kontekstu `heartwood`) trasa daje 503
+`PLIKI_WYLACZONE`.
+
+`zasil-heartwood` zawsze dodaje temat `Zadania` (obok `--tematy`), bo tam
+trafiają foldery zadań.
+
+### Connector zadań `cognifly-zadania` (MCP)
+
+Serwer MCP wtyczki (`wtyczka/mcp/`, deklaracja w `wtyczka/.mcp.json`, uruchamia
+`node mcp/dist/zadania.mjs`). Używa sesji i konfiguracji CLI wtyczki
+(`~/.cognifly`) i API CogniFly, nie gniazda demona. Cztery narzędzia, wszystkie
+tylko do odczytu (`narzedzia.mjs`):
+
+| Narzędzie | Co daje |
+|---|---|
+| `moje_zadania` | zadania ze skrzynki: id, opis, stan, właściciel, akceptujący, `moge_blokowac` |
+| `pliki_zadania` | `GET /zadania/{id}/pliki` jednego zadania |
+| `zadania_dla_pliku` | moje zadania blokujące plik, zmieniające go i te, do których mogę go dołączyć (do 30 zadań) |
+| `blokada_pliku` | czy plik blokuje jedno z moich zadań; inne blokady są niewidoczne, więc poza nimi „nieznane” |
+
+Błędy wracają po polsku (`isError`): brak logowania, brak konfiguracji, brak
+dostępu, `PLIKI_WYLACZONE` itd. Wtyczka po instalacji nie ma `node_modules`,
+więc serwer jest spakowany esbuildem do jednego pliku `mcp/dist/zadania.mjs`
+(`mcp/zbuduj.mjs`). Po zmianach w `wtyczka/mcp/` albo `wtyczka/cli/` uruchom
+`npm run build:mcp -w wtyczka` i zatwierdź plik.
+
+### Etap 2 (następny plan)
+
+Nie zrobione: connector Heartwood (zapisy, np. dołączanie plików do zadania
+przez asystenta) i skill scalania konfliktów. Etap 1 tylko pokazuje dane i
+podpowiada; decyzje i ruchy plików zostają po stronie człowieka.
+
 ### Zależność od Heartwood
 
 „Pliki zadania” i przeglądarka wymagają klienta i serwera Heartwood z
