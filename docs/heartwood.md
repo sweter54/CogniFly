@@ -56,8 +56,9 @@ cdk deploy -c heartwood='{"intUrl":"https://...","intApiArn":"arn:aws:execute-ap
 ```
 
 Powstają: strumień tabeli (`NEW_AND_OLD_IMAGES`), Lambda `HeartwoodPraca`,
-Lambda `HeartwoodZdarzenia` i reguła `cognifly-test-heartwood` na hubie
-`platforma-test`, na zdarzenia `heartwood` (`lock.release_requested`,
+Lambda `HeartwoodZdarzenia` i reguła `cognifly-test-heartwood-hub` na hubie
+`platforma-test` (nowa nazwa: przejście z wewnętrznej szyny wymaga nowego
+zasobu, a stara reguła `cognifly-test-heartwood` jest usuwana), na zdarzenia `heartwood` (`lock.release_requested`,
 `change.rejected`, `lock.broken`, `quota.near`, `quota.exceeded`), kolejka `cognifly-test-heartwood-dlq` (nieudane rekordy
 strumienia i zdarzenia reguły) oraz alarmy błędów obu funkcji i tej kolejki.
 Serwer Heartwood nie jest częścią stosu CogniFly. Instancja testowa to osobny

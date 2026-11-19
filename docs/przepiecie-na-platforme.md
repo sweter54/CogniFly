@@ -13,8 +13,9 @@ Miejsca oznaczone **ZAPYTAJ MICHAŁA** to bramki: zatrzymaj się i czekaj na zgo
   `platforma-test`). Lambda `TozsamoscUzgodnij` uzgadnia rejestr co godzinę
   (reguła `cognifly-test-uzgodnij`) oraz raz po wdrożeniu, jeśli zmienił się jej
   kod (Trigger CDK). Nieudane zdarzenia trafiają do `cognifly-test-tozsamosc-dlq`.
-- Reguła zdarzeń Heartwood `cognifly-test-heartwood` przechodzi na hub.
-  Webhook GitHuba zostaje na wewnętrznej szynie `cognifly-test`.
+- Reguła zdarzeń Heartwood przechodzi na hub pod nową nazwą
+  `cognifly-test-heartwood-hub`; stara `cognifly-test-heartwood` na
+  wewnętrznej szynie znika. Webhook GitHuba zostaje na wewnętrznej szynie `cognifly-test`.
 - Osoby dostają nowe `sub`. Rekord `OSOBA#michal` zachowuje zadania, kontakt i
   login GitHub (dopasowanie po e-mailu).
 - Aplikacja i wtyczka porzucają zapisaną sesję innego klienta. Trzeba zalogować
@@ -57,8 +58,9 @@ cd infra && npx cdk diff cognifly-test <C>
 ```
 
 Oczekiwane: nowe Lambdy `TozsamoscZdarzenia` i `TozsamoscUzgodnij`, reguły,
-DLQ i Trigger; autoryzator z nowym wydawcą; reguła `cognifly-test-heartwood`
-zastąpiona (inna szyna). **Brak** zastąpienia tabeli, puli i API HTTP. Jeśli
+DLQ i Trigger; autoryzator z nowym wydawcą; nowa reguła
+`cognifly-test-heartwood-hub` na hubie, stara `cognifly-test-heartwood`
+usunięta. **Brak** zastąpienia tabeli, puli i API HTTP. Jeśli
 diff pokazuje coś z tych trzech, przerwij.
 
 **ZAPYTAJ MICHAŁA**, czy wdrażać.
@@ -82,8 +84,9 @@ nie zwlekaj z następnym krokiem.
 cd infra && npx cdk deploy cognifly-test <C>
 ```
 
-Trigger uzgadnia rejestr. Gdy uzgadnianie się nie powiedzie (np. brak uprawnień
-do `/int/*`), wdrożenie wycofa się samo. Zobacz „Gdy coś nie działa”.
+Trigger uzgadnia rejestr na końcu wdrożenia (po API, autoryzatorze i
+regułach). Gdy uzgadnianie się nie powiedzie (np. brak uprawnień do `/int/*`),
+wdrożenie wycofa się samo. Zobacz „Gdy coś nie działa”.
 
 Sprawdzenia tylko do odczytu. Log uzgadniania powinien pokazać
 `orgs ≥ 1, updated ≥ 1`:
@@ -102,6 +105,16 @@ Rekord Michała ma mieć nowy `sub` i brak `usunieta`:
 
 ```bash
 aws dynamodb get-item --table-name cognifly-test-dane --region eu-central-1 --key '{"pk":{"S":"FIRMA#pilot#KONF"},"sk":{"S":"OSOBA#michal"}}' --projection-expression "sub, usunieta"
+```
+
+Jeśli `OSOBA#michal` nie ma nowego `sub`, a uzgadnianie dodało nową osobę
+(e-mail w rekordzie inny niż w Tożsamości), naprawa wymaga zgody.
+**ZAPYTAJ MICHAŁA** przed każdym z kroków: popraw e-mail w `OSOBA#michal` na
+ten z Tożsamości, usuń dodatkowy rekord osoby, a potem uruchom uzgadnianie
+jeszcze raz:
+
+```bash
+aws lambda invoke --function-name cognifly-test-tozsamoscuzgodnij --region eu-central-1 --payload '{}' --cli-binary-format raw-in-base64-out /dev/stdout
 ```
 
 ### 4. Zasilenie Heartwood
@@ -170,10 +183,18 @@ Kroki 7–11 zadania 11 Heartwood, według jego instrukcji.
 
 ## Gdy coś nie działa
 
-- **Wdrożenie CogniFly się wycofało** (Trigger uzgadniania): przeczytaj log
-  Lambdy `cognifly-test-tozsamoscuzgodnij` i DLQ, popraw przyczynę, wdróż
-  ponownie. Heartwood działa dalej na Platformie, ale API CogniFly daje 403
-  aplikacji, dopóki rejestr nie jest uzgodniony.
+- **Trigger uzgadniania się nie powiódł** (wdrożenie CogniFly wycofało się
+  przez Trigger): uzgadnianie nic nie zapisało, stos wrócił do starej puli,
+  a stara aplikacja działa dalej. Przeczytaj log Lambdy
+  `cognifly-test-tozsamoscuzgodnij`, popraw przyczynę i wdróż ponownie.
+  Pojedyncze 403 z `/int/*` tuż po utworzeniu roli to zwykle opóźnienie IAM:
+  wystarczy ponowić wdrożenie. Heartwood działa już na Platformie, więc do
+  udanego wdrożenia CogniFly zdarzenia Heartwood nie docierają (patrz
+  archiwum huba niżej).
+- **Wycofanie po udanych zapisach uzgadniania** (wdrożenie wycofało się z
+  innego powodu, po Triggerze, albo wycofujesz je ręcznie): rejestr ma już
+  nowe `sub`, a stare `sub` straciło wpis w `PROFIL`. Przywróć je według
+  „Wycofanie”.
 - **401 z Heartwood w aplikacji:** stara sesja. Uruchom nową aplikację i
   zaloguj się od nowa.
 - **Zdarzenia Heartwood trafiły na hub, zanim CogniFly tam słuchał:** archiwum
@@ -187,8 +208,22 @@ Stara pula jest nadal w stosie. CogniFly:
 git checkout <poprzedni commit main>
 ```
 
+Ten commit używa jeszcze `@aws-sdk/client-cognito-identity-provider`
+(stary skrypt zasiewu), którego ta gałąź już nie ma. Zainstaluj zależności od
+nowa, w korzeniu repo:
+
+```bash
+npm ci
+```
+
 ```bash
 cd infra && npx cdk deploy cognifly-test <C>
+```
+
+Wróć do korzenia repo (dalsze polecenia zakładają korzeń):
+
+```bash
+cd ..
 ```
 
 Potem poprzednia wersja aplikacji i wtyczka na starym kliencie:
@@ -217,3 +252,5 @@ planu.
 - Usunięcie starej puli i jej klienta ze stosu (osobne sprzątanie po udanym
   oknie).
 - Zdarzenia między produktami z polem `org`.
+- Zdarzenia Tożsamości z firm, które nie używają CogniFly, też tworzą rekordy
+  w rejestrze; dostęp odetnie dopiero `lic_cognifly` / `GET /access`.

@@ -127,16 +127,16 @@
 - Produces:
   - Stała `ETAP = 'test'` i funkcja `ssm(scope, nazwa)` = `StringParameter.valueForStringParameter(scope, '/platforma/test/' + nazwa)`.
   - Autoryzator `HttpJwtAuthorizer` z wydawcą `tozsamosc/issuer` i `jwtAudience: [tozsamosc/client-id/cognifly]`.
-  - `hub = EventBus.fromEventBusArn(this, 'Hub', ssm('hub/arn'))`; reguła `cognifly-test-heartwood` (z kontekstem `heartwood`) na `hub` zamiast `szyna`.
+  - `hub = EventBus.fromEventBusArn(this, 'Hub', ssm('hub/arn'))`; reguła `cognifly-test-heartwood-hub` (id `RegulaHeartwoodHub`, z kontekstem `heartwood`) na `hub` zamiast `szyna`. Nowa nazwa i id, bo zmiana `EventBusName` wymusza zastąpienie, a CloudFormation nie zastępuje zasobu o własnej nazwie; stara reguła `cognifly-test-heartwood` jest usuwana.
   - Lambdy `TozsamoscZdarzenia` (`tozsamosc/zdarzenia.ts`) i `TozsamoscUzgodnij` (`tozsamosc/uzgodnij.ts`, timeout 5 min) z `COGNIFLY_TABELA`, `TOZSAMOSC_URL`; obie `grantReadWriteData` na tabeli; `TozsamoscUzgodnij` ma `execute-api:Invoke` na `ssm('tozsamosc/int-invoke-arn')`.
   - Reguła `cognifly-test-tozsamosc` na `hub`: `{source:['tozsamosc'], detailType:['person.added','person.role_changed','person.removed']}` → `TozsamoscZdarzenia` z DLQ `cognifly-test-tozsamosc-dlq` (14 dni) i `retryAttempts: 4`.
-  - Reguła `cognifly-test-uzgodnij` na szynie domyślnej `rate(1 hour)` → `TozsamoscUzgodnij`; `triggers.Trigger` uruchamiający `TozsamoscUzgodnij` po każdym wdrożeniu (`executeAfter: [tabela]`).
+  - Reguła `cognifly-test-uzgodnij` na szynie domyślnej `rate(1 hour)` → `TozsamoscUzgodnij`; `triggers.Trigger` uruchamiający `TozsamoscUzgodnij` po każdym wdrożeniu (`executeAfter`: tabela, API HTTP z trasami i autoryzatorem, reguła `cognifly-test-tozsamosc`, reguła `cognifly-test-heartwood-hub`, gdy jest), czyli jak najpóźniej.
   - Alarmy błędów obu Lambd i DLQ (istniejące pętle alarmów).
   - Wyjścia: `Wydawca` i `KlientCognifly` (z SSM) obok dotychczasowych; `PulaCognito`/`KlientCognito` zostają (stara pula w stosie bez użycia, komentarz „do usunięcia po przepięciu”).
 
 - [ ] **Step 1: Testy** w `stos.test.ts`:
   - `authorizer_uses_platforma_issuer_and_cognifly_client` (`AWS::ApiGatewayV2::Authorizer` z `JwtConfiguration.Issuer` i `Audience` jako `Ref` parametrów SSM `/platforma/test/tozsamosc/issuer` i `/client-id/cognifly`).
-  - `heartwood_rule_is_on_the_hub` (kontekst `heartwood`: reguła `cognifly-test-heartwood` ma `EventBusName` z `/platforma/test/hub/arn`).
+  - `heartwood_rule_is_on_the_hub` (kontekst `heartwood`: reguła `cognifly-test-heartwood-hub` ma `EventBusName` z `/platforma/test/hub/arn`).
   - `identity_rule_on_hub_targets_consumer_with_dlq`.
   - `reconcile_runs_hourly_and_after_deploy`.
   - `reconcile_may_invoke_identity_int_api_only`.
@@ -212,7 +212,7 @@
 
 - [ ] **Step 1:** Edycja dokumentów. Instrukcja okna (kroki 5 i 6 zadania 11 Heartwood, jedno po drugim):
   1. Przed oknem: PR scalony do `main` (za zgodą), `npm ci && npm test` zielone; Michał: `aws login`.
-  2. `cd infra && npx cdk diff cognifly-test -c nadawca=… -c emailAlarmow=… -c heartwood='{"intUrl":"https://eohqtq0t3j.execute-api.eu-central-1.amazonaws.com","intApiArn":"arn:aws:execute-api:eu-central-1:167702900577:eohqtq0t3j"}'` — oczekiwane: nowe Lambdy `TozsamoscZdarzenia`, `TozsamoscUzgodnij`, reguły, DLQ, trigger; autoryzator z nowym wydawcą; reguła `cognifly-test-heartwood` zastąpiona (inna szyna); **brak zastąpienia** tabeli, puli, API HTTP. **ZAPYTAJ MICHAŁA.**
+  2. `cd infra && npx cdk diff cognifly-test -c nadawca=… -c emailAlarmow=… -c heartwood='{"intUrl":"https://eohqtq0t3j.execute-api.eu-central-1.amazonaws.com","intApiArn":"arn:aws:execute-api:eu-central-1:167702900577:eohqtq0t3j"}'` — oczekiwane: nowe Lambdy `TozsamoscZdarzenia`, `TozsamoscUzgodnij`, reguły, DLQ, trigger; autoryzator z nowym wydawcą; nowa reguła `cognifly-test-heartwood-hub` na hubie, stara `cognifly-test-heartwood` usunięta; **brak zastąpienia** tabeli, puli, API HTTP. **ZAPYTAJ MICHAŁA.**
   3. **Krok 5 (Heartwood):** wdrożenie `heartwood-test` według zadania 11 Heartwood i sprawdzenie jego uzgadniania.
   4. **Krok 6 (CogniFly), od razu po kroku 5:** `npx cdk deploy cognifly-test` z tymi samymi `-c`. Sprawdzenie: log `cognifly-test-tozsamoscuzgodnij` (`orgs ≥ 1, updated ≥ 1`), DLQ `cognifly-test-tozsamosc-dlq` pusta, `aws dynamodb get-item` na `OSOBA#michal` ma nowy `sub`.
   5. `npx tsx infra/skrypty/zasil-heartwood.ts --firma pilot --int-url https://eohqtq0t3j.execute-api.eu-central-1.amazonaws.com` (dry-run) → **ZAPYTAJ MICHAŁA** → z `--wykonaj`.
