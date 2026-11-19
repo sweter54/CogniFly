@@ -28,8 +28,8 @@ function serwer(handler) {
 
 let kat, tmp, api, cog, konf;
 const sesjaPlik = () => join(kat, 'sesja.json');
-const zapiszSesje = (wygasa, access = TOK.access) =>
-  writeFileSync(sesjaPlik(), JSON.stringify({ accessToken: access, idToken: TOK.id, refreshToken: TOK.refresh, wygasa }), { mode: 0o600 });
+const zapiszSesje = (wygasa, access = TOK.access, klient = 'KLIENT1') =>
+  writeFileSync(sesjaPlik(), JSON.stringify({ accessToken: access, idToken: TOK.id, refreshToken: TOK.refresh, wygasa, klient }), { mode: 0o600 });
 
 function cli(args, extraEnv = {}) {
   return new Promise((ok) => {
@@ -80,6 +80,7 @@ describe('logowanie', () => {
     const b = await cli(['kod', '--kod', '123456']);
     expect(b.json).toEqual({ stan: 'ZALOGOWANO', osoba: 'a@b.pl', firmy: ['firma1'] });
     expect(statSync(sesjaPlik()).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(sesjaPlik(), 'utf8')).klient).toBe('KLIENT1');
     expect(existsSync(join(kat, 'oczekujace.json'))).toBe(false);
     for (const x of [a, b]) for (const t of [...Object.values(TOK), 'SESJA-XYZ']) { expect(x.out).not.toContain(t); expect(x.err).not.toContain(t); }
   });
@@ -112,6 +113,30 @@ describe('sesja i bezpieczenstwo', () => {
   it('brak sesji -> WYMAGA_LOGOWANIA', async () => {
     expect((await cli(['skrzynka'])).json.stan).toBe('WYMAGA_LOGOWANIA');
     expect(api.log.length).toBe(0);
+  });
+
+  it('sesja_innego_klienta_wymaga_logowania', async () => {
+    mkdirSync(kat, { mode: 0o700 });
+    for (const sesja of [{ klient: 'stary' }, {}]) {
+      writeFileSync(sesjaPlik(), JSON.stringify({ accessToken: 'A', refreshToken: 'R', wygasa: Date.now() + 1e6, ...sesja }), { mode: 0o600 });
+      const r = await cli(['skrzynka']);
+      expect(r.json.stan).toBe('WYMAGA_LOGOWANIA');
+      expect(existsSync(sesjaPlik())).toBe(false);
+    }
+    expect(api.log.length).toBe(0);
+  });
+
+  it('kod_zapisuje_klienta_w_sesji i odswiezenie go zachowuje', async () => {
+    cogHandler = (r) => op(r) === 'InitiateAuth' && r.body.AuthFlow === 'USER_AUTH'
+      ? { status: 200, body: { ChallengeName: 'EMAIL_OTP', Session: 'S' } }
+      : { status: 200, body: { AuthenticationResult: { AccessToken: 'a', IdToken: 'i', RefreshToken: 'r', ExpiresIn: 3600 } } };
+    await cli(['zaloguj', '--email', 'a@b.pl']);
+    await cli(['kod', '--kod', '1']);
+    expect(JSON.parse(readFileSync(sesjaPlik(), 'utf8')).klient).toBe('KLIENT1');
+    zapiszSesje(Date.now() - 1000);
+    api.log.length = 0;
+    await cli(['skrzynka']);
+    expect(JSON.parse(readFileSync(sesjaPlik(), 'utf8')).klient).toBe('KLIENT1');
   });
 
   it('symlink zamiast sesji -> ODMOWA', async () => {
@@ -256,7 +281,7 @@ describe('konfiguracja', () => {
     wpisz({ adresApi: api.url, klientCognito: 'KLIENT-U', firmaDomyslna: 'firmaU' });
     cogHandler = (r) => { expect(r.body.ClientId).toBe('KLIENT-U'); expect(r.body.AuthParameters.USERNAME).toBe('a@b.pl'); return { status: 200, body: { ChallengeName: 'EMAIL_OTP', Session: 'S' } }; };
     expect((await cli(['zaloguj', '--email', 'a@b.pl'], bezEnv)).json).toEqual({ stan: 'KOD_WYSLANY' });
-    zapiszSesje(Date.now() + 3_600_000);
+    zapiszSesje(Date.now() + 3_600_000, TOK.access, 'KLIENT-U');
     apiHandler = () => ({ status: 200, body: { zadania: [] } });
     expect((await cli(['skrzynka'], bezEnv)).json.stan).toBe('OK');
     expect(api.log[0].headers['x-cognifly-firma']).toBe('firmaU');
@@ -269,7 +294,7 @@ describe('konfiguracja', () => {
   it('env COGNIFLY_REGION/FIRMA nadpisują', async () => {
     pusta();
     mkdirSync(kat, { recursive: true, mode: 0o700 });
-    zapiszSesje(Date.now() + 3_600_000);
+    zapiszSesje(Date.now() + 3_600_000, TOK.access, 'K');
     apiHandler = () => ({ status: 200, body: { zadania: [] } });
     const r = await cli(['skrzynka'], { COGNIFLY_KLIENT: 'K', COGNIFLY_FIRMA: 'f-env', COGNIFLY_REGION: 'eu-west-1' });
     expect(r.json.stan).toBe('OK');

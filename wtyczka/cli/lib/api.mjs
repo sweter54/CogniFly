@@ -2,7 +2,7 @@
 import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { Stan, katalog, czytaj, zapisz, punktCognito, odswiez, zaloguj, kod, wyloguj } from './sesja.mjs';
+import { Stan, katalog, czytaj, zapisz, usun, punktCognito, odswiez, zaloguj, kod, wyloguj } from './sesja.mjs';
 
 const DOBA = 86_400_000;
 const STANY = ['w_trakcie', 'do_akceptacji', 'zrobione'];
@@ -100,11 +100,16 @@ async function wywolaj(url, metoda, sesja, firma, body, signal) {
  * Expects: a context from `kontekst()`; a path starting with `/`.
  * Output: `{status, json}`; the token is refreshed when it is close
  * to expiry or on a 401 (at most once).
- * Throws: `Stan('WYMAGA_LOGOWANIA')`, `Stan('BLAD_SIECI')`, ...
+ * Throws: `Stan('WYMAGA_LOGOWANIA')` (also for a session of another
+ * Cognito client, whose file is deleted), `Stan('BLAD_SIECI')`, ...
  */
 export async function zSesja(ctx, metoda, sciezka, body) {
   const sesja0 = czytaj(ctx.kat, 'sesja.json');
   if (!sesja0 || !sesja0.accessToken || !sesja0.refreshToken) throw new Stan('WYMAGA_LOGOWANIA');
+  if (sesja0.klient !== ctx.konf.klientCognito) {
+    usun(ctx.kat, 'sesja.json');
+    throw new Stan('WYMAGA_LOGOWANIA');
+  }
   let sesja = sesja0, odswiezono = false;
   const dane = { kat: ctx.kat, konf: ctx.konf, endpoint: ctx.endpoint, signal: ctx.signal };
   if (!(sesja.wygasa - Date.now() > 60_000)) { sesja = await odswiez({ ...dane, sesja }); odswiezono = true; }
