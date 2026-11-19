@@ -12,7 +12,15 @@ export interface Wiadomosc {
 const ZWSP = '​';
 /** Dodatkowa ochrona obok `allowed_mentions.parse: []`. */
 const bezWzmianek = (s: string) => s.replace(/@(everyone|here)/gi, `@${ZWSP}$1`);
-const przytnij = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
+/**
+ * Cuts text to a maximum length.
+ *
+ * Call: `przytnij(s, 120)`.
+ * Expects: any string and a max length >= 1.
+ * Output: `s` unchanged when short enough, else its first `max - 1`
+ * chars followed by `…` (exactly `max` chars).
+ */
+export const przytnij = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)}…` : s);
 
 export function formatuj(z: DoFormatu, rodzaj: 'nowe' | 'eskalacja', link?: string): Wiadomosc {
   const prefiks = rodzaj === 'eskalacja' ? '[CogniFly] Eskalacja: ' : '[CogniFly] ';

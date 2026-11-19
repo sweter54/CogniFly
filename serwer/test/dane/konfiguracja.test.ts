@@ -2,7 +2,7 @@ import { beforeAll, afterAll, describe, expect, test } from 'vitest';
 import type { Regula } from '@cognifly/wspolne';
 import { ustawTabeleTestowa } from './pomocnik.js';
 import {
-  regulyFirmy, roleFirmy, kontaktOsoby, zapiszRegule, zapiszRole, zapiszKontakt, zapiszOsobe, subOsoby,
+  regulyFirmy, roleFirmy, kontaktOsoby, zapiszRegule, zapiszRole, zapiszKontakt, zapiszOsobe, subOsoby, adminiFirmy,
 } from '../../src/dane/konfiguracja.js';
 
 const tabela = ustawTabeleTestowa('cognifly-test-konfiguracja');
@@ -55,5 +55,13 @@ describe('konfiguracja', () => {
     expect(await subOsoby('f1', 'michal')).toBe('s1');
     expect(await subOsoby('f1', 'bezsub')).toBeNull();
     expect(await subOsoby('f1', 'nikt')).toBeNull();
+  });
+  test('admini: tylko osoby z rolą admin, posortowane', async () => {
+    await zapiszOsobe('fa', 'zuza', { email: 'z@x.pl', rola: 'admin' });
+    await zapiszOsobe('fa', 'adam', { email: 'a@x.pl', rola: 'admin', sub: 's2' });
+    await zapiszOsobe('fa', 'ewa', { email: 'e@x.pl', rola: 'czlonek' });
+    await zapiszOsobe('fb', 'obcy', { email: 'o@x.pl', rola: 'admin' });
+    expect(await adminiFirmy('fa')).toEqual(['adam', 'zuza']);
+    expect(await adminiFirmy('pusta')).toEqual([]);
   });
 });

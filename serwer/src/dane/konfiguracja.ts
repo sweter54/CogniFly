@@ -88,6 +88,21 @@ export async function osobyFirmy(firma: string): Promise<{ osoba: string; github
     .map((osoba) => (login.has(osoba) ? { osoba, github: login.get(osoba)! } : { osoba }));
 }
 
+/**
+ * Lists the admins of a company.
+ *
+ * Call: `await adminiFirmy(firma)`.
+ * Expects: a company id.
+ * Output: person ids of `OSOBA#` records with `rola: 'admin'`, sorted;
+ * empty when none.
+ */
+export async function adminiFirmy(firma: string): Promise<string[]> {
+  return (await wszystkie(firma, 'OSOBA#'))
+    .filter((it) => it.rola === 'admin')
+    .map((it) => (it.sk as string).slice('OSOBA#'.length))
+    .sort();
+}
+
 /** Login GitHub (także konta botów `nazwa[bot]`). */
 export const LOGIN_GITHUB = /^[A-Za-z0-9-]{1,39}(\[bot\])?$/;
 
