@@ -476,6 +476,22 @@ export function locksBySpace(locks: readonly HwWorkLock[]): { space: string; pat
   return [...groups].map(([space, paths]) => ({ space, paths }));
 }
 
+/** Most paths one lock or release request may carry (contract 3.3). */
+export const MAX_PATHS_PER_REQUEST = 98;
+
+/**
+ * Splits a list into request-sized batches.
+ *
+ * Call: `inBatches(paths)`.
+ * Expects: any list.
+ * Output: consecutive slices of at most `MAX_PATHS_PER_REQUEST`.
+ */
+export function inBatches<T>(items: readonly T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += MAX_PATHS_PER_REQUEST) out.push(items.slice(i, i + MAX_PATHS_PER_REQUEST));
+  return out;
+}
+
 /**
  * Groups paths by space folder (`<root>/<org>/<space>/…`).
  *

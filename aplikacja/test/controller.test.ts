@@ -425,6 +425,23 @@ describe('Controller', () => {
       expect(ports.store.getItem('cognifly.heartwood.locks')).toBeNull();
     });
 
+    it('lockFiles and releaseFiles send at most 98 paths per request', async () => {
+      const { c, hw } = setup({ inbox: [] });
+      await c.start();
+      hw.picked = Array.from({ length: 150 }, (_, i) => `${ROOT}/pilot/w1/f${i}.docx`);
+      await c.handlers()['task.lockFiles']!({ id: lockId });
+      expect(daemonCalls(hw).filter((r) => r.cmd === 'lock').map((r) => (r.paths as string[]).length)).toEqual([98, 52]);
+      hw.calls = [];
+      const locks = Array.from({ length: 150 }, (_, i) => ({ ...LOCK_W1, path: `f${i}.docx` }));
+      hw.reply = (req) => {
+        if (req.cmd === 'work-files') return { ...workFiles([]), locks };
+        if (req.cmd === 'release') return { ok: true, space: req.space, paths: req.paths };
+        return STATUS_REPLY;
+      };
+      await c.handlers()['task.releaseFiles']!({ id: lockId });
+      expect(daemonCalls(hw).filter((r) => r.cmd === 'release').map((r) => (r.paths as string[]).length)).toEqual([98, 52]);
+    });
+
     it('a cancelled picker locks nothing; a bad task id is refused', async () => {
       const { c, hw } = setup({ inbox: [] });
       await c.start();
@@ -691,6 +708,14 @@ describe('Controller', () => {
       expect(ports.revealFolder).not.toHaveBeenCalled();
       vi.mocked(ports.revealFolder).mockRejectedValueOnce('Not allowed to open path');
       await expect(h['files.reveal']!({ space: 'ws:w1', folder: '' })).rejects.toMatchObject({ code: 'OPEN_FAILED' });
+    });
+
+    it('files.reveal passes on the daemon error instead of NOT_LOCAL', async () => {
+      const { c, ports } = setup({ inbox: [] });
+      await c.start();
+      (ports.heartwood.call as ReturnType<typeof vi.fn>).mockRejectedValueOnce('TIMEOUT');
+      await expect(c.handlers()['files.reveal']!({ space: 'ws:w1', folder: '' })).rejects.toMatchObject({ code: 'TIMEOUT' });
+      expect(ports.revealFolder).not.toHaveBeenCalled();
     });
 
     it('task.focus shows the task in the inbox and checks the id', async () => {

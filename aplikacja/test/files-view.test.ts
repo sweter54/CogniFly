@@ -173,6 +173,13 @@ describe('taskFilesModel', () => {
     expect(m.changes[0]!.kindText).toBe(text);
   });
 
+  it('offers the newest version with content for download', () => {
+    const m = taskFilesModel(work({ versions: [ver('a.txt', 9, 'delete'), ver('a.txt', 4), ver('a.txt', 1)] }), 'u1');
+    expect(m.changes[0]).toMatchObject({ latestSeq: 9, downloadSeq: 4 });
+    const gone = taskFilesModel(work({ versions: [ver('b.txt', 2, 'delete')] }), 'u1');
+    expect(gone.changes[0]!.downloadSeq).toBeNull();
+  });
+
   it('labels private versions as Prywatne', () => {
     const m = taskFilesModel(work({ versions: [ver('a.txt', 1, 'put', { space: 'user:u1' })] }), 'u1');
     expect(m.changes[0]!.label).toBe('Prywatne/a.txt');

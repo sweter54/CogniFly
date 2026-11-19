@@ -137,8 +137,11 @@ function lockRow(call: Call, taskId: string, l: LockRow, canEdit: boolean): HTML
 function changeRow(call: Call, taskId: string, c: ChangeRow): HTMLLIElement {
   const key = JSON.stringify([taskId, c.space, c.path]);
   const download = button('Pobierz', 'secondary');
+  const seq = c.downloadSeq;
+  download.hidden = seq === null;
   download.addEventListener('click', () => void runFileAction(download, async () => {
-    const { copy } = await call('files.download', { space: c.space, path: c.path, version: c.latestSeq }, DAEMON_WAIT_MS);
+    if (seq === null) return { text: '', kind: 'ok' };
+    const { copy } = await call('files.download', { space: c.space, path: c.path, version: seq }, DAEMON_WAIT_MS);
     return { text: `Zapisano kopię: ${copy}`, kind: 'ok' };
   }));
   const toggle = button(versionsLabel(c.count), 'link');

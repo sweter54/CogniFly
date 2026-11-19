@@ -9,7 +9,7 @@ import { isSafeFolder, loadConfig, saveChoices, type AppConfig, type UserChoices
 import { claudeLink, threadLink } from './claude-link.js';
 import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
 import {
-  checkReply, DISABLED_INFO, filesView, groupBySpace, hwError, isSpacePath, isUnderRoot, locksBySpace, parseBrowse, parseStatus,
+  checkReply, DISABLED_INFO, filesView, groupBySpace, hwError, inBatches, isSpacePath, isUnderRoot, locksBySpace, parseBrowse, parseStatus,
   parseVersions, parseWorkFiles, workIdFor, type FilesView, type HeartwoodPort, type HwBrowse, type HwInfo, type HwReply,
   type HwRequest, type HwStatus, type HwWorkFiles,
 } from './heartwood.js';
@@ -514,12 +514,14 @@ export class Controller {
    * Output: `{ ok: true }`; the space's local folder comes from a
    * fresh status, never from the window; Finder only shows it
    * (a bundle folder like `X.app` is not launched).
-   * Throws: `NOT_LOCAL` for a space not on this computer, `OUTSIDE`
-   * for a folder outside the Heartwood root, `OPEN_FAILED` when the
-   * OS (or the opener scope) refuses.
+   * Throws: the daemon's code (`TIMEOUT`, `NOT_RUNNING`) when it
+   * cannot be asked, `NOT_LOCAL` for a space not on this computer,
+   * `OUTSIDE` for a folder outside the Heartwood root,
+   * `OPEN_FAILED` when the OS (or the opener scope) refuses.
    */
   private async reveal(params: { space: string; folder?: string }): Promise<{ ok: true }> {
-    const base = (await this.readStatus())?.spaces.find((s) => s.space === params.space)?.folder;
+    const status = parseStatus(await this.hwCall({ cmd: 'status' }));
+    const base = status?.spaces.find((s) => s.space === params.space)?.folder;
     if (!base) throw new AppError('NOT_LOCAL');
     const sub = (params.folder ?? '').replace(/\/$/, '');
     const path = sub ? `${base}/${sub}` : base;
@@ -634,7 +636,9 @@ export class Controller {
   private async lockFiles(taskId: string): Promise<{ paths: string[] }> {
     const { root, paths } = await this.pickUnderRoot();
     for (const group of groupBySpace(paths, root)) {
-      await this.fileAction({ cmd: 'lock', workId: workIdFor(taskId), paths: group });
+      for (const batch of inBatches(group)) {
+        await this.fileAction({ cmd: 'lock', workId: workIdFor(taskId), paths: batch });
+      }
     }
     return { paths };
   }
@@ -657,7 +661,9 @@ export class Controller {
       return { paths: [path] };
     }
     const groups = locksBySpace((await this.workFilesPage(workIdFor(taskId))).locks);
-    for (const group of groups) await this.fileAction({ cmd: 'release', ...group });
+    for (const { space, paths } of groups) {
+      for (const batch of inBatches(paths)) await this.fileAction({ cmd: 'release', space, paths: batch });
+    }
     return { paths: groups.flatMap((g) => g.paths) };
   }
 

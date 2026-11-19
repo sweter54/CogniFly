@@ -44,6 +44,8 @@ export interface LockRow {
 export interface ChangeRow {
   label: string;
   latestSeq: number;
+  /** Newest version that has content (not a delete); `null` if none. */
+  downloadSeq: number | null;
   /** Number of versions the task saved for this file. */
   count: number;
   /** Kind of the newest version in Polish. */
@@ -110,9 +112,7 @@ const KIND_NAMES: Record<HwVersion['kind'], string> = {
 };
 
 /** Polish names of the newest change of a file. */
-const CHANGE_NAMES: Record<HwVersion['kind'], string> = {
-  put: 'zmiana', restore: 'przywrócenie', move: 'przeniesienie', delete: 'usunięcie',
-};
+const CHANGE_NAMES: Record<HwVersion['kind'], string> = { ...KIND_NAMES, put: 'zmiana' };
 
 /** Polish texts of entry states (`locked` adds the writer). */
 const STATE_TEXTS: Record<HwEntryState, string> = {
@@ -300,7 +300,8 @@ function groupVersions(versions: readonly HwWorkVersion[]): HwWorkVersion[][] {
 function changeRow(versions: HwWorkVersion[]): ChangeRow {
   const top = versions[0]!;
   return {
-    label: spacePath(top.space, top.path), latestSeq: top.seq, count: versions.length, kindText: changeText(top),
+    label: spacePath(top.space, top.path), latestSeq: top.seq,
+    downloadSeq: versions.find((v) => v.kind !== 'delete')?.seq ?? null, count: versions.length, kindText: changeText(top),
     who: top.author, when: whenText(top.at), space: top.space, path: top.path, versions,
   };
 }

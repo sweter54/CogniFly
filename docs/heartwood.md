@@ -154,9 +154,10 @@ dubluje trwającego żądania) oraz po każdej akcji.
   dostępu”).
 - **Zadanie zamknięte** (`closed`): sekcja pokazuje notkę o zamkniętej pracy i
   nie oferuje akcji; lista zmian zostaje.
-- „Zablokuj pliki…” dostępne dla właściciela zadania `wziete`/`w_trakcie` i
-  akceptującego zadania `do_akceptacji`, gdy pliki działają na tym komputerze
-  (`canLockFiles`).
+- „Zablokuj pliki…” widać tylko wtedy, gdy `canEdit` (piszący to użytkownik,
+  praca otwarta). `canLockFiles` (właściciel zadania `wziete`/`w_trakcie` lub
+  akceptujący `do_akceptacji`, pliki działają na tym komputerze) steruje tylko
+  listą zadań w przeglądarce: „Zablokuj do zadania…”.
 
 ### Przeglądarka przestrzeni
 

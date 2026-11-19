@@ -65,7 +65,7 @@ export interface Methods {
   'files.unselect': { params: { space: string; topics?: string[]; yes: boolean }; result: { ok: true } };
   'files.pickPath': { params: Record<string, never>; result: { path: string | null } };
   'task.lockFiles': { params: { id: string }; result: { paths: string[] } };
-  /** With `space` + `path` one lock, else every visible lock of the task. */
+  /** With `space` + `path` one lock, else every visible lock. */
   'task.releaseFiles': { params: { id: string; space?: string; path?: string }; result: { paths: string[] } };
   /** Locks and versions of the task's work; `me` is the user's `sub`. */
   'task.files': { params: { id: string }; result: { id: string; files: HwWorkFiles; me: string | null } };
