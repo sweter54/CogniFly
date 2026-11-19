@@ -27,15 +27,15 @@ Heartwood i pokazuje zakładkę „Pliki”.
   piszącego; `quota.near` → powiadomienie, `quota.exceeded` → zadanie. Kanały:
   `['email', 'discord']`.
 - **Identyfikatory** (D2, D3): `org` Heartwood = id firmy CogniFly (np. `pilot`),
-  `workId` = `cognifly:<id zadania>`, osoba Heartwood = `sub` z Cognito (rekord
-  `OSOBA#<osoba>` ma pole `sub`).
+  `workId` = `cognifly:<id zadania>`, osoba Heartwood = `sub` z puli Platformy (rekord
+  `OSOBA#<osoba>` ma pole `sub`, wypełniane z Tożsamości).
 
 ## Decyzje
 
 | | |
 |---|---|
 | D2 | `org` = firma, `workId` = `cognifly:<id zadania>` |
-| D3 | osoba = `sub` z Cognito, zapisany w rekordzie osoby |
+| D3 | osoba = `sub` z puli Platformy, zapisany w rekordzie osoby (z Tożsamości) |
 | D4 | stan pracy ze strumienia tabeli, nie z tras API; powrót do `nowe` czyści `writer` (kontrakt, rozdz. 7) |
 | D5 | wymiana i reguła zdarzeń tylko z kontekstem CDK `heartwood` |
 | D6 | jedna przestrzeń `wspolne` („Wspólne”) na firmę; członkowie `write`, admini `admin` |
@@ -56,13 +56,14 @@ cdk deploy -c heartwood='{"intUrl":"https://...","intApiArn":"arn:aws:execute-ap
 ```
 
 Powstają: strumień tabeli (`NEW_AND_OLD_IMAGES`), Lambda `HeartwoodPraca`,
-Lambda `HeartwoodZdarzenia` i reguła EventBridge na zdarzenia `heartwood`
-(`lock.release_requested`, `change.rejected`, `lock.broken`, `quota.near`,
-`quota.exceeded`), kolejka `cognifly-test-heartwood-dlq` (nieudane rekordy
+Lambda `HeartwoodZdarzenia` i reguła `cognifly-test-heartwood` na hubie
+`platforma-test`, na zdarzenia `heartwood` (`lock.release_requested`,
+`change.rejected`, `lock.broken`, `quota.near`, `quota.exceeded`), kolejka `cognifly-test-heartwood-dlq` (nieudane rekordy
 strumienia i zdarzenia reguły) oraz alarmy błędów obu funkcji i tej kolejki.
 Serwer Heartwood nie jest częścią stosu CogniFly. Instancja testowa to osobny
-stos `heartwood-test` (repo Heartwood, `infra/bin/cognifly-test.ts`), na puli
-Cognito i szynie `cognifly-test` CogniFly:
+stos `heartwood-test` (repo Heartwood, `infra/bin/platforma-test.ts`), na puli
+Platformy i hubie `platforma-test`. Webhook GitHuba zostaje na wewnętrznej szynie
+`cognifly-test`:
 
 | Co | Wartość |
 |---|---|
@@ -72,30 +73,33 @@ Cognito i szynie `cognifly-test` CogniFly:
 
 Adresy HTTP i WebSocket są wbudowane w aplikację (`DEFAULT_CONFIG`).
 
-### Przejściowo: przepięcie na Platformę
+### Platforma: stan obecny
 
-Według projektu Platformy (`~/Documents/Platforma`, rozdz. 8) to układ
-przejściowy:
-- rejestr firm i osób Heartwood zasila docelowo Tożsamość (zdarzenia na hubie),
-  a nie skrypt `zasil-heartwood.ts`; skrypt zostaje dla przestrzeni i praw;
-- Heartwood publikuje na hub, więc `RegulaHeartwood` przejdzie na hub;
-- CogniFly dostaje nową pulę i klienta `cognifly` — nowe `sub`, rejestr osób
-  odtwarzany ze zdarzeń Tożsamości;
-- źródłem prawdy o zadaniach będzie CDC, więc stan pracy (strumień zadań)
-  przejdzie do CDC albo będzie liczony z jego zdarzeń;
-- aplikacja i demon sprawdzają `GET /access` przed pracą i co 5 min.
+CogniFly test działa na wspólnej Platformie (instrukcja okna i wycofanie:
+`docs/przepiecie-na-platforme.md`):
+- logowanie i autoryzator API używają puli Platformy, klient `cognifly`;
+- rejestr firm i osób CogniFly jest kopią Tożsamości. Zdarzenia z huba obsługuje
+  Lambda `TozsamoscZdarzenia`, a co godzinę (i po każdym wdrożeniu ze zmienionym
+  kodem) uzgadnia go Lambda `TozsamoscUzgodnij`. Nieudane zdarzenia trafiają do
+  `cognifly-test-tozsamosc-dlq`;
+- `zasil-heartwood.ts` nie zakłada już org ani osób (robi to Tożsamość po
+  stronie Heartwood). Zostają przestrzeń `wspolne`, tematy i prawa;
+- jeszcze nie zrobione: sprawdzanie `GET /access` w aplikacji i demonie,
+  licencja `lic_cognifly`, stan pracy z CDC zamiast strumienia zadań,
+  zdarzenia między produktami z `org`.
 
 ### Zasilanie rejestru (D6)
 
 ```
-npx tsx infra/skrypty/zasil-heartwood.ts --firma pilot --pula <id puli Cognito> \
+npx tsx infra/skrypty/zasil-heartwood.ts --firma pilot \
   --int-url <url API integracji> [--tematy Dokumenty,Oferty] [--wykonaj]
 ```
 
-Domyślnie na sucho (tylko wypisuje kroki; czyta osoby firmy z DynamoDB, nie woła
-Cognito ani Heartwood). Z `--wykonaj`: tworzy org, osoby (szuka `sub` w Cognito
-po e-mailu i zapisuje go w rekordzie osoby), przestrzeń `wspolne`, tematy i
-prawa.
+Bez `--pula`. Domyślnie na sucho (tylko wypisuje kroki; czyta rejestr firmy z
+DynamoDB, nie woła Heartwood). Z `--wykonaj`: tworzy przestrzeń `wspolne`,
+tematy i prawa (osoby i org zakłada Tożsamość). Dodatkowo ponownie wysyła stan
+pracy otwartych zadań, ale z aktualnymi `sub`. Osoby bez `sub` są pomijane z
+ostrzeżeniem w logu.
 
 ## Aplikacja
 
