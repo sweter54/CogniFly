@@ -279,7 +279,8 @@ mod tests {
     /// Expects: `COGNIFLY_HEARTWOOD_CONFIG` (a ready config.toml) and
     /// `COGNIFLY_HEARTWOOD_BIN` (the `heartwood` binary).
     /// Output: the real start path (`prepare`) runs our own daemon,
-    /// `status` answers `ok` + `running`, and stop leaves no child.
+    /// `status` answers `ok` + `running`, `work-files` of an unknown
+    /// work is `ok` with empty locks and versions, stop leaves no child.
     /// Without `COGNIFLY_HEARTWOOD_CONFIG` it returns early (skip).
     #[tokio::test]
     #[ignore = "needs a live Heartwood dev server (docs/heartwood.md)"]
@@ -306,6 +307,12 @@ mod tests {
         let got = call(&socket, &req, Duration::from_secs(10)).await.unwrap();
         assert_eq!(got["ok"], json!(true), "{got}");
         assert_eq!(got["running"], json!(true), "{got}");
+        // An unknown work is not an error: empty locks and versions.
+        let work = json!({"cmd": "work-files", "workId": "cognifly:zad_000000000000"});
+        let got = call(&socket, &work, Duration::from_secs(30)).await.unwrap();
+        assert_eq!(got["ok"], json!(true), "{got}");
+        assert_eq!(got["locks"], json!([]), "{got}");
+        assert_eq!(got["versions"], json!([]), "{got}");
         sup.stop(Phase::Disabled).await;
         assert!(!daemon_alive(&config.path), "daemon left after stop");
     }

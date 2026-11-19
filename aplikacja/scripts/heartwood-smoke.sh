@@ -2,7 +2,8 @@
 # Local live smoke test of the app's Heartwood daemon supervision.
 # Starts the Heartwood dev server (DynamoDB Local must answer on :8000),
 # seeds the minimum registry, writes a temp config.toml and runs the
-# ignored Rust test `live_status_roundtrip` against the real client.
+# ignored Rust test `live_status_roundtrip` (`status`, `work-files`)
+# against the real client.
 # Local only, never touches AWS. Cleans up server, table and temp dirs.
 #
 # Env: HEARTWOOD_DIR (default ~/Documents/Heartwood, read-only),

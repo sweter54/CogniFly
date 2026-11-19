@@ -43,7 +43,7 @@ Heartwood i pokazuje zakładkę „Pliki”.
 | D8 | `token_command` = `[<binarka CogniFly>, "heartwood-token"]`; token ≥ 60 s, odświeżanie przy ≤ 5 min |
 | D9 | wyszukiwanie binarki `heartwood` (niżej) |
 | D10 | adresy serwera wbudowane w aplikację; konfiguracja w Application Support |
-| D11 | „Zwolnij” zwalnia ścieżki zablokowane z tego komputera dla zadania |
+| D11 | „Pliki zadania” z prawdy serwera (`work-files`), nie z lokalnej pamięci blokad |
 | D12 | licznik przy zegarze: `<zadania> ⚠<konflikty> ↑<niewysłane>` |
 
 ## Wdrożenie (D5)
@@ -108,8 +108,9 @@ Kod: `aplikacja/src-tauri/src/heartwood/`, logika UI: `aplikacja/src/logic/heart
   tylko razem z aplikacją (zamknięcie i wylogowanie go zabijają).
 - **Gniazdo** (`socket.rs`): jedna linia JSON na żądanie, odpowiedź do 1 MiB,
   dozwolone tylko `status`, `lock`, `release`, `request-release`, `history`,
-  `download`, `restore`, `select`, `unselect`. Limit czasu 10 s (120 s dla
-  `download`/`select`/`unselect`), kod `TIMEOUT`. Wszystko idzie przez RPC do
+  `download`, `restore`, `select`, `unselect`, `files`, `work-files`. Limit czasu
+  10 s (30 s dla `files`/`work-files`, 120 s dla `download`/`select`/
+  `unselect`), kod `TIMEOUT`. Wszystko idzie przez RPC do
   okna tła; okno główne nie dostaje nowych uprawnień.
 - **Token** (D8): demon pyta aplikację w trybie `heartwood-token`, który czyta
   sesję z Pęku kluczy i wypisuje `accessToken` (≥ 60 s ważności, inaczej kod 1;
@@ -125,8 +126,65 @@ Kod: `aplikacja/src-tauri/src/heartwood/`, logika UI: `aplikacja/src/logic/heart
   `~/Library/Application Support/pl.cognifly.aplikacja/heartwood.toml`
   (`root` = `~/Heartwood`). Zmienna `COGNIFLY_HEARTWOOD_CONFIG=<config.toml>`
   używa gotowego pliku bez zmian (testy lokalne).
-- **Zakładka „Pliki”** i zadanie: blokowanie ścieżek pod `root` (spoza `root`
-  odmowa `OUTSIDE`/`BAD_REQUEST` po polsku), „Zwolnij” (D11), licznik (D12).
+- **Zakładka „Pliki”**: blokowanie ścieżek pod `root` (spoza `root` odmowa
+  `OUTSIDE`/`BAD_REQUEST` po polsku), licznik (D12) i przeglądarka przestrzeni
+  (niżej).
+
+### „Pliki zadania” (D11)
+
+Sekcja pod zadaniem w skrzynce (`windows/screens/task-files.ts`, model w
+`logic/files-view.ts`, `taskFilesModel`). Dane pochodzą z serwera, nie z
+pamięci aplikacji: `task.files` woła polecenie `work-files` z `workId` =
+`cognifly:<id zadania>` (kontroler czyta kolejne strony, do `MAX_WORK_PAGES`)
+i dokłada `sub` zalogowanej osoby. Otwarta sekcja odświeża się co 15 s (nie
+dubluje trwającego żądania) oraz po każdej akcji.
+
+- **Blokady**: lista ścieżek z autorem i czasem; blokada folderu ma dopisek
+  „/ (folder)”. Przy braku odpowiedzi demona sekcja pokazuje błąd po polsku.
+- **Zmienione pliki**: wersje zadania są grupowane per plik (`space` + `path`),
+  najnowsza pierwsza. Wiersz pokazuje rodzaj ostatniej zmiany (zmiana,
+  przywrócenie, przeniesienie z…, usunięcie), liczbę zapisów (przycisk
+  rozwija listę wersji) i „Pobierz” (kopia najnowszej wersji).
+- **`canEdit`**: tylko gdy `writer` pracy to `sub` zalogowanego i praca nie
+  jest zamknięta. Wtedy widać „Zablokuj pliki…”, „Zwolnij” przy blokadzie i
+  „Zwolnij wszystkie” (zwalnia blokady z `work-files`, po jednym `release` na
+  przestrzeń). Pozostali widzą listę bez akcji.
+- **`hiddenNote`**: blokady w tematach bez dostępu użytkownika nie są
+  wymieniane, tylko policzone („N blokady w tematach, do których nie masz
+  dostępu”).
+- **Zadanie zamknięte** (`closed`): sekcja pokazuje notkę o zamkniętej pracy i
+  nie oferuje akcji; lista zmian zostaje.
+- „Zablokuj pliki…” dostępne dla właściciela zadania `wziete`/`w_trakcie` i
+  akceptującego zadania `do_akceptacji`, gdy pliki działają na tym komputerze
+  (`canLockFiles`).
+
+### Przeglądarka przestrzeni
+
+W zakładce „Pliki” (`windows/screens/files-tree.ts`): jeden poziom folderu
+wybranej przestrzeni z polecenia `files` (`files.tree`), z okruszkami, wyborem
+przestrzeni (wybrane na tym komputerze, „Inna przestrzeń…”) i filtrem
+„Tylko zablokowane” (pokazuje też foldery).
+
+- **Stany wpisu**: `free` „wolny”, `writable` „moje zadanie”, `locked`
+  „zablokowany — <piszący>” (albo „nikt nie pisze”), `local_changed` „czeka na
+  wysłanie”, `conflict` „konflikt”. Blokada z `workId` `cognifly:<id>` dostaje
+  link „Zadanie: <opis>” (przejście do zadania, `task.focus`).
+- **Akcje**: „Zablokuj do zadania…” (wolny wpis, wybór spośród zadań
+  spełniających `canLockFiles`; folder blokowany jako folder; niedostępne w
+  przestrzeniach prywatnych `user:`), „Poproś o zwolnienie” (cudza blokada),
+  „Historia” (pliki), „Otwórz w Finderze” (foldery lokalne).
+- **Finder**: `files.reveal` bierze lokalny folder przestrzeni ze świeżego
+  `status` (nie z okna), sprawdza, że ścieżka leży pod `root`, i woła
+  `revealItemInDir`. Tylko pokazuje element w Finderze, niczego nie uruchamia
+  (`openPath` uruchomiłby zsynchronizowane `X.app`). Błędy: `NOT_LOCAL`,
+  `OUTSIDE`, `OPEN_FAILED`.
+
+### Zależność od Heartwood
+
+„Pliki zadania” i przeglądarka wymagają klienta i serwera Heartwood z
+poleceniami `work-files` i `files` (Heartwood PR #2). Starszy klient odrzuca
+je jako nieznane polecenie. Instancja `heartwood-test` wymaga ponownego
+wdrożenia z tym serwerem — jeszcze nie zrobione.
 
 ## Próba lokalna
 
@@ -142,7 +200,9 @@ minimum (org, osoba, przestrzeń, temat, prawo), pisze tymczasowy `config.toml`
 (`token_command` drukuje niepodpisany JWT) i uruchamia test `#[ignore]`
 `live_status_roundtrip` (`aplikacja/src-tauri/src/heartwood/socket.rs`): start
 nadzorcy tą samą ścieżką co `heartwood_start`, oczekiwanie na `running`,
-`status` przez gniazdo (`ok: true`, `running: true`), zatrzymanie i brak
+`status` przez gniazdo (`ok: true`, `running: true`), `work-files` dla nieznanej
+pracy `cognifly:zad_000000000000` (`ok: true`, puste blokady i wersje — brak
+pracy nie jest błędem; wymaga klienta z `work-files`), zatrzymanie i brak
 procesu demona. Na końcu zawsze sprząta serwer, tabelę i katalogi tymczasowe.
 Ręcznie: ustaw `COGNIFLY_HEARTWOOD_CONFIG` i `COGNIFLY_HEARTWOOD_BIN`, potem
 `cargo test -- --ignored live_status_roundtrip` w `aplikacja/src-tauri`.
