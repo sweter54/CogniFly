@@ -37,8 +37,8 @@ const READY_POLL: Duration = Duration::from_millis(250);
 /// How long stopping waits for the supervisor task to finish.
 const STOP_WAIT: Duration = Duration::from_secs(5);
 /// How long our stale orphan gets to exit after SIGTERM (and again
-/// after SIGKILL).
-const ORPHAN_WAIT: Duration = Duration::from_secs(3);
+/// after SIGKILL); twice this stays below `STOP_WAIT`.
+const ORPHAN_WAIT: Duration = Duration::from_secs(2);
 
 /// Lifecycle phase reported to the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -104,7 +104,8 @@ enum Outcome {
     /// Another process already answers on the socket; not spawned.
     External,
     /// Our own earlier daemon with the same config answers; adopted.
-    AdoptedOwn,
+    /// Stopped like our child when stop is requested.
+    AdoptedOwn { pid: u32 },
 }
 
 /// Tauri-managed supervisor of the Heartwood daemon.
@@ -331,7 +332,9 @@ async fn on_answering(config: &Resolved) -> Option<Outcome> {
         None => false,
     };
     match (orphan::decide(record.as_ref(), alive, digest.as_deref()), record) {
-        (Answering::AdoptOwn, _) => Some(Outcome::AdoptedOwn),
+        (Answering::AdoptOwn, Some(r)) => {
+            Some(Outcome::AdoptedOwn { pid: r.pid })
+        }
         (Answering::ReplaceOrphan, Some(r)) => {
             log::warn!("heartwood: stopping stale daemon pid {}", r.pid);
             if orphan::terminate(r.pid, ORPHAN_WAIT).await {
@@ -479,30 +482,57 @@ fn record_own(status: &Shared) -> Duration {
     EXTERNAL_RECHECK
 }
 
+/// Stops our adopted orphan like our own child.
+///
+/// Call: `stop_own(&launch, pid).await` when stop is requested
+/// while an `AdoptedOwn` daemon runs.
+/// Expects: the launch and the PID from the record.
+/// Output: none; the PID is terminated only if it is still a live
+/// `heartwood` named in the current record, then the record is
+/// removed.
+async fn stop_own(launch: &Launch, pid: u32) {
+    let recorded =
+        orphan::load(&launch.config.path).is_some_and(|r| r.pid == pid);
+    if recorded && orphan::is_live_daemon(pid).await {
+        orphan::terminate(pid, ORPHAN_WAIT).await;
+    }
+    forget(launch);
+}
+
 /// Supervisor loop: runs the daemon and restarts it with backoff.
 ///
 /// Call: spawned by `Supervisor::start`.
 /// Expects: the launch, the shared state and the stop receiver.
 /// Output: none; ends when stop is requested (or its sender is
-/// dropped), with our child killed. An external daemon on the socket
-/// is adopted and re-checked; ours starts once it stops answering.
+/// dropped), with our child or adopted own orphan stopped. An
+/// external daemon on the socket is adopted, re-checked and left
+/// running; ours starts once it stops answering.
 async fn supervise(
     launch: Launch,
     status: Shared,
     mut stopped: oneshot::Receiver<()>,
 ) {
     loop {
+        let mut own = None;
         let wait = match run_once(&launch, &status, &mut stopped).await {
             Outcome::Stopped => return,
             Outcome::External => record_external(&status),
-            Outcome::AdoptedOwn => record_own(&status),
+            Outcome::AdoptedOwn { pid } => {
+                own = Some(pid);
+                record_own(&status)
+            }
             Outcome::Crashed { error, uptime } => {
                 record_crash(&status, error, uptime)
             }
         };
         tokio::select! {
             _ = tokio::time::sleep(wait) => {}
-            _ = &mut stopped => return,
+            _ = &mut stopped => {
+                if let Some(pid) = own {
+                    stop_own(&launch, pid).await;
+                }
+                return;
+            }
         }
     }
 }
@@ -675,6 +705,26 @@ mod process_tests {
         assert!(alive(pid));
         sup.stop(Phase::Disabled).await;
         let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+    }
+
+    #[tokio::test]
+    async fn adopted_own_orphan_is_stopped_like_our_child() {
+        let dir = temp_dir();
+        fake_socket(&dir);
+        let pid = detached(&dir, "heartwood");
+        let cfg = dir.join("hw.toml");
+        orphan::save(&cfg, pid, &orphan::digest("same"));
+        let sup = Supervisor::default();
+        sup.start(own_launch(&dir, script(&dir, "exit 1"), "same")).await;
+        let running = wait_until(Duration::from_secs(5), || {
+            sup.info().state == Phase::Running
+        })
+        .await;
+        assert!(running, "{:?}", sup.info());
+        sup.stop(Phase::Disabled).await;
+        let gone = wait_until(Duration::from_secs(5), || !alive(pid)).await;
+        assert!(gone, "adopted own orphan still running after stop");
+        assert!(orphan::load(&cfg).is_none(), "record kept after stop");
     }
 
     #[tokio::test]
