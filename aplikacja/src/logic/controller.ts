@@ -23,7 +23,7 @@ import type { KeyValueStore } from './storage.js';
 export const POLL_INTERVAL_MS = 60_000;
 
 /** Start refusals that will not change until the app changes. */
-const FINAL_START_CODES: readonly string[] = ['DISABLED', 'NOT_INSTALLED'];
+const FINAL_START_CODES: readonly string[] = ['DISABLED', 'NOT_INSTALLED', 'BAD_ROOT', 'ROOT_TOO_LONG'];
 /** Longest accepted space or topic name (the daemon checks more). */
 const MAX_NAME = 200;
 /** Most `work-files` pages read for one task (100 versions each). */
@@ -64,8 +64,7 @@ export class Controller {
   private view: InboxView;
   /** Companies of the logged-in person (from `GET /ja`); null = not loaded. */
   private companies: Membership[] | null = null;
-  /** Company the daemon was started for; null = not started. */
-  /** `org` + root the daemon was started for (null: not started). */
+  /** Company + root the daemon was started for; null = not started. */
   private filesOrg: string | null = null;
 
   /**

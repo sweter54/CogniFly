@@ -98,6 +98,9 @@ export interface TaskRef { id: string; workId: string; title: string }
 /** One step of the folder path above the browser. */
 export interface Crumb { label: string; folder: string }
 
+/** Start refusals about the folder chosen in the settings. */
+const ROOT_CODES: readonly string[] = ['BAD_ROOT', 'ROOT_TOO_LONG'];
+
 /** Supervisor states with their banner code (`hwMessage`). */
 const STATE_CODES: Partial<Record<HwState, string>> = {
   disabled: 'DISABLED', not_installed: 'NOT_INSTALLED', restarting: 'NOT_RUNNING',
@@ -154,10 +157,12 @@ export function filesViewModel(files: FilesView): FilesModel {
  *
  * Call: `bannerText(info, hasStatus, connected)`.
  * Expects: supervisor info; whether a status is known and online.
- * Output: the state's `hwMessage`, "no answer" for a running daemon
+ * Output: the folder refusal (`BAD_ROOT`, `ROOT_TOO_LONG`) or the
+ * state's `hwMessage`, "no answer" for a running daemon
  * without status, the offline text, or `null` (also while starting).
  */
 function bannerText(info: HwInfo, hasStatus: boolean, connected: boolean): string | null {
+  if (info.state === 'disabled' && info.lastError && ROOT_CODES.includes(info.lastError)) return hwMessage(info.lastError);
   const code = STATE_CODES[info.state];
   if (code) return hwMessage(code);
   if (info.state !== 'running') return null;

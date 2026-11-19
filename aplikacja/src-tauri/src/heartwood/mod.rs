@@ -59,6 +59,7 @@ pub async fn heartwood_start(
         Err(code) => {
             if let Some(phase) = Phase::for_error(&code) {
                 sup.stop(phase).await;
+                sup.note_error(&code);
             }
             Err(code)
         }

@@ -56,6 +56,7 @@ impl Phase {
         match code {
             "DISABLED" => Some(Phase::Disabled),
             "NOT_INSTALLED" => Some(Phase::NotInstalled),
+            "BAD_ROOT" | "ROOT_TOO_LONG" => Some(Phase::Disabled),
             _ => None,
         }
     }
@@ -197,6 +198,15 @@ impl Supervisor {
             s.restarts = 0;
             s.last_error = None;
         });
+    }
+
+    /// Remembers why the daemon is not running.
+    ///
+    /// Call: `sup.note_error("ROOT_TOO_LONG")` after `stop`.
+    /// Expects: a refusal code of `heartwood_start`.
+    /// Output: none; `heartwood_info.lastError` shows the code.
+    pub fn note_error(&self, code: &str) {
+        update(&self.status, |s| s.last_error = Some(code.to_string()));
     }
 
     /// Blocking stop for app exit.
