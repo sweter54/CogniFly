@@ -52,6 +52,14 @@ describe('identityClient', () => {
     expect(err.status).toBe(503);
   });
 
+  it('repeated_cursor_throws_identity_error', async () => {
+    const { c, fetch } = setup(json({ items: [], cursor: 'c' }), json({ items: [], cursor: 'c' }));
+    const err = await c.orgs().catch((e) => e);
+    expect(err).toBeInstanceOf(IdentityError);
+    expect(err.status).toBe(502);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('bad_page_shape_throws_identity_error', async () => {
     const { c } = setup(json({ nope: true }));
     await expect(c.orgs()).rejects.toBeInstanceOf(IdentityError);

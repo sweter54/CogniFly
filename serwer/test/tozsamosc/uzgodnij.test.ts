@@ -62,6 +62,15 @@ describe('reconcile', () => {
     await expect(runReconcile({ client, now: () => NOW, log })).rejects.toThrow(bad);
   });
 
+  it('non_identity_error_logs_message', async () => {
+    const log = vi.fn();
+    const client = fake({ 'u-f': new Error('ddb down'), 'u-g': new IdentityError(503) });
+    const r = await reconcile({ client, now: () => NOW, log });
+    expect(r.failed).toEqual(['u-f', 'u-g']);
+    expect(log).toHaveBeenCalledWith(expect.any(String), { org: 'u-f', error: 'Error', message: 'ddb down' });
+    expect(log).toHaveBeenCalledWith(expect.any(String), { org: 'u-g', error: 'IdentityError', status: 503 });
+  });
+
   it('orgs_error_fails_the_run', async () => {
     const client: IdentityClient = { orgs: async () => { throw new IdentityError(403); }, people: async () => [] };
     await expect(runReconcile({ client, now: () => NOW, log: vi.fn() })).rejects.toBeInstanceOf(IdentityError);

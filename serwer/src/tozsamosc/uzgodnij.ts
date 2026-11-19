@@ -1,7 +1,7 @@
 // Hourly reconciliation of the company person registry with Identity
 // (`/int/*`): repairs missed or lost events. Logs never carry e-mails.
 import { activeSubs, applyMember, removeMember } from '../dane/konfiguracja.js';
-import { identityClient, type IdentityClient, type IdentityPerson } from './klient.js';
+import { identityClient, IdentityError, type IdentityClient, type IdentityPerson } from './klient.js';
 import type { Log } from './zdarzenia.js';
 
 /** Dependencies of a reconciliation run. */
@@ -10,7 +10,10 @@ export type ReconcileDeps = { client: IdentityClient; now: () => string; log: Lo
 /** Writes made for one company. */
 type Counts = { added: number; updated: number; removed: number };
 
-/** Summary of a run; `failed` lists companies left unchanged by errors. */
+/**
+ * Summary of a run; `failed`: companies whose reconciliation did not
+ * complete.
+ */
 export type ReconcileResult = Counts & { orgs: number; failed: string[] };
 
 /**
@@ -38,13 +41,28 @@ async function reconcileOrg(org: string, people: IdentityPerson[], at: string): 
 }
 
 /**
+ * Describes a company failure for the log.
+ *
+ * Call: `errorInfo(err)`.
+ * Expects: any thrown value.
+ * Output: `{error: 'IdentityError', status}` for Identity errors, else
+ * `{error: name, message}` (DynamoDB messages carry no e-mails).
+ */
+function errorInfo(e: unknown): Record<string, unknown> {
+  if (e instanceof IdentityError) return { error: e.name, status: e.status };
+  const { name, message } = (e ?? {}) as { name?: string; message?: string };
+  return { error: name ?? 'Error', message: message ?? String(e) };
+}
+
+/**
  * Reconciles every company known to Identity.
  *
  * Call: `await reconcile({ client, now, log })`.
  * Expects: an Identity client; `now()` gives the ISO time of the run.
- * Output: totals and the companies that failed. A company whose member
- * list cannot be read is not written; a failure of one company is
- * logged and the others go on. Throws when the company list fails.
+ * Output: totals and `failed`, the companies whose reconciliation did
+ * not complete. A company whose member list cannot be read is not
+ * written; a failure of one company is logged and the others go on.
+ * Throws when the company list fails.
  */
 export async function reconcile(d: ReconcileDeps): Promise<ReconcileResult> {
   const at = d.now();
@@ -56,8 +74,7 @@ export async function reconcile(d: ReconcileDeps): Promise<ReconcileResult> {
       out.added += c.added; out.updated += c.updated; out.removed += c.removed;
     } catch (e) {
       out.failed.push(org);
-      const { name, status } = (e ?? {}) as { name?: string; status?: number };
-      d.log('tozsamosc: uzgadnianie firmy nieudane', { org, error: name ?? 'Error', status });
+      d.log('tozsamosc: uzgadnianie firmy nieudane', { org, ...errorInfo(e) });
     }
   }
   return out;

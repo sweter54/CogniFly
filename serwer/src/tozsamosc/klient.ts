@@ -72,7 +72,8 @@ function personOf(it: unknown): IdentityPerson {
  * Call: `identityClient({ url, region })`; `fetch`, `sign` for tests.
  * Expects: the API base url (no trailing path) and its region.
  * Output: an `IdentityClient` that follows `cursor` until absent;
- * non-2xx throws `IdentityError(status)`, a bad body `IdentityError(502)`.
+ * non-2xx throws `IdentityError(status)`; a bad body or a repeated
+ * cursor throws `IdentityError(502)`.
  */
 export function identityClient(o: {
   url: string; region: string; fetch?: typeof fetch; sign?: Signer;
@@ -85,7 +86,8 @@ export function identityClient(o: {
    *
    * Call: `await all('/orgs/pilot/people')`.
    * Expects: an encoded path without query.
-   * Output: items of every page in order; errors as `identityClient`.
+   * Output: items of every page in order; errors as `identityClient`,
+ * a page repeating the requested cursor throws `IdentityError(502)`.
    */
   async function all(path: string): Promise<unknown[]> {
     const items: unknown[] = [];
@@ -96,6 +98,7 @@ export function identityClient(o: {
       if (!res.ok) throw new IdentityError(res.status);
       const page: unknown = await res.json().catch(() => null);
       if (!isPage(page)) throw new IdentityError(502);
+      if (page.cursor !== undefined && page.cursor === cursor) throw new IdentityError(502);
       items.push(...page.items);
       cursor = page.cursor;
     } while (cursor);
