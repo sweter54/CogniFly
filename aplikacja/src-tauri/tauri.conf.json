@@ -25,10 +25,10 @@
         "url": "main.html",
         "title": "CogniFly",
         "visible": false,
-        "width": 560,
-        "height": 640,
-        "minWidth": 420,
-        "minHeight": 480,
+        "width": 900,
+        "height": 720,
+        "minWidth": 640,
+        "minHeight": 560,
         "center": true
       }
     ],
