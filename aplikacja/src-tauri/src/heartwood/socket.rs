@@ -237,4 +237,50 @@ mod tests {
             assert_eq!(timeout_for(cmd), Duration::from_secs(120));
         }
     }
+
+    /// Tells whether a daemon of the given config file is running.
+    ///
+    /// Call: `daemon_alive(&config_path)` in the live test.
+    /// Expects: `pgrep` on the PATH.
+    /// Output: `true` when a process runs `--config <path> daemon`.
+    fn daemon_alive(config: &Path) -> bool {
+        let pattern = format!("--config {} daemon", config.display());
+        std::process::Command::new("pgrep")
+            .args(["-f", "--", &pattern])
+            .output()
+            .map(|o| !o.stdout.is_empty())
+            .unwrap_or(false)
+    }
+
+    /// Live smoke test against a Heartwood dev server.
+    ///
+    /// Call: `aplikacja/scripts/heartwood-smoke.sh` (sets the env).
+    /// Expects: `COGNIFLY_HEARTWOOD_CONFIG` (a ready config.toml) and
+    /// `COGNIFLY_HEARTWOOD_BIN` (the `heartwood` binary).
+    /// Output: the real start path (`prepare`) runs our own daemon,
+    /// `status` answers `ok` + `running`, and stop leaves no child.
+    #[tokio::test]
+    #[ignore = "needs a live Heartwood dev server (docs/heartwood.md)"]
+    async fn live_status_roundtrip() {
+        use crate::heartwood::supervisor::{Phase, Supervisor};
+        let config = crate::heartwood::config::resolve("", "", "").unwrap();
+        let sup = Supervisor::default();
+        let launch = crate::heartwood::prepare("", "", "").unwrap();
+        sup.start(launch).await;
+        let up = crate::heartwood::testutil::wait_until(
+            Duration::from_secs(20),
+            || sup.info().state == Phase::Running,
+        )
+        .await;
+        assert!(up, "{:?}", sup.info());
+        assert_eq!(sup.info().last_error, None, "daemon must be our own");
+        assert!(daemon_alive(&config.path));
+        let socket = sup.socket().unwrap();
+        let req = json!({"cmd": "status"});
+        let got = call(&socket, &req, Duration::from_secs(10)).await.unwrap();
+        assert_eq!(got["ok"], json!(true), "{got}");
+        assert_eq!(got["running"], json!(true), "{got}");
+        sup.stop(Phase::Disabled).await;
+        assert!(!daemon_alive(&config.path), "daemon left after stop");
+    }
 }
