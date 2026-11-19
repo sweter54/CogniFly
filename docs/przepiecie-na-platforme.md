@@ -106,7 +106,7 @@ aws dynamodb get-item --table-name cognifly-test-dane --region eu-central-1 --ke
 
 ### 4. Zasilenie Heartwood
 
-Na sucho:
+W korzeniu repo CogniFly (po kroku 3 wróć z `infra`: `cd ..`). Na sucho:
 
 ```bash
 npx tsx infra/skrypty/zasil-heartwood.ts --firma pilot --int-url https://eohqtq0t3j.execute-api.eu-central-1.amazonaws.com
@@ -148,8 +148,21 @@ nie zmienia.
 node wtyczka/cli/cognifly.mjs konfiguruj --adres-api https://td5k44easl.execute-api.eu-central-1.amazonaws.com --klient 130crcifqe1l4uggfap3p7kiml --region eu-central-1 --firma pilot
 ```
 
-Potem logowanie (Michał wpisuje kod z e-maila). Polecenie `/ja` ma zwrócić
-`michal`.
+Potem logowanie (Michał wpisuje kod z e-maila):
+
+```bash
+node wtyczka/cli/cognifly.mjs zaloguj --email <e-mail Michała>
+```
+
+```bash
+node wtyczka/cli/cognifly.mjs kod --kod <kod z e-maila>
+```
+
+Sprawdzenie: skrzynka odpowiada bez `BRAK_DOSTEPU` (API rozpoznało nowe `sub`):
+
+```bash
+node wtyczka/cli/cognifly.mjs skrzynka
+```
 
 ### 7. Dalej
 
@@ -184,9 +197,18 @@ Potem poprzednia wersja aplikacji i wtyczka na starym kliencie:
 node wtyczka/cli/cognifly.mjs konfiguruj --adres-api https://td5k44easl.execute-api.eu-central-1.amazonaws.com --klient 67b7re8ou041svoosk3ukotqrq --region eu-central-1 --firma pilot
 ```
 
-Rekordy osób z nowymi `sub` zostają w tabeli, więc po wycofaniu stare
-`sub` trzeba przywrócić ręcznie albo ponownie zasiać pilota. Heartwood wycofuje
-się według własnego planu.
+Rekord `OSOBA#michal` ma po oknie nowe `sub`, a stare `sub` straciło wpis w
+`PROFIL`. Na poprzednim commicie przywraca je stary skrypt zasiewu (szuka
+użytkownika w starej puli i zapisuje tożsamość oraz osobę). Najpierw na sucho,
+potem **ZAPYTAJ MICHAŁA** i dodaj `--wykonaj`:
+
+```bash
+npx tsx infra/skrypty/zasiej-pilot.ts --email-michal <e-mail Michała> --pula eu-central-1_ho5yKP9z4
+```
+
+Po wycofaniu nie działa już uzgadnianie (Lambdy nie ma w starym stosie), więc
+nic nie nadpisze przywróconego `sub`. Heartwood wycofuje się według własnego
+planu.
 
 ## Zostaje na później
 
@@ -195,4 +217,3 @@ się według własnego planu.
 - Usunięcie starej puli i jej klienta ze stosu (osobne sprzątanie po udanym
   oknie).
 - Zdarzenia między produktami z polem `org`.
-- Stan pracy z CDC zamiast strumienia zadań.
