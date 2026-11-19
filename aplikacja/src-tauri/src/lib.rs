@@ -6,7 +6,10 @@
 //! the keychain commands and window behaviour. All business logic is in
 //! the TypeScript UI (`aplikacja/src`).
 
-mod vault;
+pub mod vault;
+
+/// First CLI argument that switches the binary to token-printing mode.
+pub const TOKEN_ARG: &str = "heartwood-token";
 
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Window, WindowEvent};
 
