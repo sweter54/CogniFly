@@ -26,6 +26,8 @@ const SLOW: [&str; 3] = ["download", "select", "unselect"];
 const SHORT_WAIT: Duration = Duration::from_secs(10);
 /// Answer timeout of `SLOW` commands.
 const LONG_WAIT: Duration = Duration::from_secs(120);
+/// Answer timeout of a liveness probe.
+const PROBE_WAIT: Duration = Duration::from_secs(1);
 /// Longest accepted answer line (without the newline).
 const MAX_LINE: u64 = 1024 * 1024;
 
@@ -76,6 +78,17 @@ pub async fn call(
         .map_err(|_| "TIMEOUT".to_string())?
 }
 
+/// Tells whether a daemon answers on the socket.
+///
+/// Call: `probe(&socket).await` before spawning our own daemon.
+/// Expects: a socket path (it may not exist).
+/// Output: `true` when a `status` request gets any JSON answer
+/// within `PROBE_WAIT`, else `false`.
+pub async fn probe(path: &Path) -> bool {
+    let req = serde_json::json!({ "cmd": "status" });
+    call(path, &req, PROBE_WAIT).await.is_ok()
+}
+
 /// Connects, writes the request and parses the answer line.
 ///
 /// Call: from `call`, under its timeout.
@@ -116,20 +129,34 @@ async fn exchange(_path: &Path, _line: &[u8]) -> Result<Value, String> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::heartwood::testutil::{answer_forever, temp_dir};
     use serde_json::json;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicU32, Ordering};
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::UnixListener;
 
     /// Returns a fresh, short socket path in the temp directory.
     fn temp_socket() -> PathBuf {
-        static N: AtomicU32 = AtomicU32::new(0);
-        let n = N.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir()
-            .join(format!("cf-hw-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("hw.sock")
+        temp_dir().join("hw.sock")
+    }
+
+    #[tokio::test]
+    async fn probe_sees_answering_daemon() {
+        let path = temp_socket();
+        answer_forever(UnixListener::bind(&path).unwrap());
+        assert!(probe(&path).await);
+    }
+
+    #[tokio::test]
+    async fn probe_rejects_missing_or_silent_socket() {
+        let path = temp_socket();
+        assert!(!probe(&path).await);
+        let listener = UnixListener::bind(&path).unwrap();
+        tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.unwrap();
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        });
+        assert!(!probe(&path).await);
     }
 
     #[tokio::test]

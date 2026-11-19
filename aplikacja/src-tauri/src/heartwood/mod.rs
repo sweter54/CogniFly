@@ -8,6 +8,8 @@
 pub mod config;
 pub mod socket;
 pub mod supervisor;
+#[cfg(all(test, unix))]
+mod testutil;
 
 use serde_json::Value;
 use supervisor::{HeartwoodInfo, Launch, Phase, Supervisor};

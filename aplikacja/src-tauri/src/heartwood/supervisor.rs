@@ -5,8 +5,9 @@
 //! `heartwood_info`; stopping kills the child and waits for the task.
 
 use super::config::{socket_path, Resolved};
+use super::socket::probe;
 use serde::Serialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -21,6 +22,15 @@ const BASE_DELAY: Duration = Duration::from_secs(1);
 const MAX_DELAY: Duration = Duration::from_secs(60);
 /// Run time after which the restart counter starts again from 0.
 const STABLE_RUN: Duration = Duration::from_secs(5 * 60);
+/// Note shown when another process already serves our socket.
+pub const EXTERNAL_NOTE: &str =
+    "Heartwood działa już poza CogniFly (inny proces).";
+/// How often an adopted external daemon is checked again.
+const EXTERNAL_RECHECK: Duration = Duration::from_secs(10);
+/// Longest wait for our child's socket before it counts as running.
+const READY_GRACE: Duration = Duration::from_secs(5);
+/// Pause between socket probes while our child starts.
+const READY_POLL: Duration = Duration::from_millis(250);
 /// How long stopping waits for the supervisor task to finish.
 const STOP_WAIT: Duration = Duration::from_secs(5);
 
@@ -84,6 +94,8 @@ enum Outcome {
     Stopped,
     /// The child failed to start or exited on its own.
     Crashed { error: String, uptime: Duration },
+    /// Another process already answers on the socket; not spawned.
+    External,
 }
 
 /// Tauri-managed supervisor of the Heartwood daemon.
@@ -264,17 +276,43 @@ fn forward_stderr(stderr: ChildStderr) {
     });
 }
 
+/// Marks the state `running` once our child is ready.
+///
+/// Call: raced against the child's exit in `run_once`.
+/// Expects: the socket of the launch and the shared state.
+/// Output: never completes; sets `running` as soon as the socket
+/// answers, or after `READY_GRACE` when the child is still alive,
+/// and drops a stale `EXTERNAL_NOTE`.
+async fn mark_ready(socket: &Path, status: &Shared) -> Outcome {
+    let deadline = Instant::now() + READY_GRACE;
+    while Instant::now() < deadline && !probe(socket).await {
+        tokio::time::sleep(READY_POLL).await;
+    }
+    update(status, |s| {
+        s.state = Phase::Running;
+        if s.last_error.as_deref() == Some(EXTERNAL_NOTE) {
+            s.last_error = None;
+        }
+    });
+    std::future::pending().await
+}
+
 /// Runs the daemon once, until it exits or stop is requested.
 ///
 /// Call: `run_once(&launch, &status, &mut stopped).await`.
 /// Expects: the stop receiver of this supervisor.
-/// Output: `Stopped` (child killed) or `Crashed` with the reason and
-/// how long the child ran. Sets `running` while it runs.
+/// Output: `External` when a daemon already answers on the socket
+/// (nothing spawned), `Stopped` (child killed) or `Crashed` with the
+/// reason and how long the child ran.
 async fn run_once(
     launch: &Launch,
     status: &Shared,
     stopped: &mut oneshot::Receiver<()>,
 ) -> Outcome {
+    let socket = socket_path(&launch.config.root);
+    if probe(&socket).await {
+        return Outcome::External;
+    }
     let started = Instant::now();
     let mut child = match spawn_daemon(launch) {
         Ok(child) => child,
@@ -283,7 +321,6 @@ async fn run_once(
     if let Some(stderr) = child.stderr.take() {
         forward_stderr(stderr);
     }
-    update(status, |s| s.state = Phase::Running);
     tokio::select! {
         exit = child.wait() => {
             let error = match exit {
@@ -292,6 +329,7 @@ async fn run_once(
             };
             Outcome::Crashed { error, uptime: started.elapsed() }
         }
+        outcome = mark_ready(&socket, status) => outcome,
         _ = stopped => {
             let _ = child.kill().await;
             Outcome::Stopped
@@ -299,34 +337,61 @@ async fn run_once(
     }
 }
 
+/// Records a crash and picks the restart delay.
+///
+/// Call: `record_crash(&status, error, uptime)` after a crash.
+/// Expects: the reason and how long the child ran.
+/// Output: the delay; the state is `restarting` with `lastError`
+/// and the updated restart count.
+fn record_crash(status: &Shared, error: String, uptime: Duration) -> Duration {
+    log::warn!("heartwood: {error}");
+    let mut delay = Duration::ZERO;
+    update(status, |s| {
+        let (restarts, wait) = after_crash(s.restarts, uptime);
+        s.restarts = restarts;
+        s.state = Phase::Restarting;
+        s.last_error = Some(error);
+        delay = wait;
+    });
+    delay
+}
+
+/// Records an adopted external daemon.
+///
+/// Call: `record_external(&status)` when the socket already answers.
+/// Expects: the shared state.
+/// Output: `EXTERNAL_RECHECK`; the state is `running` with
+/// `EXTERNAL_NOTE` as `lastError`.
+fn record_external(status: &Shared) -> Duration {
+    update(status, |s| {
+        s.state = Phase::Running;
+        s.last_error = Some(EXTERNAL_NOTE.to_string());
+    });
+    EXTERNAL_RECHECK
+}
+
 /// Supervisor loop: runs the daemon and restarts it with backoff.
 ///
 /// Call: spawned by `Supervisor::start`.
 /// Expects: the launch, the shared state and the stop receiver.
 /// Output: none; ends when stop is requested (or its sender is
-/// dropped), with the child killed.
+/// dropped), with our child killed. An external daemon on the socket
+/// is adopted and re-checked; ours starts once it stops answering.
 async fn supervise(
     launch: Launch,
     status: Shared,
     mut stopped: oneshot::Receiver<()>,
 ) {
     loop {
-        let Outcome::Crashed { error, uptime } =
-            run_once(&launch, &status, &mut stopped).await
-        else {
-            return;
+        let wait = match run_once(&launch, &status, &mut stopped).await {
+            Outcome::Stopped => return,
+            Outcome::External => record_external(&status),
+            Outcome::Crashed { error, uptime } => {
+                record_crash(&status, error, uptime)
+            }
         };
-        log::warn!("heartwood: {error}");
-        let mut delay = Duration::ZERO;
-        update(&status, |s| {
-            let (restarts, wait) = after_crash(s.restarts, uptime);
-            s.restarts = restarts;
-            s.state = Phase::Restarting;
-            s.last_error = Some(error);
-            delay = wait;
-        });
         tokio::select! {
-            _ = tokio::time::sleep(delay) => {}
+            _ = tokio::time::sleep(wait) => {}
             _ = &mut stopped => return,
         }
     }
@@ -369,5 +434,97 @@ mod tests {
                 "lastError": "x"
             })
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod process_tests {
+    use super::*;
+    use crate::heartwood::testutil::{answer_forever, temp_dir, wait_until};
+
+    /// Writes an executable shell script used as the daemon binary.
+    ///
+    /// Call: `script(&dir, "exit 1")`.
+    /// Expects: an existing directory and a shell body.
+    /// Output: the script path (mode 0755).
+    fn script(dir: &Path, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("hw.sh");
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        let mode = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(&path, mode).unwrap();
+        path
+    }
+
+    /// Launch of a script daemon with `dir` as the sync root.
+    ///
+    /// Call: `launch(&dir, bin)`.
+    /// Expects: a temp directory and the script.
+    /// Output: the launch (config file is never read by scripts).
+    fn launch(dir: &Path, bin: PathBuf) -> Launch {
+        let config = Resolved {
+            path: dir.join("hw.toml"),
+            text: None,
+            root: dir.to_path_buf(),
+        };
+        Launch { bin, config }
+    }
+
+    #[tokio::test]
+    async fn crashing_daemon_is_restarting() {
+        let dir = temp_dir();
+        let sup = Supervisor::default();
+        sup.start(launch(&dir, script(&dir, "exit 1"))).await;
+        let crashed = wait_until(Duration::from_secs(5), || {
+            let i = sup.info();
+            i.state == Phase::Restarting && i.restarts >= 1
+        })
+        .await;
+        assert!(crashed, "{:?}", sup.info());
+        assert!(sup.info().last_error.is_some());
+        sup.stop(Phase::Disabled).await;
+    }
+
+    #[tokio::test]
+    async fn stop_kills_the_daemon() {
+        let dir = temp_dir();
+        let pid_file = dir.join("pid");
+        let body = format!("echo $$ > '{}'\nexec sleep 30", pid_file.display());
+        let sup = Supervisor::default();
+        sup.start(launch(&dir, script(&dir, &body))).await;
+        let up = wait_until(Duration::from_secs(5), || pid_file.exists()).await;
+        assert!(up);
+        assert_eq!(sup.info().state, Phase::Starting);
+        let pid = std::fs::read_to_string(&pid_file).unwrap();
+        sup.stop(Phase::Disabled).await;
+        let alive = std::process::Command::new("kill")
+            .args(["-0", pid.trim()])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        assert!(!alive, "daemon still running after stop");
+        assert_eq!(sup.info().state, Phase::Disabled);
+    }
+
+    #[tokio::test]
+    async fn external_daemon_is_adopted_not_spawned() {
+        let dir = temp_dir();
+        let sock = socket_path(&dir);
+        std::fs::create_dir_all(sock.parent().unwrap()).unwrap();
+        answer_forever(tokio::net::UnixListener::bind(&sock).unwrap());
+        let marker = dir.join("spawned");
+        let body = format!("touch '{}'", marker.display());
+        let sup = Supervisor::default();
+        sup.start(launch(&dir, script(&dir, &body))).await;
+        let adopted = wait_until(Duration::from_secs(5), || {
+            sup.info().last_error.as_deref() == Some(EXTERNAL_NOTE)
+        })
+        .await;
+        assert!(adopted, "{:?}", sup.info());
+        assert_eq!(sup.info().state, Phase::Running);
+        assert_eq!(sup.info().restarts, 0);
+        assert!(!marker.exists(), "own daemon must not be spawned");
+        sup.stop(Phase::Disabled).await;
     }
 }
