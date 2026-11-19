@@ -66,20 +66,44 @@ export async function callCognito(ctx: CognitoContext, operation: string, body: 
  * Expects: a non-empty e-mail address.
  * Output: the pending login to pass to `confirmEmailCode`.
  * Throws: `CognitoError('BAD_EMAIL')` for an empty address,
- * `CognitoError('UNEXPECTED_CHALLENGE')` when Cognito asks for
- * anything but EMAIL_OTP, or errors from `callCognito`.
+ * `CognitoError('NO_ACCOUNT')` when the address has no active account
+ * (pool refusal, or a non-EMAIL_OTP challenge the pool gives unknown
+ * users), other errors from `callCognito`.
  */
 export async function startEmailLogin(ctx: CognitoContext, email: string): Promise<PendingLogin> {
   const address = email.trim();
   if (!address.includes('@')) throw new CognitoError('BAD_EMAIL');
-  const r = await callCognito(ctx, 'InitiateAuth', {
-    AuthFlow: 'USER_AUTH',
-    ClientId: ctx.clientId,
-    AuthParameters: { USERNAME: address, PREFERRED_CHALLENGE: 'EMAIL_OTP' },
-  });
+  let r: Record<string, unknown>;
+  try {
+    r = await callCognito(ctx, 'InitiateAuth', {
+      AuthFlow: 'USER_AUTH',
+      ClientId: ctx.clientId,
+      AuthParameters: { USERNAME: address, PREFERRED_CHALLENGE: 'EMAIL_OTP' },
+    });
+  } catch (e) {
+    throw mapNoAccount(e);
+  }
   const session = stringField(r, 'Session');
-  if (r.ChallengeName !== 'EMAIL_OTP' || !session) throw new CognitoError('UNEXPECTED_CHALLENGE');
+  if (r.ChallengeName !== 'EMAIL_OTP' || !session) {
+    throw new CognitoError('NO_ACCOUNT', String(r.ChallengeName ?? 'NO_SESSION'));
+  }
   return { email: address, session };
+}
+
+/** Cognito errors meaning "this address has no active account". */
+const NO_ACCOUNT_ERRORS: readonly string[] = ['UserLambdaValidationException', 'UserNotFoundException'];
+
+/**
+ * Maps "no active account" Cognito errors to `NO_ACCOUNT`.
+ *
+ * Call: `throw mapNoAccount(e)` in a catch around a Cognito call.
+ * Expects: any thrown value.
+ * Output: `CognitoError('NO_ACCOUNT', <original type>)` for a refusal
+ * by the pool's triggers or an unknown user; anything else unchanged.
+ */
+function mapNoAccount(e: unknown): unknown {
+  if (e instanceof CognitoError && NO_ACCOUNT_ERRORS.includes(e.code)) return new CognitoError('NO_ACCOUNT', e.code);
+  return e;
 }
 
 /**
@@ -118,11 +142,13 @@ export async function confirmEmailCode(ctx: CognitoContext, pending: PendingLogi
  * Call: `mapConfirmError(e)` in the catch of `confirmEmailCode`.
  * Expects: any thrown value.
  * Output: `WRONG_CODE` (mismatch), `CODE_EXPIRED` (expired code),
- * `SESSION_EXPIRED` (`NotAuthorizedException`), each with the original
- * type as detail; anything else is returned unchanged.
+ * `SESSION_EXPIRED` (`NotAuthorizedException`), `NO_ACCOUNT` (see
+ * `mapNoAccount`), each with the original type as detail; anything
+ * else is returned unchanged.
  */
 function mapConfirmError(e: unknown): unknown {
   if (!(e instanceof CognitoError)) return e;
+  if (NO_ACCOUNT_ERRORS.includes(e.code)) return mapNoAccount(e);
   const mapped: Record<string, string> = {
     CodeMismatchException: 'WRONG_CODE',
     ExpiredCodeException: 'CODE_EXPIRED',

@@ -23,8 +23,11 @@ export interface Session extends Tokens { email: string; clientId: string }
  */
 export const REFRESH_MARGIN_MS = 300_000;
 
-/** Cognito refresh errors that mean "log in again". */
-export const LOGOUT_ERRORS: readonly string[] = ['NotAuthorizedException', 'UserNotFoundException'];
+/**
+ * Cognito refresh errors that mean "log in again". The pool's token
+ * trigger refuses (`UserLambdaValidationException`) once access ends.
+ */
+export const LOGOUT_ERRORS: readonly string[] = ['NotAuthorizedException', 'UserNotFoundException', 'UserLambdaValidationException'];
 
 /** Exchanges a refresh token for new tokens (Cognito in the app). */
 export type Refresher = (refreshToken: string) => Promise<Tokens>;
