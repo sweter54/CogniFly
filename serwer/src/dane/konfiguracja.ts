@@ -31,6 +31,17 @@ async function wszystkie(firma: string, prefiks: string): Promise<Record<string,
   return wynik;
 }
 
+/**
+ * Lists the not-removed `OSOBA#` records of a company.
+ *
+ * Call: `await activePeople(firma)`.
+ * Input: a company id.
+ * Output: raw items without a `usunieta` attribute; empty when none.
+ */
+async function activePeople(firma: string): Promise<Record<string, unknown>[]> {
+  return (await wszystkie(firma, 'OSOBA#')).filter((it) => it.usunieta === undefined);
+}
+
 export async function regulyFirmy(firma: string): Promise<Regula[]> {
   return (await wszystkie(firma, 'REGULA#')).map((it) => it.regula as Regula);
 }
@@ -80,7 +91,7 @@ export async function subOsoby(firma: string, osoba: string): Promise<string | n
 
 /** Członkowie firmy z loginem GitHub (jeśli powiązany), posortowani po id; bez e-maili. */
 export async function osobyFirmy(firma: string): Promise<{ osoba: string; github?: string }[]> {
-  const [osoby, loginy] = await Promise.all([wszystkie(firma, 'OSOBA#'), wszystkie(firma, 'GITHUB#')]);
+  const [osoby, loginy] = await Promise.all([activePeople(firma), wszystkie(firma, 'GITHUB#')]);
   const login = new Map(loginy.map((it) => [it.osoba as string, (it.sk as string).slice('GITHUB#'.length)]));
   return osoby
     .map((it) => (it.sk as string).slice('OSOBA#'.length))
@@ -99,7 +110,7 @@ export async function osobyFirmy(firma: string): Promise<{ osoba: string; github
 export async function rejestrOsob(
   firma: string,
 ): Promise<{ osoba: string; email: string; rola: 'admin' | 'czlonek'; sub?: string }[]> {
-  return (await wszystkie(firma, 'OSOBA#'))
+  return (await activePeople(firma))
     .map((it) => ({
       osoba: (it.sk as string).slice('OSOBA#'.length),
       email: it.email as string,
@@ -118,7 +129,7 @@ export async function rejestrOsob(
  * empty when none.
  */
 export async function adminiFirmy(firma: string): Promise<string[]> {
-  return (await wszystkie(firma, 'OSOBA#'))
+  return (await activePeople(firma))
     .filter((it) => it.rola === 'admin')
     .map((it) => (it.sk as string).slice('OSOBA#'.length))
     .sort();
@@ -162,4 +173,142 @@ export async function tozsamosc(sub: string): Promise<Record<string, string> | n
     new GetCommand({ TableName: nazwaTabeli(), Key: { pk: `OSOBA#${sub}`, sk: 'PROFIL' }, ConsistentRead: true }),
   );
   return r.Item ? ((r.Item.firmy as Record<string, string> | undefined) ?? {}) : null;
+}
+
+/** A member of the Identity service; `email` is absent in role events. */
+export type Member = { sub: string; email?: string; role: 'admin' | 'member' };
+
+const roleOf = (r: Member['role']): 'admin' | 'czlonek' => (r === 'admin' ? 'admin' : 'czlonek');
+const personOf = (it: Record<string, unknown>) => (it.sk as string).slice('OSOBA#'.length);
+
+/**
+ * Derives a person id from an e-mail address.
+ *
+ * Call: `personIdFor('Jan.K@x.pl', new Set(['jan-k']))` -> `'jan-k-2'`.
+ * Input: e-mail, ids already taken. Pure; never throws.
+ * Output: lowercase local part, non `[a-z0-9]` runs -> `-`, trimmed of
+ * edge dashes, max 40 chars, `osoba` when empty; `-2`, `-3`... on clash.
+ */
+export function personIdFor(email: string, taken: Set<string>): string {
+  const local = email.split('@')[0] ?? '';
+  const base = local.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '') || 'osoba';
+  if (!taken.has(base)) return base;
+  let n = 2;
+  while (taken.has(`${base}-${n}`)) n += 1;
+  return `${base}-${n}`;
+}
+
+/** True when `at` is strictly older than the stored `tozsamoscAt`. */
+const isStale = (at: string, stored: unknown): boolean =>
+  typeof stored === 'string' && Date.parse(at) < Date.parse(stored);
+
+/**
+ * Drops this company's entry from a user's `PROFIL` map.
+ *
+ * Call: `await dropProfileEntry(sub, firma)`.
+ * Input: Cognito sub and company id. A missing profile is ignored.
+ * Output: nothing. Throws on other DynamoDB errors.
+ */
+async function dropProfileEntry(sub: string, firma: string): Promise<void> {
+  try {
+    await klient().send(new UpdateCommand({
+      TableName: nazwaTabeli(), Key: { pk: `OSOBA#${sub}`, sk: 'PROFIL' },
+      UpdateExpression: 'REMOVE firmy.#f', ConditionExpression: 'attribute_exists(firmy)',
+      ExpressionAttributeNames: { '#f': firma },
+    }));
+  } catch (e) {
+    if ((e as { name?: string }).name !== 'ConditionalCheckFailedException') throw e;
+  }
+}
+
+/**
+ * Updates an `OSOBA#` record keeping unrelated attributes.
+ *
+ * Call: `patchPerson(firma, osoba, {rola: 'admin'}, ['usunieta'])`.
+ * Input: attributes to set and attribute names to remove.
+ * Output: nothing. Names go through placeholders (reserved words).
+ */
+const patchPerson = (firma: string, osoba: string, set: Record<string, unknown>, remove: string[] = []) => {
+  const keys = [...Object.keys(set), ...remove];
+  const sets = Object.keys(set).map((k) => `#${k} = :${k}`).join(', ');
+  const expr = `SET ${sets}${remove.length ? ` REMOVE ${remove.map((k) => `#${k}`).join(', ')}` : ''}`;
+  return klient().send(new UpdateCommand({
+    TableName: nazwaTabeli(), Key: { pk: pk(firma), sk: `OSOBA#${osoba}` }, UpdateExpression: expr,
+    ExpressionAttributeNames: Object.fromEntries(keys.map((k) => [`#${k}`, k])),
+    ExpressionAttributeValues: Object.fromEntries(Object.entries(set).map(([k, v]) => [`:${k}`, v])),
+  })).then(() => {});
+};
+
+/**
+ * Finds the person record matching a member: by sub, else by e-mail.
+ *
+ * Call: `findPerson(records, member)`.
+ * Input: all `OSOBA#` items of a company (also removed ones), a member.
+ * Output: the matching item or undefined. E-mail match ignores case.
+ */
+function findPerson(records: Record<string, unknown>[], m: Member): Record<string, unknown> | undefined {
+  const bySub = records.find((it) => it.sub === m.sub);
+  if (bySub || m.email === undefined) return bySub;
+  const mail = m.email.toLowerCase();
+  return records.find((it) => typeof it.email === 'string' && it.email.toLowerCase() === mail);
+}
+
+/** Writes `KONTAKT#<osoba>` with the e-mail only when no contact exists. */
+async function ensureContact(firma: string, osoba: string, email: string): Promise<void> {
+  if (Object.keys(await kontaktOsoby(firma, osoba)).length === 0) await zapiszKontakt(firma, osoba, { email });
+}
+
+/**
+ * Copies an Identity member into the company's person registry.
+ *
+ * Call: `await applyMember(firma, {sub, email, role}, at)`.
+ * Input: company, member (no email = role change of a known sub only),
+ * ISO 8601 event time `at`.
+ * Output: 'added' (new person), 'updated', or 'skipped' (older than the
+ * stored `tozsamoscAt`, or unknown sub without e-mail).
+ * Side effects: sets the person's sub, role, e-mail, `tozsamoscAt`,
+ * clears `usunieta`, moves the `PROFIL` entry on sub change, creates a
+ * missing contact. Throws on DynamoDB errors.
+ */
+export async function applyMember(firma: string, m: Member, at: string): Promise<'added' | 'updated' | 'skipped'> {
+  const records = await wszystkie(firma, 'OSOBA#');
+  const found = findPerson(records, m);
+  if (!found && m.email === undefined) return 'skipped';
+  if (found && isStale(at, found.tozsamoscAt)) return 'skipped';
+  const osoba = found ? personOf(found) : personIdFor(m.email!, new Set(records.map(personOf)));
+  const email = m.email ?? (found!.email as string);
+  await patchPerson(firma, osoba, { email, rola: roleOf(m.role), sub: m.sub, tozsamoscAt: at }, ['usunieta']);
+  if (typeof found?.sub === 'string' && found.sub !== m.sub) await dropProfileEntry(found.sub, firma);
+  await zapiszTozsamosc(m.sub, firma, osoba);
+  await ensureContact(firma, osoba, email);
+  return found ? 'updated' : 'added';
+}
+
+/**
+ * Marks a member as removed in the company's person registry.
+ *
+ * Call: `await removeMember(firma, sub, at)`.
+ * Input: company, Cognito sub, ISO 8601 event time.
+ * Output: 'removed', or 'skipped' for an unknown sub or an older `at`.
+ * Side effects: sets `usunieta` and `tozsamoscAt` to `at`, drops the
+ * company from the sub's `PROFIL`. Throws on DynamoDB errors.
+ */
+export async function removeMember(firma: string, sub: string, at: string): Promise<'removed' | 'skipped'> {
+  const found = (await wszystkie(firma, 'OSOBA#')).find((it) => it.sub === sub);
+  if (!found || isStale(at, found.tozsamoscAt)) return 'skipped';
+  await patchPerson(firma, personOf(found), { usunieta: at, tozsamoscAt: at });
+  await dropProfileEntry(sub, firma);
+  return 'removed';
+}
+
+/**
+ * Lists the subs of the active people of a company.
+ *
+ * Call: `await activeSubs(firma)`.
+ * Input: a company id.
+ * Output: sorted subs of non-removed people that have one; for
+ * reconciliation with Identity.
+ */
+export async function activeSubs(firma: string): Promise<string[]> {
+  return (await activePeople(firma)).filter((it) => typeof it.sub === 'string').map((it) => it.sub as string).sort();
 }
