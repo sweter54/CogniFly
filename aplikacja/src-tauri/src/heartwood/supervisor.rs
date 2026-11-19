@@ -684,16 +684,19 @@ mod process_tests {
     /// Call: `fake_daemon(&dir, "heartwood", &config)`.
     /// Expects: a temp directory, the name for `argv[0]` and the
     /// config path for its command line.
-    /// Output: a `/bin/sh` waiting ~60 s whose `comm` is
-    /// `<dir>/<name>` and whose args end with `--config <config>
-    /// daemon` (returned only once `ps` shows that, so no exec race);
-    /// reparented away from the test so it is reaped.
+    /// Output: `/bin/sh` run through a symlink `<dir>/<name>` (so its
+    /// name is `<name>` on macOS and Linux), waiting ~60 s, with
+    /// args ending in `--config <config> daemon`; returned only once
+    /// `ps` shows that (no exec race); reparented away from the test
+    /// so it is reaped.
     fn fake_daemon(dir: &Path, name: &str, config: &Path) -> Fake {
+        let bin = dir.join(name);
+        std::os::unix::fs::symlink("/bin/sh", &bin).unwrap();
         let pid_file = dir.join(format!("{name}.fakepid"));
         let cmd = format!(
-            "exec -a '{}' /bin/sh -c 'sleep 60; :' sh --config '{}' daemon \
+            "'{}' -c 'sleep 60; :' sh --config '{}' daemon \
              & echo $! > '{}'",
-            dir.join(name).display(),
+            bin.display(),
             config.display(),
             pid_file.display()
         );
@@ -709,16 +712,31 @@ mod process_tests {
         let pid = text.trim().parse().unwrap();
         let fake = Fake { pid };
         for _ in 0..100 {
-            let ps = std::process::Command::new("/bin/ps")
-                .args(["-p", &pid.to_string(), "-o", "args="])
-                .output()
-                .unwrap();
-            if String::from_utf8_lossy(&ps.stdout).trim_end().ends_with("daemon") {
+            if cmdline(pid).trim_end().ends_with("daemon") {
                 return fake;
             }
             std::thread::sleep(Duration::from_millis(20));
         }
-        panic!("fake daemon {pid} did not start");
+        panic!("fake daemon {pid} did not start: {:?}", cmdline(pid));
+    }
+
+    /// Command line of a PID, as the ownership check sees it.
+    ///
+    /// Call: `cmdline(pid)`.
+    /// Expects: any PID.
+    /// Output: the args joined with spaces (`/proc` on Linux,
+    /// `/bin/ps -o args=` elsewhere); empty when unreadable.
+    fn cmdline(pid: u32) -> String {
+        if cfg!(target_os = "linux") {
+            let raw = std::fs::read(format!("/proc/{pid}/cmdline"))
+                .unwrap_or_default();
+            return String::from_utf8_lossy(&raw).replace('\0', " ");
+        }
+        let ps = std::process::Command::new("/bin/ps")
+            .args(["-p", &pid.to_string(), "-o", "args="])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&ps.stdout).into_owned()
     }
 
     /// Whether a PID is alive.

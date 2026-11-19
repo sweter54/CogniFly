@@ -205,13 +205,55 @@ pub enum Ownership {
     Unknown,
 }
 
+/// Process name and command line of a PID on Linux.
+///
+/// Call: `process_info(pid).await`.
+/// Expects: any PID.
+/// Output: `Ok(Some((comm, args)))` from `/proc/<pid>/comm` and
+/// `/proc/<pid>/cmdline` (NUL-separated, joined with spaces);
+/// `Ok(None)` when the process is gone; `Err(())` on other read
+/// errors.
+#[cfg(target_os = "linux")]
+async fn process_info(pid: u32) -> Result<Option<(String, String)>, ()> {
+    let dir = PathBuf::from(format!("/proc/{pid}"));
+    let read = |name: &str| -> Result<Option<Vec<u8>>, ()> {
+        match std::fs::read(dir.join(name)) {
+            Ok(bytes) => Ok(Some(bytes)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(_) => Err(()),
+        }
+    };
+    let (Some(comm), Some(cmdline)) = (read("comm")?, read("cmdline")?) else {
+        return Ok(None);
+    };
+    let args: Vec<String> = cmdline
+        .split(|b| *b == 0)
+        .filter(|part| !part.is_empty())
+        .map(|part| String::from_utf8_lossy(part).into_owned())
+        .collect();
+    Ok(Some((String::from_utf8_lossy(&comm).into_owned(), args.join(" "))))
+}
+
+/// Process name and command line of a PID via `/bin/ps`.
+///
+/// Call: `process_info(pid).await`.
+/// Expects: any PID.
+/// Output: `Ok(Some((comm, args)))` while it runs, `Ok(None)` once
+/// gone, `Err(())` when `/bin/ps` failed otherwise.
+#[cfg(all(unix, not(target_os = "linux")))]
+async fn process_info(pid: u32) -> Result<Option<(String, String)>, ()> {
+    let comm = ps_column(pid, "comm=").await?;
+    let args = ps_column(pid, "args=").await?;
+    Ok(comm.zip(args))
+}
+
 /// One `ps` column of a PID.
 ///
 /// Call: `ps_column(pid, "args=").await`.
 /// Expects: a PID and a `-o` column spec.
 /// Output: `Ok(Some(text))` while it runs, `Ok(None)` once gone
 /// (exit 1, no output), `Err(())` when `/bin/ps` failed otherwise.
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "linux")))]
 async fn ps_column(pid: u32, column: &str) -> Result<Option<String>, ()> {
     let out = tokio::process::Command::new("/bin/ps")
         .args(["-p", &pid.to_string(), "-o", column])
@@ -231,18 +273,15 @@ async fn ps_column(pid: u32, column: &str) -> Result<Option<String>, ()> {
 ///
 /// Call: `ownership(pid, &config_path).await`.
 /// Expects: a PID from the record and the launch's config path.
-/// Output: `Ours` only when `is_our_daemon` accepts its `comm` and
-/// `args`; `NotOurs` when gone or different; `Unknown` on failure.
+/// Output: `Ours` only when `is_our_daemon` accepts its name and
+/// command line (`/proc` on Linux, `/bin/ps` elsewhere); `NotOurs`
+/// when gone or different; `Unknown` when they cannot be read.
 #[cfg(unix)]
 pub async fn ownership(pid: u32, config: &Path) -> Ownership {
-    let comm = ps_column(pid, "comm=").await;
-    let args = ps_column(pid, "args=").await;
-    match (comm, args) {
-        (Ok(Some(c)), Ok(Some(a))) if is_our_daemon(&c, &a, config) => {
-            Ownership::Ours
-        }
-        (Err(()), _) | (_, Err(())) => Ownership::Unknown,
-        _ => Ownership::NotOurs,
+    match process_info(pid).await {
+        Ok(Some((c, a))) if is_our_daemon(&c, &a, config) => Ownership::Ours,
+        Ok(_) => Ownership::NotOurs,
+        Err(()) => Ownership::Unknown,
     }
 }
 
