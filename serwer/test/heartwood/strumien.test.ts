@@ -38,6 +38,16 @@ describe('changedWork', () => {
     expect(changedWork(t, undefined)).toBeNull();
     expect(changedWork(undefined, task({}))).toBeNull();
   });
+  it('return to new clears the writer of an open work', () => {
+    expect(changedWork(task({ stan: 'w_trakcie', wlasciciel: 'michal' }), task({})))
+      .toEqual({ writer: null, closed: false });
+    expect(changedWork(task({ stan: 'do_akceptacji', akceptujacy: 'szymon' }),
+      task({ stan: 'eskalowane' }))).toEqual({ writer: null, closed: false });
+  });
+  it('closed work back to new is a no-op', () => {
+    expect(changedWork(task({ stan: 'odrzucone' }), task({}))).toBeNull();
+    expect(changedWork(task({ stan: 'do_akceptacji' }), task({}))).toBeNull();
+  });
   it('returns the new state on change', () => {
     expect(changedWork(task({}), task({ stan: 'wziete', wlasciciel: 'michal' })))
       .toEqual({ writer: 'michal', closed: false });
@@ -62,6 +72,17 @@ describe('handleStream', () => {
     await handleStream(ev(rec(task({ stan: 'w_trakcie', wlasciciel: 'michal' }),
       task({ stan: 'w_trakcie', wlasciciel: 'szymon' }))), deps);
     expect(putWork).toHaveBeenCalledWith('pilot', `cognifly:${ID}`, { writer: 'sub-s', closed: false });
+  });
+  it('handover via new clears the writer', async () => {
+    const { putWork, deps } = setup();
+    await handleStream(ev(rec(task({ stan: 'w_trakcie', wlasciciel: 'michal' }),
+      task({ stan: 'nowe' }))), deps);
+    expect(putWork).toHaveBeenCalledWith('pilot', `cognifly:${ID}`, { writer: null, closed: false });
+  });
+  it('closed back to new sends nothing', async () => {
+    const { putWork, deps } = setup();
+    await handleStream(ev(rec(task({ stan: 'odrzucone' }), task({ stan: 'nowe' }))), deps);
+    expect(putWork).not.toHaveBeenCalled();
   });
   it('acceptance without acceptor gives null writer', async () => {
     const { putWork, log, deps } = setup();

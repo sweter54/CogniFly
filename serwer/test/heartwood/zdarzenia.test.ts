@@ -111,6 +111,29 @@ describe('plan', () => {
     expect(await plan({ ...ev('lock.broken', lock()), time: 'wczoraj' }, lookup())).toBeNull();
   });
 
+  it('shows ws:X as X and user:* as Prywatne in text and subject', async () => {
+    const ws = await plan(ev('change.rejected', rejected('no_lock', { space: 'ws:wspolne' })), lookup());
+    expect(ws!.zdarzenie.opis).toBe('Zmiana pliku wspolne/Oferty/a.docx odrzucona (brak blokady)');
+    expect(ws!.zdarzenie.podmiot).toEqual({ org: 'pilot', sciezka: 'wspolne/Oferty/a.docx' });
+    const own = await plan(ev('change.rejected', rejected('conflict', { space: 'user:sub-m' })), lookup());
+    expect(own!.zdarzenie.opis).toBe('Konflikt pliku Prywatne/Oferty/a.docx: przepisz swoje zmiany z kopii konfliktu');
+    expect(own!.zdarzenie.podmiot).toEqual({ org: 'pilot', sciezka: 'Prywatne/Oferty/a.docx' });
+  });
+
+  it('strips control and bidi characters from the shown path', async () => {
+    const path = 'Oferty/a\u0007\u202Ecod.exe\u200B\n.docx';
+    const r = await plan(ev('lock.broken', lock({ path })), lookup());
+    expect(r!.zdarzenie.opis).toBe('Admin zdjął blokadę pliku Wspólne/Oferty/acod.exe.docx');
+  });
+
+  it('cuts the shown path by code points, not inside a surrogate pair', async () => {
+    const path = '😀'.repeat(200);
+    const r = await plan(ev('lock.broken', lock({ path })), lookup());
+    const shown = r!.zdarzenie.opis.slice('Admin zdjął blokadę pliku '.length);
+    expect(Array.from(shown)).toHaveLength(120);
+    expect(shown).toBe(`Wspólne/${'😀'.repeat(111)}…`);
+  });
+
   it('trims a long path to 120 chars and keeps opis within 300', async () => {
     const path = `${'a'.repeat(400)}.docx`;
     const r = await plan(ev('change.rejected', rejected('conflict', { path, space: 'b'.repeat(200) })), lookup());

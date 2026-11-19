@@ -14,14 +14,14 @@ function setup(stored: Session | null, refresher = vi.fn(async (): Promise<Token
 }
 
 describe('SessionManager', () => {
-  it('uses the stored token while it is valid for more than 60 s', async () => {
-    const { manager, refresher } = setup(session(NOW + 61_000));
+  it('uses the stored token while it is valid for more than 5 min', async () => {
+    const { manager, refresher } = setup(session(NOW + 301_000));
     expect(await manager.accessToken()).toBe('A1');
     expect(refresher).not.toHaveBeenCalled();
   });
 
-  it('refreshes when 60 s or less remain and stores the result', async () => {
-    const { manager, refresher, vault } = setup(session(NOW + 60_000));
+  it('refreshes when 5 min or less remain and stores the result', async () => {
+    const { manager, refresher, vault } = setup(session(NOW + 300_000));
     expect(await manager.accessToken()).toBe('A2');
     expect(refresher).toHaveBeenCalledWith('R1');
     expect(JSON.parse(vault.value()!)).toEqual({ ...fresh, email: 'a@b.pl' });

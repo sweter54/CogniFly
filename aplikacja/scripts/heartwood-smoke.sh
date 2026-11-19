@@ -16,19 +16,28 @@ PORT="${HEARTWOOD_SMOKE_PORT:-8791}"
 ORG=smoke
 SUB=smoke-user
 export HEARTWOOD_TABLE="heartwood-smoke-$(date +%s)-$$"
+# Fake local credentials: the dev server talks only to DynamoDB Local
+# and must never pick up real AWS credentials from the environment.
+export AWS_REGION=eu-central-1 AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local
+unset AWS_PROFILE AWS_SESSION_TOKEN
 TMP="$(mktemp -d -t cf-hw-smoke)"
 LOG="$TMP/server.log"
 SERVER_PID=""
 
+# Kills process $1 and all its descendants (children first).
+kill_tree() {
+  local child
+  for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$child"; done
+  kill "$1" 2>/dev/null || true
+}
+
 # Stops the dev server, drops the temp table and removes temp files.
 cleanup() {
   if [[ -n "$SERVER_PID" ]]; then
-    pkill -P "$SERVER_PID" 2>/dev/null || true
-    kill "$SERVER_PID" 2>/dev/null || true
+    kill_tree "$SERVER_PID"
     wait "$SERVER_PID" 2>/dev/null || true
   fi
-  (cd "$HW" && AWS_REGION=eu-central-1 AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local \
-    node --input-type=module -e "
+  (cd "$HW" && node --input-type=module -e "
       import { DynamoDBClient, DeleteTableCommand } from '@aws-sdk/client-dynamodb';
       const db = new DynamoDBClient({ endpoint: 'http://localhost:8000' });
       await db.send(new DeleteTableCommand({ TableName: process.env.HEARTWOOD_TABLE }));

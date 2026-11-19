@@ -36,13 +36,15 @@ function sameWork(a: WorkState | null, b: WorkState | null): boolean {
  *
  * Call: `changedWork(oldTask, newTask)`.
  * Expects: task images as stored (either may be missing).
- * Output: the new work state when it differs from the old one; null
- * when unchanged, when the new state is null or the task was removed.
+ * Output: the new work state when it differs from the old one. A
+ * task back in new/escalated keeps its work but loses the writer
+ * (`{writer: null, closed: prev.closed}`), so a closed work stays a
+ * no-op. Null when unchanged or the task was removed.
  */
 export function changedWork(oldImg: Task | undefined, newImg: Task | undefined): WorkState | null {
   if (!newImg) return null;
-  const next = workStateOf(newImg);
   const prev = oldImg ? workStateOf(oldImg) : null;
+  const next = workStateOf(newImg) ?? (prev && { writer: null, closed: prev.closed });
   return next && !sameWork(prev, next) ? next : null;
 }
 

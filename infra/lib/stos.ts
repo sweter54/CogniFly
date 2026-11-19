@@ -12,7 +12,7 @@ import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
 import { HttpLambdaIntegration } from 'aws-cdk-lib/aws-apigatewayv2-integrations';
 import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
 import { Architecture, Runtime, StartingPosition } from 'aws-cdk-lib/aws-lambda';
-import { DynamoEventSource } from 'aws-cdk-lib/aws-lambda-event-sources';
+import { DynamoEventSource, SqsDlq } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
 import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Topic } from 'aws-cdk-lib/aws-sns';
@@ -46,7 +46,8 @@ export interface KontekstHeartwood { intUrl: string; intApiArn: string }
  * Reads the optional `heartwood` context (a JSON string).
  *
  * Call: `kontekstHeartwood(scope)`.
- * Expects: absent/empty, or JSON `{"intUrl":"https://...","intApiArn":"arn:..."}`.
+ * Expects: absent/empty, or JSON
+ *   `{"intUrl":"https://...","intApiArn":"arn:..."}`.
  * Output: the parsed context, or `undefined` when absent; throws a
  *   Polish error on invalid JSON or missing fields.
  */
@@ -202,11 +203,22 @@ export class StosCogniFly extends Stack {
     }));
     przetwarzanie.node.addDependency(grupa);
 
-    // --- Heartwood (tylko z kontekstem `heartwood`): praca -> rejestr, zdarzenia -> zadania ---
+    // --- Heartwood (tylko z kontekstem `heartwood`):
+    //     praca -> rejestr, zdarzenia -> zadania ---
+    // Funkcje i kolejka Heartwood trafiają niżej do pętli alarmów.
+    const funkcjeHeartwood: Record<string, NodejsFunction> = {};
+    const kolejkiHeartwood: Record<string, Queue> = {};
     if (heartwood) {
       const env = { HEARTWOOD_INT_URL: heartwood.intUrl, COGNIFLY_TABELA: NAZWA_TABELI };
       const praca = wspolne('HeartwoodPraca', 'heartwood/strumien.ts', env);
       const zdarzenia = wspolne('HeartwoodZdarzenia', 'heartwood/zdarzenia.ts', { ...env, COGNIFLY_NADAWCA: nadawca });
+      const dlqHeartwood = new Queue(this, 'DlqHeartwood', {
+        queueName: `${PREFIKS}-heartwood-dlq`,
+        retentionPeriod: Duration.days(14),
+        enforceSSL: true,
+      });
+      Object.assign(funkcjeHeartwood, { HeartwoodPraca: praca, HeartwoodZdarzenia: zdarzenia });
+      kolejkiHeartwood.Heartwood = dlqHeartwood;
       tabela.grantReadData(praca);
       tabela.grantReadWriteData(zdarzenia);
       zdarzenia.addToRolePolicy(odczytSekretow('discord'));
@@ -217,12 +229,13 @@ export class StosCogniFly extends Stack {
       praca.addEventSource(new DynamoEventSource(tabela, {
         startingPosition: StartingPosition.TRIM_HORIZON,
         reportBatchItemFailures: true, retryAttempts: 10, bisectBatchOnError: true,
+        onFailure: new SqsDlq(dlqHeartwood),
       }));
       new Rule(this, 'RegulaHeartwood', {
         ruleName: `${PREFIKS}-heartwood`,
         eventBus: szyna,
         eventPattern: { source: ['heartwood'], detailType: TYPY_HEARTWOOD },
-        targets: [new LambdaFunction(zdarzenia, { retryAttempts: 2 })],
+        targets: [new LambdaFunction(zdarzenia, { deadLetterQueue: dlqHeartwood, retryAttempts: 2 })],
       });
     }
 
@@ -312,7 +325,7 @@ export class StosCogniFly extends Stack {
     // --- Alarmy ---
     const alarmy = new Topic(this, 'Alarmy', { topicName: `${PREFIKS}-alarmy` });
     alarmy.addSubscription(new EmailSubscription(emailAlarmow));
-    for (const [nazwa, f] of Object.entries({ Webhook: webhook, Przetwarzanie: przetwarzanie, Eskalacja: eskalacja, Api: api, Dostarczenia: dostarczenia })) {
+    for (const [nazwa, f] of Object.entries({ Webhook: webhook, Przetwarzanie: przetwarzanie, Eskalacja: eskalacja, Api: api, Dostarczenia: dostarczenia, ...funkcjeHeartwood })) {
       new Alarm(this, `Alarm${nazwa}`, {
         alarmName: `${PREFIKS}-${nazwa.toLowerCase()}-bledy`,
         metric: f.metricErrors({ period: Duration.minutes(5), statistic: 'Sum' }),
@@ -323,7 +336,7 @@ export class StosCogniFly extends Stack {
       }).addAlarmAction(new SnsAction(alarmy));
     }
 
-    for (const [nazwa, q] of Object.entries({ Przetwarzanie: dlq, Eskalacja: dlqEskalacji })) {
+    for (const [nazwa, q] of Object.entries({ Przetwarzanie: dlq, Eskalacja: dlqEskalacji, ...kolejkiHeartwood })) {
       new Alarm(this, `AlarmDlq${nazwa}`, {
         alarmName: `${PREFIKS}-${nazwa.toLowerCase()}-dlq`,
         metric: q.metricApproximateNumberOfMessagesVisible({ period: Duration.minutes(5), statistic: 'Maximum' }),

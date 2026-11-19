@@ -51,6 +51,9 @@ const REASONS = {
 type Reason = keyof typeof REASONS;
 
 const OUTSIDER = 'ktoś spoza CogniFly';
+const PRIVATE_SPACE = 'Prywatne';
+/** Control (Cc) and format/bidi (Cf) characters, never shown. */
+const HIDDEN_CHARS = /[\p{Cc}\p{Cf}]/gu;
 const PATH_MAX = 120;
 const OPIS_MAX = 300;
 const GIB = 1024 ** 3;
@@ -107,14 +110,29 @@ function quotaDetail(d: Record<string, unknown>): QuotaDetail | null {
 }
 
 /**
+ * Names a Heartwood space for people.
+ *
+ * Call: `spaceName('ws:wspolne')`.
+ * Expects: a space id (`ws:<ws>`, `user:<sub>`) or a plain name.
+ * Output: `<ws>` for `ws:`, `Prywatne` for `user:` (no sub shown),
+ * anything else unchanged.
+ */
+function spaceName(space: string): string {
+  if (space.startsWith('ws:')) return space.slice('ws:'.length);
+  return space.startsWith('user:') ? PRIVATE_SPACE : space;
+}
+
+/**
  * Builds the shown path of a file.
  *
  * Call: `shownPath('Wspólne', 'Oferty/a.docx')`.
- * Expects: a workspace or space name and a path inside it.
- * Output: `<space>/<path>` cut to 120 chars with `…`.
+ * Expects: a workspace or space name and a path inside it (both
+ * untrusted).
+ * Output: `<space>/<path>` without control and bidi/format
+ * characters, cut to 120 code points with `…`.
  */
 function shownPath(space: string, path: string): string {
-  return przytnij(`${space}/${path}`, PATH_MAX);
+  return przytnij(`${space}/${path}`.replace(HIDDEN_CHARS, ''), PATH_MAX);
 }
 
 /**
@@ -196,14 +214,15 @@ async function lockBroken(d: LockDetail, l: Lookup): Promise<Draft> {
  */
 async function changeRejected(d: RejectedDetail, l: Lookup): Promise<Draft> {
   const author = await l.personOf(d.org, d.by);
-  const file = shownPath(d.space, d.path);
+  const space = spaceName(d.space);
+  const file = shownPath(space, d.path);
   const conflict = d.reason === 'conflict';
   return {
     typ: conflict ? 'pliki.zmiana.konflikt' : 'pliki.zmiana.odrzucona',
     opis: conflict
       ? `Konflikt pliku ${file}: przepisz swoje zmiany z kopii konfliktu`
       : `Zmiana pliku ${file} odrzucona (${REASONS[d.reason]})`,
-    podmiot: { org: d.org, sciezka: `${d.space}/${d.path}` },
+    podmiot: { org: d.org, sciezka: `${space}/${d.path}` },
     task: conflict,
     recipients: author ? [author] : [],
   };

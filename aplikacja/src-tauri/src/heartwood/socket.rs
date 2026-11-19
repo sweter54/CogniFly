@@ -259,10 +259,15 @@ mod tests {
     /// `COGNIFLY_HEARTWOOD_BIN` (the `heartwood` binary).
     /// Output: the real start path (`prepare`) runs our own daemon,
     /// `status` answers `ok` + `running`, and stop leaves no child.
+    /// Without `COGNIFLY_HEARTWOOD_CONFIG` it returns early (skip).
     #[tokio::test]
     #[ignore = "needs a live Heartwood dev server (docs/heartwood.md)"]
     async fn live_status_roundtrip() {
         use crate::heartwood::supervisor::{Phase, Supervisor};
+        if std::env::var_os("COGNIFLY_HEARTWOOD_CONFIG").is_none() {
+            eprintln!("skipped: COGNIFLY_HEARTWOOD_CONFIG is not set");
+            return;
+        }
         let config = crate::heartwood::config::resolve("", "", "").unwrap();
         let sup = Supervisor::default();
         let launch = crate::heartwood::prepare("", "", "").unwrap();
