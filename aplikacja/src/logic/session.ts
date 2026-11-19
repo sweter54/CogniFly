@@ -212,3 +212,26 @@ export function parseSession(raw: string | null): Session | null {
     return null;
   }
 }
+
+/**
+ * Reads the `sub` claim of an access token.
+ *
+ * Call: `subOf(session.accessToken)`.
+ * Expects: any string; the signature is NOT checked, so the result
+ * only serves to compare with a `writer` the daemon reports.
+ * Output: a non-empty `sub`, or `null` for anything that is not a
+ * three-part JWT with a JSON object payload holding a string `sub`.
+ */
+export function subOf(accessToken: string): string | null {
+  const parts = accessToken.split('.');
+  if (parts.length !== 3) return null;
+  try {
+    const b64 = parts[1]!.replace(/-/g, '+').replace(/_/g, '/');
+    const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+    const payload: unknown = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    const sub = typeof payload === 'object' && payload !== null ? (payload as Record<string, unknown>).sub : undefined;
+    return typeof sub === 'string' && sub !== '' ? sub : null;
+  } catch {
+    return null;
+  }
+}

@@ -247,7 +247,7 @@ export function closeAcceptorForm(li: HTMLElement, taskId: string): void {
 }
 
 /**
- * Shows the paths this computer locked for a task.
+ * Shows the paths locked for a task (from `task.files`).
  * Call: `showLocked(li, paths)`. Expects: the task template markup.
  * Output: none; "Zwolnij" shows only with locked paths.
  */
@@ -294,7 +294,8 @@ export function wireFiles(li: HTMLElement, task: Task, me: string | null, state:
   part<HTMLElement>(li, '.files').hidden = !show;
   part<HTMLElement>(li, '.locked').hidden = !show;
   if (!show) return;
-  const reload = () => call('task.lockedFiles', { id: task.id }).then((r) => showLocked(li, r.paths)).catch(() => undefined);
+  const reload = () => call('task.files', { id: task.id }, DAEMON_WAIT_MS)
+    .then((r) => showLocked(li, r.files.locks.map((l) => `${l.space}/${l.path}`))).catch(() => undefined);
   showLocked(li, []);
   void reload();
   part<HTMLButtonElement>(li, '.lock').addEventListener('click', () => void lockAction(report, async () => {

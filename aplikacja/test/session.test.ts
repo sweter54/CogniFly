@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Tokens } from '../src/logic/cognito.js';
 import { CognitoError, LoginRequiredError, NetworkError } from '../src/logic/errors.js';
-import { SessionManager, type Session } from '../src/logic/session.js';
-import { memoryVault } from './helpers.js';
+import { SessionManager, subOf, type Session } from '../src/logic/session.js';
+import { jwt, memoryVault } from './helpers.js';
 
 const NOW = 10_000_000;
 const session = (expiresAt: number): Session => ({ accessToken: 'A1', refreshToken: 'R1', expiresAt, email: 'a@b.pl' });
@@ -78,4 +78,22 @@ describe('SessionManager', () => {
     await expect(pending).rejects.toBeInstanceOf(LoginRequiredError);
     expect(vault.value()).toBeNull();
   });
+});
+
+describe('subOf', () => {
+  it('reads sub from a real JWT shape (base64url, unicode payload)', () => {
+    expect(subOf(jwt({ sub: '0a1b2c3d-1111-2222-3333-444455556666', 'cognito:username': 'Żaneta' }))).toBe('0a1b2c3d-1111-2222-3333-444455556666');
+  });
+
+  it.each([
+    ['empty', ''],
+    ['not a JWT', 'A'],
+    ['two parts', 'a.b'],
+    ['bad base64', 'a.@@@.c'],
+    ['not JSON', `a.${Buffer.from('nope').toString('base64url')}.c`],
+    ['array payload', jwt([1])],
+    ['no sub', jwt({ email: 'a@b.pl' })],
+    ['numeric sub', jwt({ sub: 7 })],
+    ['empty sub', jwt({ sub: '' })],
+  ])('%s → null', (_name, token) => expect(subOf(token)).toBeNull());
 });

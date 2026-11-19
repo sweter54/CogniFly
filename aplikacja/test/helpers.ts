@@ -100,3 +100,15 @@ export function memoryBus(): (label: string) => Bus {
     },
   });
 }
+
+/**
+ * Builds an unsigned JWT with the given payload.
+ *
+ * Call: `jwt({ sub: 'u-1' })`.
+ * Expects: a JSON-serialisable payload.
+ * Output: `header.payload.signature` in base64url, like Cognito's.
+ */
+export function jwt(payload: unknown): string {
+  const part = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url');
+  return `${part({ alg: 'RS256', kid: 'k' })}.${part(payload)}.c2ln`;
+}

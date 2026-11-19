@@ -3,7 +3,6 @@
 // and reasons from the daemon are data, never control text.
 import { AppError, RefusalError } from './errors.js';
 import { oneLine } from './notify.js';
-import { readJson, writeJson, type KeyValueStore } from './storage.js';
 
 /** Daemon state reported by the Rust supervisor. */
 export type HwState = 'disabled' | 'not_installed' | 'starting' | 'running' | 'restarting';
@@ -12,7 +11,9 @@ export type HwState = 'disabled' | 'not_installed' | 'starting' | 'running' | 'r
 export interface HwInfo { state: HwState; root: string; restarts: number; lastError: string | null }
 
 /** Commands the Rust side lets through to the daemon. */
-export type HwCommand = 'status' | 'lock' | 'release' | 'request-release' | 'history' | 'download' | 'restore' | 'select' | 'unselect';
+export type HwCommand =
+  | 'status' | 'lock' | 'release' | 'request-release' | 'history' | 'download' | 'restore' | 'select' | 'unselect'
+  | 'files' | 'work-files';
 
 /** One local API request line. */
 export interface HwRequest { cmd: HwCommand; [field: string]: unknown }
@@ -141,7 +142,6 @@ export interface FilesView { info: HwInfo; status: HwStatus | null; counts: File
 /** Info used before the supervisor answered. */
 export const DISABLED_INFO: Readonly<HwInfo> = Object.freeze({ state: 'disabled', root: '', restarts: 0, lastError: null });
 
-const LOCKS_KEY = 'cognifly.heartwood.locks';
 const CODE = /^[A-Z][A-Z_]{0,39}$/;
 /** Longest daemon text sent to a window (characters). */
 export const MAX_REFUSAL_TEXT = 300;
@@ -443,6 +443,38 @@ export function isUnderRoot(path: string, root: string): boolean {
 }
 
 /**
+ * Checks a path inside a space before it reaches the daemon.
+ *
+ * Call: `isSpacePath(path)`; `isSpacePath(path, true)` for `history`
+ * and folder levels.
+ * Expects: any string.
+ * Output: true for a relative path of non-empty segments other than
+ * `.`/`..` without control characters; with `folderOk` also `''`
+ * (the space root) and one trailing `/`. The daemon checks the
+ * remaining name rules.
+ */
+export function isSpacePath(path: string, folderOk = false): boolean {
+  if (folderOk && path === '') return true;
+  const body = folderOk && path.endsWith('/') ? path.slice(0, -1) : path;
+  if (body === '' || /[\p{Cc}]/u.test(body)) return false;
+  return body.split('/').every((seg) => seg !== '' && seg !== '.' && seg !== '..');
+}
+
+/**
+ * Groups the locks of a work by space.
+ *
+ * Call: `locksBySpace(workFiles.locks)`.
+ * Expects: parsed locks.
+ * Output: one `{ space, paths }` per space in order of first
+ * appearance, so each `release` stays within one space.
+ */
+export function locksBySpace(locks: readonly HwWorkLock[]): { space: string; paths: string[] }[] {
+  const groups = new Map<string, string[]>();
+  for (const l of locks) groups.set(l.space, [...(groups.get(l.space) ?? []), l.path]);
+  return [...groups].map(([space, paths]) => ({ space, paths }));
+}
+
+/**
  * Groups paths by space folder (`<root>/<org>/<space>/…`).
  *
  * Call: `groupBySpace(paths, root)`.
@@ -500,66 +532,4 @@ export function checkReply(reply: HwReply): void {
   if (typeof reply.code !== 'string' || !CODE.test(reply.code)) throw new RefusalError('BAD_RESPONSE', undefined);
   const text = typeof reply.message === 'string' ? Array.from(oneLine(reply.message)).slice(0, MAX_REFUSAL_TEXT).join('') : '';
   throw new RefusalError(reply.code, text || undefined);
-}
-
-/**
- * Paths this computer locked for a task (D11).
- *
- * @deprecated Replaced by `work-files`; removed in Task 2.
- * Call: `lockedPaths(store, taskId)`.
- * Expects: any store; corrupt entries are ignored.
- * Output: the remembered absolute paths (may be empty).
- */
-export function lockedPaths(store: KeyValueStore, taskId: string): string[] {
-  const v = loadLocks(store)[taskId];
-  return Array.isArray(v) ? v.filter((p): p is string => typeof p === 'string') : [];
-}
-
-/**
- * Remembers newly locked paths of a task.
- *
- * @deprecated Replaced by `work-files`; removed in Task 2.
- * Call: `rememberLocked(store, taskId, paths)`.
- * Expects: paths the daemon locked.
- * Output: none; stored without duplicates, order kept.
- */
-export function rememberLocked(store: KeyValueStore, taskId: string, paths: readonly string[]): void {
-  saveLocked(store, taskId, [...new Set([...lockedPaths(store, taskId), ...paths])]);
-}
-
-/**
- * Forgets released paths of a task.
- *
- * @deprecated Replaced by `work-files`; removed in Task 2.
- * Call: `forgetLocked(store, taskId, paths)`.
- * Expects: paths the daemon released.
- * Output: none; a task without paths is removed from storage.
- */
-export function forgetLocked(store: KeyValueStore, taskId: string, paths: readonly string[]): void {
-  saveLocked(store, taskId, lockedPaths(store, taskId).filter((p) => !paths.includes(p)));
-}
-
-/**
- * Writes the paths of one task.
- *
- * Call: `saveLocked(store, taskId, paths)`.
- * Expects: the full new list for the task.
- * Output: none; an empty list drops the task's entry.
- */
-function saveLocked(store: KeyValueStore, taskId: string, paths: string[]): void {
-  const all = loadLocks(store);
-  if (paths.length) all[taskId] = paths;
-  else delete all[taskId];
-  writeJson(store, LOCKS_KEY, all);
-}
-
-/**
- * Reads the lock memory.
- *
- * Call: `loadLocks(store)`.
- * Expects: any store.
- * Output: task id → stored value (unchecked items), `{}` if corrupt.
- */
-function loadLocks(store: KeyValueStore): Record<string, unknown> {
-  return record(readJson(store, LOCKS_KEY)) ?? {};
 }

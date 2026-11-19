@@ -1,7 +1,7 @@
 // Contract between UI windows and the background window: method names,
 // window labels and pushed events. Shared by both sides.
 import type { Task, UserSettableState } from '@cognifly/wspolne/api';
-import type { FilesView, HwVersion } from '../logic/heartwood.js';
+import type { FilesView, HwBrowse, HwVersion, HwWorkFiles } from '../logic/heartwood.js';
 
 /** Window labels (must match tauri.conf.json and capabilities). */
 export const WINDOWS = { background: 'background', main: 'main' } as const;
@@ -56,14 +56,23 @@ export interface Methods {
   'review.request': { params: { repo: string; pr: number; reviewers: string[] }; result: { taskId: string } };
   'files.get': { params: Record<string, never>; result: FilesView };
   'files.refresh': { params: Record<string, never>; result: FilesView };
-  'files.history': { params: { path: string }; result: { versions: HwVersion[]; path: string } };
-  'files.download': { params: { path: string; version: number }; result: { copy: string } };
+  /** `path` is local, or in `space` when given (`''`/trailing `/` = folder). */
+  'files.history': { params: { path: string; space?: string }; result: { versions: HwVersion[]; path: string } };
+  /** `path` is local, or in `space` when given. */
+  'files.download': { params: { path: string; space?: string; version: number }; result: { copy: string } };
   'files.restore': { params: { path: string; version: number }; result: { ok: true } };
   'files.select': { params: { space: string; topics?: string[] }; result: { ok: true } };
   'files.unselect': { params: { space: string; topics?: string[]; yes: boolean }; result: { ok: true } };
   'files.pickPath': { params: Record<string, never>; result: { path: string | null } };
   'task.lockFiles': { params: { id: string }; result: { paths: string[] } };
-  'task.releaseFiles': { params: { id: string }; result: { paths: string[] } };
-  'task.lockedFiles': { params: { id: string }; result: { paths: string[] } };
+  /** With `space` + `path` one lock, else every visible lock of the task. */
+  'task.releaseFiles': { params: { id: string; space?: string; path?: string }; result: { paths: string[] } };
+  /** Locks and versions of the task's work; `me` is the user's `sub`. */
+  'task.files': { params: { id: string }; result: { id: string; files: HwWorkFiles; me: string | null } };
+  /** One folder level of a space (`folder` omitted = root). */
+  'files.tree': { params: { space: string; folder?: string }; result: HwBrowse };
+  /** Locks a path in a space for a task (`folder` = a folder lock). */
+  'files.lockFor': { params: { taskId: string; space: string; path: string; folder?: boolean }; result: { ok: true } };
+  'files.requestRelease': { params: { space: string; path: string }; result: { ok: true } };
 }
 export type Method = keyof Methods;

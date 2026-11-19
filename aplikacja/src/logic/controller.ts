@@ -9,13 +9,14 @@ import { isSafeFolder, loadConfig, saveChoices, type AppConfig, type UserChoices
 import { claudeLink, threadLink } from './claude-link.js';
 import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
 import {
-  checkReply, DISABLED_INFO, filesView, forgetLocked, groupBySpace, hwError, isUnderRoot, lockedPaths, parseStatus, parseVersions,
-  rememberLocked, workIdFor, type FilesView, type HeartwoodPort, type HwInfo, type HwReply, type HwRequest, type HwStatus,
+  checkReply, DISABLED_INFO, filesView, groupBySpace, hwError, isSpacePath, isUnderRoot, locksBySpace, parseBrowse, parseStatus,
+  parseVersions, parseWorkFiles, workIdFor, type FilesView, type HeartwoodPort, type HwBrowse, type HwInfo, type HwReply,
+  type HwRequest, type HwStatus, type HwWorkFiles,
 } from './heartwood.js';
 import type { FetchFn } from './http.js';
 import { clearSeen, loadSeen, notificationBody, notificationTitle, pickNew, saveSeen, waitingTasks } from './notify.js';
 import type { Handler } from './rpc.js';
-import { SessionManager, type Vault } from './session.js';
+import { SessionManager, subOf, type Vault } from './session.js';
 import type { KeyValueStore } from './storage.js';
 
 /** Poll interval (ms). */
@@ -25,6 +26,8 @@ export const POLL_INTERVAL_MS = 60_000;
 const FINAL_START_CODES: readonly string[] = ['DISABLED', 'NOT_INSTALLED'];
 /** Longest accepted space or topic name (the daemon checks more). */
 const MAX_NAME = 200;
+/** Most `work-files` pages read for one task (100 versions each). */
+const MAX_WORK_PAGES = 20;
 
 /** Platform effects used by the controller. */
 export interface Ports {
@@ -213,12 +216,12 @@ export class Controller {
       'files.get': async () => this.view.files,
       'files.refresh': () => this.refreshFiles(this.session.epoch()),
       'files.history': async (p) => {
-        const path = await this.underRoot(text(p, 'path'));
-        const r = await this.fileAction({ cmd: 'history', path });
-        return { versions: parseVersions(r.versions), path };
+        const target = await this.fileTarget(p, true);
+        const r = await this.fileAction({ cmd: 'history', ...target });
+        return { versions: parseVersions(r.versions), path: target.path };
       },
       'files.download': async (p) => {
-        const r = await this.fileAction({ cmd: 'download', path: await this.underRoot(text(p, 'path')), version: versionParam(p) });
+        const r = await this.fileAction({ cmd: 'download', ...(await this.fileTarget(p)), version: versionParam(p) });
         if (typeof r.copy !== 'string') throw new AppError('BAD_RESPONSE');
         return { copy: r.copy };
       },
@@ -235,9 +238,21 @@ export class Controller {
         return { ok: true };
       },
       'files.pickPath': () => this.pickPath(),
+      'files.tree': async (p) => this.tree(treeParams(p)),
+      'files.lockFor': async (p) => {
+        const workId = workIdFor(taskIdParam(p, 'taskId'));
+        const folder = field(p, 'folder') === true ? { folder: true } : {};
+        const { space, path } = spacePathParams(p);
+        await this.fileAction({ cmd: 'lock', space, workId, paths: [path], ...folder });
+        return { ok: true };
+      },
+      'files.requestRelease': async (p) => {
+        await this.fileAction({ cmd: 'request-release', ...spacePathParams(p) });
+        return { ok: true };
+      },
       'task.lockFiles': async (p) => this.lockFiles(taskIdParam(p)),
-      'task.releaseFiles': async (p) => this.releaseFiles(taskIdParam(p)),
-      'task.lockedFiles': async (p) => ({ paths: lockedPaths(this.ports.store, taskIdParam(p)) }),
+      'task.releaseFiles': async (p) => this.releaseFiles(taskIdParam(p), p),
+      'task.files': async (p) => this.taskFiles(taskIdParam(p)),
     };
   }
 
@@ -454,6 +469,101 @@ export class Controller {
   }
 
   /**
+   * Reads where a file action points: a local path or a space path.
+   *
+   * Call: `await this.fileTarget(params, folderOk?)`.
+   * Expects: rpc params with `path` and optionally `space`;
+   * `folderOk` allows a space folder (`history`).
+   * Output: `{ path }` under the root, or `{ space, path }`.
+   * Throws: `OUTSIDE` / `BAD_REQUEST` before any daemon call.
+   */
+  private async fileTarget(params: unknown, folderOk = false): Promise<{ path: string; space?: string }> {
+    if (field(params, 'space') !== undefined) return spacePathParams(params, folderOk);
+    return { path: await this.underRoot(text(params, 'path')) };
+  }
+
+  /**
+   * Reads one folder level of a space.
+   *
+   * Call: rpc `files.tree`.
+   * Expects: params checked by `treeParams`.
+   * Output: the parsed level.
+   * Throws: the daemon's code, or `BAD_RESPONSE` for a reply that
+   * does not parse.
+   */
+  private async tree(params: { space: string; folder?: string }): Promise<HwBrowse> {
+    const level = parseBrowse(await this.hwCall({ cmd: 'files', ...params }));
+    if (!level) throw new AppError('BAD_RESPONSE');
+    return level;
+  }
+
+  /**
+   * Files of a task's work with the user's `sub`.
+   *
+   * Call: rpc `task.files`.
+   * Expects: a checked task id.
+   * Output: `{ id, files, me }`; `id` lets the window drop a reply
+   * for a task it no longer shows.
+   * Throws: like `workFiles`.
+   */
+  private async taskFiles(taskId: string): Promise<Methods['task.files']['result']> {
+    const files = await this.workFiles(taskId);
+    return { id: taskId, files, me: await this.mySub() };
+  }
+
+  /**
+   * Reads all pages of a task's work files.
+   *
+   * Call: `await this.workFiles(taskId)`.
+   * Expects: a checked task id.
+   * Output: the first page with the versions of up to
+   * `MAX_WORK_PAGES` pages appended; `cursor` is kept only when
+   * pages were left unread.
+   * Throws: like `workFilesPage`.
+   */
+  private async workFiles(taskId: string): Promise<HwWorkFiles> {
+    const workId = workIdFor(taskId);
+    const first = await this.workFilesPage(workId);
+    const versions = [...first.versions];
+    let cursor = first.cursor;
+    for (let page = 1; cursor && page < MAX_WORK_PAGES; page++) {
+      const next = await this.workFilesPage(workId, cursor);
+      versions.push(...next.versions);
+      cursor = next.cursor;
+    }
+    const { writer, closed, locks, hiddenLocks } = first;
+    return { writer, closed, locks, hiddenLocks, versions, ...(cursor ? { cursor } : {}) };
+  }
+
+  /**
+   * Reads one page of a work's files.
+   *
+   * Call: `await this.workFilesPage(workId, cursor?)`.
+   * Expects: a work id; the cursor of the previous page, if any.
+   * Output: the parsed page.
+   * Throws: the daemon's code, or `BAD_RESPONSE` for a reply that
+   * does not parse.
+   */
+  private async workFilesPage(workId: string, cursor?: string): Promise<HwWorkFiles> {
+    const page = parseWorkFiles(await this.hwCall({ cmd: 'work-files', workId, ...(cursor ? { cursor } : {}) }));
+    if (!page) throw new AppError('BAD_RESPONSE');
+    return page;
+  }
+
+  /**
+   * The user's `sub` (compared with a work's `writer`).
+   *
+   * Call: `await this.mySub()`.
+   * Expects: nothing.
+   * Output: `sub` of the stored access token, `null` without a
+   * session, when the keychain refuses or for an odd token.
+   */
+  private async mySub(): Promise<string | null> {
+    const s = await this.session.current().catch(() => null);
+    return s ? subOf(s.accessToken) : null;
+  }
+
+  /**
    * Lets the user pick files under the root.
    *
    * Call: `await this.pickUnderRoot()`.
@@ -484,38 +594,38 @@ export class Controller {
    *
    * Call: rpc `task.lockFiles`.
    * Expects: a checked task id.
-   * Output: `{ paths }` = all paths this computer holds for the task;
-   * one `lock` per space, each remembered once the daemon agreed.
-   * Throws: `OUTSIDE` before any call, or the daemon's code.
+   * Output: `{ paths }` = the picked paths; one `lock` per space.
+   * Throws: `OUTSIDE` before any call, or the daemon's code (spaces
+   * locked before it stay locked).
    */
   private async lockFiles(taskId: string): Promise<{ paths: string[] }> {
     const { root, paths } = await this.pickUnderRoot();
     for (const group of groupBySpace(paths, root)) {
       await this.fileAction({ cmd: 'lock', workId: workIdFor(taskId), paths: group });
-      rememberLocked(this.ports.store, taskId, group);
     }
-    return { paths: lockedPaths(this.ports.store, taskId) };
+    return { paths };
   }
 
   /**
-   * Releases the files this computer locked for a task (D11).
+   * Releases one lock or every visible lock of a task.
    *
    * Call: rpc `task.releaseFiles`.
-   * Expects: a checked task id.
-   * Output: `{ paths }` released; one `release` per space, each
-   * forgotten once the daemon agreed.
-   * Throws: the daemon's code (already released groups stay
-   * forgotten).
+   * Expects: a checked task id; params with `space` + `path` name
+   * one lock, without them the locks of `work-files` are released.
+   * Output: `{ paths }` released (space paths); one `release` per
+   * space.
+   * Throws: `BAD_REQUEST` for a bad space path, or the daemon's
+   * code (spaces released before it stay released).
    */
-  private async releaseFiles(taskId: string): Promise<{ paths: string[] }> {
-    const paths = lockedPaths(this.ports.store, taskId);
-    if (!paths.length) return { paths };
-    const root = await this.filesRoot();
-    for (const group of groupBySpace(paths, root)) {
-      await this.fileAction({ cmd: 'release', paths: group });
-      forgetLocked(this.ports.store, taskId, group);
+  private async releaseFiles(taskId: string, params: unknown): Promise<{ paths: string[] }> {
+    if (field(params, 'space') !== undefined || field(params, 'path') !== undefined) {
+      const { space, path } = spacePathParams(params);
+      await this.fileAction({ cmd: 'release', space, paths: [path] });
+      return { paths: [path] };
     }
-    return { paths };
+    const groups = locksBySpace((await this.workFilesPage(workIdFor(taskId))).locks);
+    for (const group of groups) await this.fileAction({ cmd: 'release', ...group });
+    return { paths: groups.flatMap((g) => g.paths) };
   }
 
   /**
@@ -846,18 +956,18 @@ function text(params: unknown, name: string): string {
 }
 
 /** Methods served by `fileHandlers`. */
-type FileMethod = Extract<keyof Methods, `files.${string}` | 'task.lockFiles' | 'task.releaseFiles' | 'task.lockedFiles'>;
+type FileMethod = Extract<keyof Methods, `files.${string}` | 'task.lockFiles' | 'task.releaseFiles' | 'task.files'>;
 
 /**
  * Reads a task id param.
  *
- * Call: `taskIdParam(params)`.
- * Expects: anything as params.
+ * Call: `taskIdParam(params)`; `taskIdParam(params, 'taskId')`.
+ * Expects: anything as params; the field name defaults to `id`.
  * Output: the id.
  * Throws: `AppError('BAD_TASK_ID')` unless it matches the pattern.
  */
-function taskIdParam(params: unknown): string {
-  const id = text(params, 'id');
+function taskIdParam(params: unknown, name = 'id'): string {
+  const id = text(params, name);
   if (!TASK_ID_PATTERN.test(id)) throw new AppError('BAD_TASK_ID');
   return id;
 }
@@ -892,6 +1002,40 @@ function scopeParams(params: unknown): { space: string; topics?: string[] } {
   if (topics === undefined) return { space };
   if (!Array.isArray(topics) || !topics.every(isName)) throw new AppError('BAD_REQUEST');
   return { space, topics };
+}
+
+/**
+ * Reads a space and a path inside it.
+ *
+ * Call: `spacePathParams(params)`; `(params, true)` for `history`.
+ * Expects: anything as params; `folderOk` allows a folder path
+ * (`''` or a trailing `/`).
+ * Output: `{ space, path }`.
+ * Throws: `AppError('BAD_REQUEST')` for a bad name or path (an
+ * absolute local path, `..`, empty segments, control characters).
+ */
+function spacePathParams(params: unknown, folderOk = false): { space: string; path: string } {
+  const space = text(params, 'space');
+  const path = field(params, 'path');
+  if (!isName(space) || typeof path !== 'string' || !isSpacePath(path, folderOk)) throw new AppError('BAD_REQUEST');
+  return { space, path };
+}
+
+/**
+ * Reads the params of `files.tree`.
+ *
+ * Call: `treeParams(params)`.
+ * Expects: anything as params.
+ * Output: `{ space }` plus `folder` when given (`''` = root).
+ * Throws: `AppError('BAD_REQUEST')` for a bad space or folder.
+ */
+function treeParams(params: unknown): { space: string; folder?: string } {
+  const space = text(params, 'space');
+  const folder = field(params, 'folder');
+  if (!isName(space)) throw new AppError('BAD_REQUEST');
+  if (folder === undefined) return { space };
+  if (typeof folder !== 'string' || !isSpacePath(folder, true)) throw new AppError('BAD_REQUEST');
+  return { space, folder };
 }
 
 /**

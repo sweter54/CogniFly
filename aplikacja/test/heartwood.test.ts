@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  checkReply, fileCounts, forgetLocked, groupBySpace, hwMessage, isUnderRoot, lockedPaths, parseBrowse, parseStatus, parseVersions, parseWorkFiles,
-  rememberLocked, workIdFor,
+  checkReply, fileCounts, groupBySpace, hwMessage, isSpacePath, isUnderRoot, locksBySpace, parseBrowse, parseStatus, parseVersions, parseWorkFiles, workIdFor,
 } from '../src/logic/heartwood.js';
-import { memoryStore } from '../src/logic/storage.js';
 import { STATUS_REPLY } from './helpers.js';
 
 
@@ -62,24 +60,18 @@ describe('hwMessage', () => {
   ])('%s', (code, message, text) => expect(hwMessage(code, message)).toBe(text));
 });
 
-describe('locked paths memory', () => {
-  it('remembers without duplicates and forgets', () => {
-    const store = memoryStore();
-    expect(lockedPaths(store, 'zad_1')).toEqual([]);
-    rememberLocked(store, 'zad_1', ['/a', '/b']);
-    rememberLocked(store, 'zad_1', ['/b', '/c']);
-    rememberLocked(store, 'zad_2', ['/z']);
-    expect(lockedPaths(store, 'zad_1')).toEqual(['/a', '/b', '/c']);
-    forgetLocked(store, 'zad_1', ['/a', '/b']);
-    expect(lockedPaths(store, 'zad_1')).toEqual(['/c']);
-    forgetLocked(store, 'zad_1', ['/c']);
-    expect(JSON.parse(store.getItem('cognifly.heartwood.locks')!)).toEqual({ zad_2: ['/z'] });
-  });
+describe('space paths', () => {
+  it.each([
+    ['a.docx', false, true], ['Oferty/a.docx', false, true], ['', false, false], ['a/', false, false],
+    ['/a', false, false], ['a//b', false, false], ['../a', false, false], ['a/./b', false, false], ['a\u0000b', false, false],
+    ['', true, true], ['Oferty/', true, true], ['Oferty', true, true], ['/', true, false], ['a//', true, false], ['../', true, false],
+  ])('%j (folder %s) → %s', (path, folderOk, ok) => expect(isSpacePath(path, folderOk)).toBe(ok));
 
-  it('ignores corrupt storage', () => {
-    const store = memoryStore();
-    store.setItem('cognifly.heartwood.locks', '{"zad_1": [1, "/a"]}');
-    expect(lockedPaths(store, 'zad_1')).toEqual(['/a']);
+  it('groups work locks by space in order of first appearance', () => {
+    const lock = (space: string, path: string) => ({ space, path, folder: false, by: 'u', at: '', workId: 'w', writer: null, localPath: null });
+    expect(locksBySpace([lock('ws:a', 'x'), lock('ws:b', 'y'), lock('ws:a', 'z')])).toEqual([
+      { space: 'ws:a', paths: ['x', 'z'] }, { space: 'ws:b', paths: ['y'] },
+    ]);
   });
 });
 
