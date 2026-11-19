@@ -2,6 +2,7 @@ import { kontekst, HttpBlad, type Odpowiedz, type ZdarzenieApi } from './konteks
 import { podsumowanie, skrzynkaOsoby } from './skrzynka.js';
 import { ocena, rozpocznij } from './dostarczenia.js';
 import { ja } from './ja.js';
+import { klientHeartwood, pliki } from './pliki.js';
 import { osoby, zglos } from './recenzje.js';
 import { akceptuj, biore, doPoprawy, odrzuc, przekaz, stan, szczegoly, usun, watek } from './zadania.js';
 import { zdarzenia } from './zdarzenia.js';
@@ -19,6 +20,7 @@ export async function handler(event: ZdarzenieApi) {
       'GET /zdarzenia': (k) => zdarzenia(k, event.queryStringParameters),
       'GET /skrzynka': (k) => skrzynkaOsoby(k),
       'GET /zadania/{id}': (k) => szczegoly(k, event.pathParameters?.id),
+      'GET /zadania/{id}/pliki': (k) => pliki(k, event.pathParameters?.id, klientHeartwood()),
       'POST /zadania/{id}/biore': (k) => biore(k, event.pathParameters?.id),
       'POST /zadania/{id}/stan': (k) => stan(k, event.pathParameters?.id, tresc(event)),
       'POST /zadania/{id}/przekaz': (k) => przekaz(k, event.pathParameters?.id, tresc(event)),

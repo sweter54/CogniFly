@@ -10,7 +10,7 @@
  *   --firma <id>             company id (required)
  *   --pula <id>              Cognito user pool id (required)
  *   --int-url <url>          Heartwood API base url (required)
- *   --tematy A,B             topics (default `Dokumenty`)
+ *   --tematy A,B             topics (default `Dokumenty`; `Zadania` always)
  *   --region <r>             SigV4 region of the API (default eu-central-1)
  *   --wykonaj                really call Cognito, DynamoDB and Heartwood
  *
@@ -33,6 +33,8 @@ export interface OpcjePlanu { firma: string; tematy: string[] }
 const WS = 'wspolne';
 const WS_NAZWA = 'Wspólne';
 const REGION = 'eu-central-1';
+/** Topic that always exists: task folders live under it. */
+const TEMAT_ZADAN = 'Zadania';
 
 /** One step of the feeding plan. */
 export type Krok =
@@ -66,7 +68,7 @@ export interface Zaleznosci {
  * Call: `planZasilenia(osoby, { firma, tematy })`.
  * Expects: people of the company (`sub` optional), topic names.
  * Output: steps in order: org, per person [lookup, person], workspace,
- *   topics, grants (`admin` for admins, `write` otherwise).
+ *   topics (`Zadania` is always added), grants (`admin` for admins, `write` otherwise).
  */
 export function planZasilenia(osoby: OsobaRejestru[], o: OpcjePlanu): Krok[] {
   const org = o.firma;
@@ -78,7 +80,7 @@ export function planZasilenia(osoby: OsobaRejestru[], o: OpcjePlanu): Krok[] {
     { typ: 'org', org, nazwa: org },
     ...ludzie,
     { typ: 'przestrzen', org, ws: WS, nazwa: WS_NAZWA },
-    ...o.tematy.map((temat): Krok => ({ typ: 'temat', org, ws: WS, temat })),
+    ...[...new Set([...o.tematy, TEMAT_ZADAN])].map((temat): Krok => ({ typ: 'temat', org, ws: WS, temat })),
     ...osoby.map((p): Krok => ({
       typ: 'prawo', org, ws: WS, osoba: p.osoba, right: p.rola === 'admin' ? 'admin' : 'write',
     })),

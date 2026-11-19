@@ -134,14 +134,14 @@ describe('stos CogniFly', () => {
     for (const s of stm) expect(s.Resource).not.toBe('*');
   });
 
-  test('HTTP API: webhook bez autoryzatora, 17 tras API z JWT (pula + klient)', () => {
+  test('HTTP API: webhook bez autoryzatora, 18 tras API z JWT (pula + klient)', () => {
     const trasy = zasoby('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
-    expect(trasy).toHaveLength(18);
+    expect(trasy).toHaveLength(19);
     const wh = trasy.find((r) => r.RouteKey === 'POST /webhook/github/{firma}');
     expect(wh).toBeDefined();
     expect(wh.AuthorizationType ?? 'NONE').toBe('NONE');
     expect(wh.AuthorizerId).toBeUndefined();
-    for (const k of ['GET /zdarzenia', 'GET /skrzynka', 'GET /zadania/{id}', 'POST /zadania/{id}/biore', 'POST /zadania/{id}/stan', 'POST /zadania/{id}/przekaz', 'POST /zadania/{id}/odrzuc', 'POST /zadania/{id}/usun', 'POST /zadania/{id}/watek', 'POST /zadania/{id}/akceptuj', 'POST /zadania/{id}/do-poprawy', 'GET /podsumowanie', 'GET /ja']) {
+    for (const k of ['GET /zdarzenia', 'GET /skrzynka', 'GET /zadania/{id}', 'GET /zadania/{id}/pliki', 'POST /zadania/{id}/biore', 'POST /zadania/{id}/stan', 'POST /zadania/{id}/przekaz', 'POST /zadania/{id}/odrzuc', 'POST /zadania/{id}/usun', 'POST /zadania/{id}/watek', 'POST /zadania/{id}/akceptuj', 'POST /zadania/{id}/do-poprawy', 'GET /podsumowanie', 'GET /ja']) {
       const r = trasy.find((x) => x.RouteKey === k);
       expect(r, k).toBeDefined();
       expect(r.AuthorizationType).toBe('JWT');
@@ -302,6 +302,26 @@ describe('stos z kontekstem heartwood', () => {
         Environment: { Variables: Match.objectLike({ HEARTWOOD_INT_URL: 'https://hw.example.com/prod' }) },
       });
     }
+  });
+
+  test('Api: HEARTWOOD_INT_URL i Invoke tylko z kontekstem heartwood', () => {
+    const zInvoke = (tpl: Template) => Object.values<any>(tpl.toJSON().Resources).filter((r) =>
+      r.Type === 'AWS::IAM::Policy'
+      && r.Properties.Roles.some((x: any) => /^ApiServiceRole/.test(x.Ref))
+      && r.Properties.PolicyDocument.Statement.some((st: any) => st.Action === 'execute-api:Invoke'));
+    const apiEnv = (tpl: Template) => Object.values<any>(tpl.toJSON().Resources).find((r) =>
+      r.Type === 'AWS::Lambda::Function' && r.Properties.FunctionName === 'cognifly-test-api')!
+      .Properties.Environment.Variables;
+    expect(zInvoke(t)).toHaveLength(0);
+    expect(apiEnv(t)).not.toHaveProperty('HEARTWOOD_INT_URL');
+    const t2 = Template.fromStack(zbuduj({ ...KONTEKST, heartwood: HW }));
+    expect(apiEnv(t2)).toMatchObject({ HEARTWOOD_INT_URL: 'https://hw.example.com/prod' });
+    const [p] = zInvoke(t2);
+    expect(p.Properties.PolicyDocument.Statement.filter((st: any) => st.Action === 'execute-api:Invoke'))
+      .toEqual([{
+        Action: 'execute-api:Invoke', Effect: 'Allow',
+        Resource: 'arn:aws:execute-api:eu-west-1:111122223333:abc123/*/*/int/*',
+      }]);
   });
 
   test('z kontekstem: DLQ strumienia i reguły, alarmy błędów i DLQ', () => {

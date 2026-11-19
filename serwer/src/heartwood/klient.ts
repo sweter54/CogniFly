@@ -14,8 +14,31 @@ export type Signer = (req: SignReq) => Promise<Record<string, string>>;
 /** Access right of a person in a workspace. */
 export type Right = 'none' | 'read' | 'write' | 'admin';
 
-/** Heartwood integration API (all calls are idempotent PUTs). */
+/** A live lock of a work, tagged with its space (`ws:..`/`user:..`). */
+export type WorkFileLock = {
+  space: string; ws: string; path: string; workId: string; folder: boolean;
+  by: string; at: string; writer: string | null;
+};
+
+/** A version saved under a work, tagged with its space and path. */
+export type WorkFileVersion = {
+  space: string; path: string; seq: number; versionId?: string; sha256?: string;
+  size?: number; author: string; workId?: string; at: string;
+  kind: 'put' | 'restore' | 'move' | 'delete'; fromSeq?: number; fromPath?: string;
+};
+
+/** Files of one work (Heartwood contract 3.5); `sub`s as identities. */
+export type WorkFilesResponse = {
+  writer: string | null; closed: boolean; locks: WorkFileLock[];
+  hiddenLocks: number; versions: WorkFileVersion[]; cursor?: string;
+};
+
+/** Most version pages `getWorkFiles` fetches (100 versions each). */
+export const MAX_WORK_FILE_PAGES = 20;
+
+/** Heartwood integration API (idempotent PUTs and work-files GET). */
 export interface IntClient {
+  getWorkFiles(org: string, workId: string): Promise<WorkFilesResponse>;
   putWork(org: string, workId: string, s: { writer: string | null; closed: boolean }): Promise<void>;
   putOrg(org: string, name: string): Promise<void>;
   putPerson(org: string, sub: string, isAdmin: boolean): Promise<void>;
@@ -98,7 +121,43 @@ export function intClient(o: {
     if (!res.ok) throw await errorOf(res);
   }
 
+  /**
+   * Sends one signed GET under `/int` and parses the JSON answer.
+   *
+   * Call: `await get<T>("/orgs/x/work/y/files?cursor=c")`.
+   * Expects: an encoded path (with optional query).
+   * Output: the parsed body; non-2xx throws `IntError`.
+   */
+  async function get<T>(path: string): Promise<T> {
+    const url = `${base}/int${path}`;
+    const headers = await sign({ method: 'GET', url, headers: {}, body: '' });
+    const res = await doFetch(url, { method: 'GET', headers });
+    if (!res.ok) throw await errorOf(res);
+    return (await res.json()) as T;
+  }
+
+  /**
+   * Reads the files of a work, merging version pages.
+   *
+   * Call: `await getWorkFiles(org, workId)`.
+   * Expects: org and work id (encoded here).
+   * Output: first page's writer/closed/locks/hiddenLocks, versions of
+   * up to `MAX_WORK_FILE_PAGES` pages; `cursor` left only if truncated.
+   */
+  async function getWorkFiles(org: string, workId: string): Promise<WorkFilesResponse> {
+    const path = `/orgs/${e(org)}/work/${e(workId)}/files`;
+    const first = await get<WorkFilesResponse>(path);
+    const out: WorkFilesResponse = { ...first, versions: [...first.versions] };
+    for (let n = 1; out.cursor && n < MAX_WORK_FILE_PAGES; n++) {
+      const page = await get<WorkFilesResponse>(`${path}?cursor=${e(out.cursor)}`);
+      out.versions.push(...page.versions);
+      if (page.cursor) out.cursor = page.cursor; else delete out.cursor;
+    }
+    return out;
+  }
+
   return {
+    getWorkFiles,
     putWork: (org, id, s) => put(`/orgs/${e(org)}/work/${e(id)}`, s),
     putOrg: (org, name) => put(`/orgs/${e(org)}`, { name }),
     putPerson: (org, sub, isAdmin) => put(`/orgs/${e(org)}/people/${e(sub)}`, { isAdmin }),
