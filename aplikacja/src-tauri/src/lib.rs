@@ -3,14 +3,17 @@
 //! Only wiring lives here: official plugins (HTTP, notifications, log,
 //! opener for `claude://` links only, dialog for the folder picker,
 //! deep link `cognifly://` to show a task),
-//! the keychain commands and window behaviour. All business logic is in
-//! the TypeScript UI (`aplikacja/src`).
+//! the keychain commands, the Heartwood daemon commands and window
+//! behaviour. Business logic is in the TypeScript UI (`aplikacja/src`);
+//! daemon supervision and its socket API are in `heartwood/`.
 
+pub mod heartwood;
 pub mod vault;
 
 /// First CLI argument that switches the binary to token-printing mode.
 pub const TOKEN_ARG: &str = "heartwood-token";
 
+use heartwood::supervisor::Supervisor;
 use tauri::{AppHandle, Manager, RunEvent, Runtime, Window, WindowEvent};
 
 /// Label of the hidden window that owns the session and the tray icon.
@@ -82,14 +85,15 @@ fn show_main<R: Runtime>(app: &AppHandle<R>) {
 ///
 /// Call: from the run loop with each event.
 /// Expects: any event.
-/// Output: a Dock-icon click (`Reopen`) shows the main window.
+/// Output: a Dock-icon click (`Reopen`) shows the main window; on
+/// `Exit` the Heartwood daemon is killed.
 fn on_run_event<R: Runtime>(app: &AppHandle<R>, event: RunEvent) {
-    #[cfg(target_os = "macos")]
-    if let RunEvent::Reopen { .. } = event {
-        show_main(app);
+    match event {
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => show_main(app),
+        RunEvent::Exit => app.state::<Supervisor>().shutdown(),
+        _ => {}
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = (app, event);
 }
 
 /// Configures logging (stdout + log file in the app log directory).
@@ -132,8 +136,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             vault::vault_read,
             vault::vault_write,
-            vault::vault_delete
+            vault::vault_delete,
+            heartwood::heartwood_start,
+            heartwood::heartwood_stop,
+            heartwood::heartwood_info,
+            heartwood::heartwood_call
         ])
+        .manage(Supervisor::default())
         .setup(|app| {
             set_in_dock(app.handle(), false);
             Ok(())

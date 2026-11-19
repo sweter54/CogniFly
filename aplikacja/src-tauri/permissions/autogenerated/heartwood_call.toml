@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-heartwood-call"
+description = "Enables the heartwood_call command without any pre-configured scope."
+commands.allow = ["heartwood_call"]
+
+[[permission]]
+identifier = "deny-heartwood-call"
+description = "Denies the heartwood_call command without any pre-configured scope."
+commands.deny = ["heartwood_call"]
