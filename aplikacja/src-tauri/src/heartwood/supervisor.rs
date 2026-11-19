@@ -7,7 +7,7 @@
 //! orphan with a stale config is replaced on the next start.
 
 use super::config::{socket_path, Resolved};
-use super::orphan::{self, Answering};
+use super::orphan::{self, Answering, Ownership};
 use super::socket::probe;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -36,9 +36,10 @@ const READY_GRACE: Duration = Duration::from_secs(5);
 const READY_POLL: Duration = Duration::from_millis(250);
 /// How long stopping waits for the supervisor task to finish.
 const STOP_WAIT: Duration = Duration::from_secs(5);
-/// How long our stale orphan gets to exit after SIGTERM (and again
-/// after SIGKILL); twice this stays below `STOP_WAIT`.
-const ORPHAN_WAIT: Duration = Duration::from_secs(2);
+/// How long our orphan gets to exit after SIGTERM (and again after
+/// SIGKILL). Both waits plus `ps` checks stay well below `STOP_WAIT`,
+/// so stopping an adopted own orphan finishes inside `halt`.
+const ORPHAN_WAIT: Duration = Duration::from_secs(1);
 
 /// Lifecycle phase reported to the UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -232,10 +233,14 @@ impl Supervisor {
 ///
 /// Call: `halt(running).await`.
 /// Expects: a running supervisor.
-/// Output: none; waits at most `STOP_WAIT`.
+/// Output: none; waits at most `STOP_WAIT`, then aborts the task
+/// (its child, if any, is killed on drop).
 async fn halt(running: Running) {
     let _ = running.stop.send(());
-    let _ = tokio::time::timeout(STOP_WAIT, running.task).await;
+    let mut task = running.task;
+    if tokio::time::timeout(STOP_WAIT, &mut task).await.is_err() {
+        task.abort();
+    }
 }
 
 /// Restart delay after a number of earlier restarts.
@@ -318,55 +323,78 @@ async fn mark_ready(socket: &Path, status: &Shared) -> Outcome {
 
 /// Handles a socket that already answers before we spawn.
 ///
-/// Call: `on_answering(&launch.config).await` after `probe` is true.
-/// Expects: the resolved config of the launch.
+/// Call: `on_answering(&launch).await` after `probe` is true.
+/// Expects: the launch (binary and resolved config).
 /// Output: `Some(External)` for a daemon not provably ours (also
 /// the user's own config), `Some(AdoptedOwn)` for our orphan with
-/// the same config, `None` once our stale orphan is terminated (so
-/// the caller spawns ours). A failed termination adopts it.
-async fn on_answering(config: &Resolved) -> Option<Outcome> {
-    let digest = config.text.as_deref().map(orphan::digest);
-    let record = orphan::load(&config.path);
-    let alive = match &record {
-        Some(r) => orphan::is_live_daemon(r.pid).await,
+/// the same launch, `None` once our stale orphan is terminated (so
+/// the caller spawns ours). A failed termination drops the record
+/// and adopts it, so later re-checks never signal it again.
+async fn on_answering(launch: &Launch) -> Option<Outcome> {
+    let config = &launch.config.path;
+    let digest = launch_digest(launch);
+    let record = orphan::load(config);
+    let ours = match &record {
+        Some(r) => orphan::ownership(r.pid, config).await == Ownership::Ours,
         None => false,
     };
-    match (orphan::decide(record.as_ref(), alive, digest.as_deref()), record) {
+    match (orphan::decide(record.as_ref(), ours, digest.as_deref()), record) {
         (Answering::AdoptOwn, Some(r)) => {
             Some(Outcome::AdoptedOwn { pid: r.pid })
         }
         (Answering::ReplaceOrphan, Some(r)) => {
             log::warn!("heartwood: stopping stale daemon pid {}", r.pid);
-            if orphan::terminate(r.pid, ORPHAN_WAIT).await {
-                orphan::clear(&config.path);
-                return None;
-            }
-            Some(Outcome::External)
+            let ended = orphan::terminate(r.pid, config, ORPHAN_WAIT).await;
+            orphan::clear_if(config, r.pid);
+            (!ended).then_some(Outcome::External)
         }
         _ => Some(Outcome::External),
     }
 }
 
+/// Digest of a launch for the orphan record.
+///
+/// Call: `launch_digest(&launch)`.
+/// Expects: a launch.
+/// Output: `orphan::launch_digest` of binary and config text;
+/// `None` for the user's own config (never recorded).
+fn launch_digest(launch: &Launch) -> Option<String> {
+    let text = launch.config.text.as_deref()?;
+    Some(orphan::launch_digest(&launch.bin, text))
+}
+
 /// Records our freshly spawned child for the orphan check.
 ///
-/// Call: `remember(&launch, &child)` right after spawning.
-/// Expects: the launch and its child.
+/// Call: `remember(&launch, pid)` right after spawning.
+/// Expects: the launch and its child's PID.
 /// Output: none; only a generated config (`text` set) is recorded.
-fn remember(launch: &Launch, child: &Child) {
-    if let (Some(text), Some(pid)) = (&launch.config.text, child.id()) {
-        orphan::save(&launch.config.path, pid, &orphan::digest(text));
+fn remember(launch: &Launch, pid: u32) {
+    if let Some(digest) = launch_digest(launch) {
+        orphan::save(&launch.config.path, pid, &digest);
     }
 }
 
-/// Forgets our child once it has stopped or exited.
+/// Forgets a daemon of ours once it has ended.
 ///
-/// Call: `forget(&launch)` after the child ended.
-/// Expects: the launch whose child was recorded.
-/// Output: none; the record is removed for a generated config.
-fn forget(launch: &Launch) {
+/// Call: `forget(&launch, pid)` after our child or adopted own
+/// orphan ended.
+/// Expects: the launch and that daemon's PID.
+/// Output: none; the record is removed only while it still names
+/// this PID (a newer record is kept).
+fn forget(launch: &Launch, pid: u32) {
     if launch.config.text.is_some() {
-        orphan::clear(&launch.config.path);
+        orphan::clear_if(&launch.config.path, pid);
     }
+}
+
+/// Whether stop was requested (or its sender dropped).
+///
+/// Call: `stop_requested(&mut stopped)` right before spawning.
+/// Expects: the stop receiver, not yet completed.
+/// Output: `true` when the caller must stop; the receiver must not
+/// be polled again then.
+fn stop_requested(stopped: &mut oneshot::Receiver<()>) -> bool {
+    !matches!(stopped.try_recv(), Err(oneshot::error::TryRecvError::Empty))
 }
 
 /// Runs the daemon once, until it exits or stop is requested.
@@ -376,7 +404,8 @@ fn forget(launch: &Launch) {
 /// Output: `External` / `AdoptedOwn` when a daemon already answers
 /// on the socket (nothing spawned; see `on_answering`), `Stopped`
 /// (child killed) or `Crashed` with the reason and how long the
-/// child ran. Our child is recorded while it runs.
+/// child ran. Our child is recorded while it runs; a stop requested
+/// while an orphan was handled spawns nothing.
 async fn run_once(
     launch: &Launch,
     status: &Shared,
@@ -384,22 +413,30 @@ async fn run_once(
 ) -> Outcome {
     let socket = socket_path(&launch.config.root);
     if probe(&socket).await {
-        if let Some(outcome) = on_answering(&launch.config).await {
+        if let Some(outcome) = on_answering(launch).await {
             return outcome;
         }
+    }
+    if stop_requested(stopped) {
+        return Outcome::Stopped;
     }
     let started = Instant::now();
     let mut child = match spawn_daemon(launch) {
         Ok(child) => child,
         Err(error) => return Outcome::Crashed { error, uptime: Duration::ZERO },
     };
-    remember(launch, &child);
+    let pid = child.id();
+    if let Some(pid) = pid {
+        remember(launch, pid);
+    }
     if let Some(stderr) = child.stderr.take() {
         forward_stderr(stderr);
     }
     let outcome =
         watch_child(&mut child, &socket, status, stopped, started).await;
-    forget(launch);
+    if let Some(pid) = pid {
+        forget(launch, pid);
+    }
     outcome
 }
 
@@ -487,16 +524,16 @@ fn record_own(status: &Shared) -> Duration {
 /// Call: `stop_own(&launch, pid).await` when stop is requested
 /// while an `AdoptedOwn` daemon runs.
 /// Expects: the launch and the PID from the record.
-/// Output: none; the PID is terminated only if it is still a live
-/// `heartwood` named in the current record, then the record is
+/// Output: none; the PID is terminated only while the record still
+/// names it and `ownership` says `Ours`, then that record is
 /// removed.
 async fn stop_own(launch: &Launch, pid: u32) {
-    let recorded =
-        orphan::load(&launch.config.path).is_some_and(|r| r.pid == pid);
-    if recorded && orphan::is_live_daemon(pid).await {
-        orphan::terminate(pid, ORPHAN_WAIT).await;
+    let config = &launch.config.path;
+    let recorded = orphan::load(config).is_some_and(|r| r.pid == pid);
+    if recorded && orphan::ownership(pid, config).await == Ownership::Ours {
+        orphan::terminate(pid, config, ORPHAN_WAIT).await;
     }
-    forget(launch);
+    forget(launch, pid);
 }
 
 /// Supervisor loop: runs the daemon and restarts it with backoff.
@@ -621,22 +658,67 @@ mod process_tests {
         l
     }
 
-    /// Starts a detached `sleep 30` under a chosen file name.
+    /// A detached fake daemon process, killed when dropped.
+    struct Fake {
+        pid: u32,
+    }
+
+    impl Drop for Fake {
+        /// Call: implicit at the end of a test.
+        /// Expects: nothing.
+        /// Output: none; its `sleep` child and the process get
+        /// SIGKILL (errors ignored).
+        fn drop(&mut self) {
+            let _ = std::process::Command::new("/usr/bin/pkill")
+                .args(["-KILL", "-P", &self.pid.to_string()])
+                .status();
+            let _ = std::process::Command::new("/bin/kill")
+                .args(["-KILL", &self.pid.to_string()])
+                .stderr(Stdio::null())
+                .status();
+        }
+    }
+
+    /// Starts a detached process that looks like a daemon in `ps`.
     ///
-    /// Call: `detached(&dir, "heartwood")`.
-    /// Expects: a temp directory and the executable name to use.
-    /// Output: the PID of `/bin/sleep` run through a symlink (a copy
-    /// of a signed system binary is killed on macOS), reparented
-    /// away from the test so it is reaped once killed.
-    fn detached(dir: &Path, name: &str) -> u32 {
-        let bin = dir.join(name);
-        std::os::unix::fs::symlink("/bin/sleep", &bin).unwrap();
-        let cmd = format!("'{}' 30 >/dev/null 2>&1 & echo $!", bin.display());
-        let out = std::process::Command::new("sh")
+    /// Call: `fake_daemon(&dir, "heartwood", &config)`.
+    /// Expects: a temp directory, the name for `argv[0]` and the
+    /// config path for its command line.
+    /// Output: a `/bin/sh` waiting ~60 s whose `comm` is
+    /// `<dir>/<name>` and whose args end with `--config <config>
+    /// daemon` (returned only once `ps` shows that, so no exec race);
+    /// reparented away from the test so it is reaped.
+    fn fake_daemon(dir: &Path, name: &str, config: &Path) -> Fake {
+        let pid_file = dir.join(format!("{name}.fakepid"));
+        let cmd = format!(
+            "exec -a '{}' /bin/sh -c 'sleep 60; :' sh --config '{}' daemon \
+             & echo $! > '{}'",
+            dir.join(name).display(),
+            config.display(),
+            pid_file.display()
+        );
+        // No pipes: `output()` could wait for the background child.
+        std::process::Command::new("/bin/sh")
             .args(["-c", &cmd])
-            .output()
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
             .unwrap();
-        String::from_utf8_lossy(&out.stdout).trim().parse().unwrap()
+        let text = std::fs::read_to_string(&pid_file).unwrap();
+        let pid = text.trim().parse().unwrap();
+        let fake = Fake { pid };
+        for _ in 0..100 {
+            let ps = std::process::Command::new("/bin/ps")
+                .args(["-p", &pid.to_string(), "-o", "args="])
+                .output()
+                .unwrap();
+            if String::from_utf8_lossy(&ps.stdout).trim_end().ends_with("daemon") {
+                return fake;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("fake daemon {pid} did not start");
     }
 
     /// Whether a PID is alive.
@@ -664,23 +746,57 @@ mod process_tests {
         answer_forever(tokio::net::UnixListener::bind(&sock).unwrap());
     }
 
+    /// Digest the supervisor records for a launch with that text.
+    ///
+    /// Call: `digest_of(&launch)`.
+    /// Expects: a launch with a config text.
+    /// Output: `orphan::launch_digest` of its binary and text.
+    fn digest_of(l: &Launch) -> String {
+        orphan::launch_digest(&l.bin, l.config.text.as_deref().unwrap())
+    }
+
+    /// Adopted-or-external check for a recorded fake that must live.
+    ///
+    /// Call: `assert_untouched(&dir, "sleepy", &other_cfg).await`.
+    /// Expects: the fake's name and the config on its command line.
+    /// Output: none; panics unless the fake survives and the socket
+    /// is adopted as external.
+    async fn assert_untouched(dir: &Path, name: &str, fake_cfg: &Path) {
+        fake_socket(dir);
+        let fake = fake_daemon(dir, name, fake_cfg);
+        let l = own_launch(dir, script(dir, "exit 1"), "new");
+        orphan::save(&l.config.path, fake.pid, "0000000000000000");
+        let sup = Supervisor::default();
+        sup.start(l).await;
+        let adopted = wait_until(Duration::from_secs(5), || {
+            sup.info().last_error.as_deref() == Some(EXTERNAL_NOTE)
+        })
+        .await;
+        assert!(adopted, "{:?}", sup.info());
+        assert!(alive(fake.pid), "a process that is not ours was killed");
+        sup.stop(Phase::Disabled).await;
+        assert!(alive(fake.pid), "stop killed a process that is not ours");
+    }
+
     #[tokio::test]
     async fn stale_orphan_is_replaced_and_ours_recorded() {
         let dir = temp_dir();
         fake_socket(&dir);
-        let pid = detached(&dir, "heartwood");
         let cfg = dir.join("hw.toml");
-        orphan::save(&cfg, pid, &orphan::digest("old"));
+        let fake = fake_daemon(&dir, "heartwood", &cfg);
+        orphan::save(&cfg, fake.pid, "0000000000000000");
         let marker = dir.join("spawned");
         let body = format!("touch '{}'\nexec sleep 30", marker.display());
+        let l = own_launch(&dir, script(&dir, &body), "new");
+        let want = digest_of(&l);
         let sup = Supervisor::default();
-        sup.start(own_launch(&dir, script(&dir, &body), "new")).await;
+        sup.start(l).await;
         let up = wait_until(Duration::from_secs(10), || marker.exists()).await;
         assert!(up, "{:?}", sup.info());
-        assert!(!alive(pid), "stale orphan still running");
+        assert!(!alive(fake.pid), "stale orphan still running");
         let rec = orphan::load(&cfg).expect("record of our child");
-        assert_eq!(rec.digest, orphan::digest("new"));
-        assert_ne!(rec.pid, pid);
+        assert_eq!(rec.digest, want);
+        assert_ne!(rec.pid, fake.pid);
         sup.stop(Phase::Disabled).await;
         assert!(orphan::load(&cfg).is_none(), "record kept after stop");
     }
@@ -689,12 +805,14 @@ mod process_tests {
     async fn same_config_orphan_is_adopted_without_note() {
         let dir = temp_dir();
         fake_socket(&dir);
-        let pid = detached(&dir, "heartwood");
-        orphan::save(&dir.join("hw.toml"), pid, &orphan::digest("same"));
+        let cfg = dir.join("hw.toml");
+        let fake = fake_daemon(&dir, "heartwood", &cfg);
         let marker = dir.join("spawned");
         let body = format!("touch '{}'", marker.display());
+        let l = own_launch(&dir, script(&dir, &body), "same");
+        orphan::save(&cfg, fake.pid, &digest_of(&l));
         let sup = Supervisor::default();
-        sup.start(own_launch(&dir, script(&dir, &body), "same")).await;
+        sup.start(l).await;
         let running = wait_until(Duration::from_secs(5), || {
             sup.info().state == Phase::Running
         })
@@ -702,27 +820,26 @@ mod process_tests {
         assert!(running, "{:?}", sup.info());
         assert_eq!(sup.info().last_error, None);
         assert!(!marker.exists(), "own daemon must not be spawned");
-        assert!(alive(pid));
-        sup.stop(Phase::Disabled).await;
-        let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+        assert!(alive(fake.pid));
     }
 
     #[tokio::test]
     async fn adopted_own_orphan_is_stopped_like_our_child() {
         let dir = temp_dir();
         fake_socket(&dir);
-        let pid = detached(&dir, "heartwood");
         let cfg = dir.join("hw.toml");
-        orphan::save(&cfg, pid, &orphan::digest("same"));
+        let fake = fake_daemon(&dir, "heartwood", &cfg);
+        let l = own_launch(&dir, script(&dir, "exit 1"), "same");
+        orphan::save(&cfg, fake.pid, &digest_of(&l));
         let sup = Supervisor::default();
-        sup.start(own_launch(&dir, script(&dir, "exit 1"), "same")).await;
+        sup.start(l).await;
         let running = wait_until(Duration::from_secs(5), || {
             sup.info().state == Phase::Running
         })
         .await;
         assert!(running, "{:?}", sup.info());
         sup.stop(Phase::Disabled).await;
-        let gone = wait_until(Duration::from_secs(5), || !alive(pid)).await;
+        let gone = wait_until(Duration::from_secs(5), || !alive(fake.pid)).await;
         assert!(gone, "adopted own orphan still running after stop");
         assert!(orphan::load(&cfg).is_none(), "record kept after stop");
     }
@@ -730,19 +847,15 @@ mod process_tests {
     #[tokio::test]
     async fn recorded_pid_of_other_program_is_never_killed() {
         let dir = temp_dir();
-        fake_socket(&dir);
-        let pid = detached(&dir, "sleepy");
-        orphan::save(&dir.join("hw.toml"), pid, &orphan::digest("old"));
-        let sup = Supervisor::default();
-        sup.start(own_launch(&dir, script(&dir, "exit 1"), "new")).await;
-        let adopted = wait_until(Duration::from_secs(5), || {
-            sup.info().last_error.as_deref() == Some(EXTERNAL_NOTE)
-        })
-        .await;
-        assert!(adopted, "{:?}", sup.info());
-        assert!(alive(pid), "a foreign process was killed");
-        sup.stop(Phase::Disabled).await;
-        let _ = std::process::Command::new("kill").arg(pid.to_string()).status();
+        let cfg = dir.join("hw.toml");
+        assert_untouched(&dir, "sleepy", &cfg).await;
+    }
+
+    #[tokio::test]
+    async fn heartwood_with_other_config_is_never_killed() {
+        let dir = temp_dir();
+        let other = dir.join("other.toml");
+        assert_untouched(&dir, "heartwood", &other).await;
     }
 
     #[tokio::test]

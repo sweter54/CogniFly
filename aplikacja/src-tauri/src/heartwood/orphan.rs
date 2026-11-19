@@ -53,6 +53,28 @@ pub fn digest(text: &str) -> String {
     format!("{:016x}", fnv1a64(text.as_bytes()))
 }
 
+/// Digest of a whole launch: binary path and config text.
+///
+/// Call: `launch_digest(&launch.bin, &text)`.
+/// Expects: the daemon binary and the config text it runs with.
+/// Output: `digest` of `<bin>\n<text>`, so a new binary also counts
+/// as a changed launch.
+pub fn launch_digest(bin: &Path, text: &str) -> String {
+    digest(&format!("{}\n{text}", bin.to_string_lossy()))
+}
+
+/// Whether `ps` output shows the daemon we spawn for a config.
+///
+/// Call: `is_our_daemon(&comm, &args, &config_path)`.
+/// Expects: `ps -o comm=` and `ps -o args=` of one PID and the
+/// config path that `spawn_daemon` passes.
+/// Output: `true` only for a `heartwood` executable whose command
+/// line ends with `--config <config> daemon`.
+pub fn is_our_daemon(comm: &str, args: &str, config: &Path) -> bool {
+    let tail = format!("--config {} daemon", config.to_string_lossy());
+    is_daemon_name(comm) && args.trim_end().ends_with(&tail)
+}
+
 /// Renders a record as file text.
 ///
 /// Call: `render(&record)` before writing the record file.
@@ -85,20 +107,20 @@ pub fn parse(text: &str) -> Option<Record> {
 
 /// Decides what to do with a socket that already answers.
 ///
-/// Call: `decide(record.as_ref(), alive, digest.as_deref())`.
-/// Expects: the record (if any), whether its PID is a live
-/// `heartwood` process, and the new config's digest (`None` when the
-/// config is the user's own file).
+/// Call: `decide(record.as_ref(), ours, digest.as_deref())`.
+/// Expects: the record (if any), whether `ownership` of its PID is
+/// `Ours` (`Unknown` counts as not ours), and the new launch digest
+/// (`None` when the config is the user's own file).
 /// Output: `ReplaceOrphan` only for our live orphan with another
 /// digest, `AdoptOwn` for the same digest, otherwise `Adopt`.
 pub fn decide(
     record: Option<&Record>,
-    alive: bool,
+    ours: bool,
     digest: Option<&str>,
 ) -> Answering {
     match (record, digest) {
-        (Some(r), Some(d)) if alive && r.digest == d => Answering::AdoptOwn,
-        (Some(_), Some(_)) if alive => Answering::ReplaceOrphan,
+        (Some(r), Some(d)) if ours && r.digest == d => Answering::AdoptOwn,
+        (Some(_), Some(_)) if ours => Answering::ReplaceOrphan,
         _ => Answering::Adopt,
     }
 }
@@ -132,7 +154,11 @@ pub fn record_path(config: &Path) -> PathBuf {
 pub fn save(config: &Path, pid: u32, digest: &str) {
     let text = render(&Record { pid, digest: digest.to_string() });
     let path = record_path(config);
-    if let Err(e) = super::config::write_private(&path, &text) {
+    let tmp = path.with_extension("pid.tmp");
+    let written = super::config::write_private(&tmp, &text)
+        .and_then(|()| std::fs::rename(&tmp, &path));
+    if let Err(e) = written {
+        let _ = std::fs::remove_file(&tmp);
         log::warn!("heartwood: cannot write {}: {e}", path.display());
     }
 }
@@ -147,99 +173,157 @@ pub fn load(config: &Path) -> Option<Record> {
     parse(&text)
 }
 
-/// Forgets the daemon record after our child has ended.
+/// Forgets the daemon record unconditionally.
 ///
-/// Call: `clear(&config_path)` once our child is stopped or exited.
+/// Call: `clear(&config_path)` (prefer `clear_if`).
 /// Expects: the config path.
 /// Output: none; the file is removed (a missing file is fine).
-pub fn clear(config: &Path) {
+fn clear(config: &Path) {
     let _ = std::fs::remove_file(record_path(config));
 }
 
-/// Whether a PID is a live `heartwood` process.
+/// Forgets the record only when it still names a given PID.
 ///
-/// Call: `is_live_daemon(pid).await`.
-/// Expects: a PID from the record.
-/// Output: `true` when `ps -p <pid> -o comm=` succeeds and names
-/// `heartwood`; a reused PID of another program gives `false`.
+/// Call: `clear_if(&config_path, pid)` once that daemon has ended
+/// or must no longer be touched.
+/// Expects: the config path and the PID being forgotten.
+/// Output: none; a record of another (newer) PID is kept.
+pub fn clear_if(config: &Path, pid: u32) {
+    if load(config).is_some_and(|r| r.pid == pid) {
+        clear(config);
+    }
+}
+
+/// What `ps` says about a recorded PID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ownership {
+    /// Our daemon for this config: `heartwood --config <it> daemon`.
+    Ours,
+    /// Gone, or another program / config: never touched.
+    NotOurs,
+    /// `ps` could not tell: treated as not ours, never killed.
+    Unknown,
+}
+
+/// One `ps` column of a PID.
+///
+/// Call: `ps_column(pid, "args=").await`.
+/// Expects: a PID and a `-o` column spec.
+/// Output: `Ok(Some(text))` while it runs, `Ok(None)` once gone
+/// (exit 1, no output), `Err(())` when `/bin/ps` failed otherwise.
 #[cfg(unix)]
-pub async fn is_live_daemon(pid: u32) -> bool {
-    let out = tokio::process::Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "comm="])
+async fn ps_column(pid: u32, column: &str) -> Result<Option<String>, ()> {
+    let out = tokio::process::Command::new("/bin/ps")
+        .args(["-p", &pid.to_string(), "-o", column])
+        .stderr(std::process::Stdio::null())
         .output()
-        .await;
-    match out {
-        Ok(o) if o.status.success() => {
-            is_daemon_name(&String::from_utf8_lossy(&o.stdout))
+        .await
+        .map_err(|_| ())?;
+    let text = String::from_utf8_lossy(&out.stdout).into_owned();
+    match out.status.code() {
+        Some(0) => Ok(Some(text)),
+        Some(1) if text.trim().is_empty() => Ok(None),
+        _ => Err(()),
+    }
+}
+
+/// Whether a PID is our daemon for a config.
+///
+/// Call: `ownership(pid, &config_path).await`.
+/// Expects: a PID from the record and the launch's config path.
+/// Output: `Ours` only when `is_our_daemon` accepts its `comm` and
+/// `args`; `NotOurs` when gone or different; `Unknown` on failure.
+#[cfg(unix)]
+pub async fn ownership(pid: u32, config: &Path) -> Ownership {
+    let comm = ps_column(pid, "comm=").await;
+    let args = ps_column(pid, "args=").await;
+    match (comm, args) {
+        (Ok(Some(c)), Ok(Some(a))) if is_our_daemon(&c, &a, config) => {
+            Ownership::Ours
         }
-        _ => false,
+        (Err(()), _) | (_, Err(())) => Ownership::Unknown,
+        _ => Ownership::NotOurs,
     }
 }
 
 /// Non-Unix stand-in: a recorded daemon is never treated as ours.
 ///
-/// Call: `is_live_daemon(pid).await`.
-/// Expects: any PID.
-/// Output: `false`, so the socket is adopted as today.
+/// Call: `ownership(pid, &config_path).await`.
+/// Expects: anything.
+/// Output: `Unknown`, so the socket is adopted as today.
 #[cfg(not(unix))]
-pub async fn is_live_daemon(_pid: u32) -> bool {
-    false
+pub async fn ownership(_pid: u32, _config: &Path) -> Ownership {
+    Ownership::Unknown
 }
 
-/// Sends a signal with the `kill` tool.
+/// Sends a signal with `/bin/kill`.
 ///
 /// Call: `signal(pid, "-TERM").await`.
-/// Expects: a PID already checked by `is_live_daemon`.
+/// Expects: a PID just confirmed as `Ours`.
 /// Output: none; errors (process already gone) are ignored.
 #[cfg(unix)]
 async fn signal(pid: u32, sig: &str) {
-    let _ = tokio::process::Command::new("kill")
+    let _ = tokio::process::Command::new("/bin/kill")
         .args([sig, &pid.to_string()])
         .stderr(std::process::Stdio::null())
         .status()
         .await;
 }
 
-/// Waits until a PID is no longer a live `heartwood` process.
+/// Waits until a PID is no longer our daemon.
 ///
-/// Call: `wait_gone(pid, Duration::from_secs(3)).await`.
-/// Expects: a PID and the longest wait.
-/// Output: `true` once it is gone, `false` after the wait.
+/// Call: `wait_gone(pid, &config_path, wait).await`.
+/// Expects: a PID, its config path and the longest wait.
+/// Output: `true` once `ownership` is `NotOurs`, `false` after the
+/// wait (`Unknown` keeps waiting).
 #[cfg(unix)]
-async fn wait_gone(pid: u32, wait: std::time::Duration) -> bool {
+async fn wait_gone(pid: u32, config: &Path, wait: std::time::Duration) -> bool {
     let deadline = std::time::Instant::now() + wait;
-    while std::time::Instant::now() < deadline {
-        if !is_live_daemon(pid).await {
+    loop {
+        if ownership(pid, config).await == Ownership::NotOurs {
             return true;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    !is_live_daemon(pid).await
 }
 
-/// Terminates our orphan daemon that runs a stale config.
+/// Terminates our daemon (stale orphan or adopted own one).
 ///
-/// Call: `terminate(pid, wait).await` for `ReplaceOrphan`.
-/// Expects: a PID that `is_live_daemon` accepted.
-/// Output: `true` when it ended; SIGTERM first, SIGKILL when it
-/// still runs after `wait` (its socket is released once it ends).
+/// Call: `terminate(pid, &config_path, wait).await`.
+/// Expects: a PID that `ownership` just called `Ours`.
+/// Output: `true` when it ended; SIGTERM first, SIGKILL when it is
+/// still ours after `wait` (rechecked right before the kill).
 #[cfg(unix)]
-pub async fn terminate(pid: u32, wait: std::time::Duration) -> bool {
+pub async fn terminate(
+    pid: u32,
+    config: &Path,
+    wait: std::time::Duration,
+) -> bool {
     signal(pid, "-TERM").await;
-    if wait_gone(pid, wait).await {
+    if wait_gone(pid, config, wait).await {
         return true;
     }
+    if ownership(pid, config).await != Ownership::Ours {
+        return false;
+    }
     signal(pid, "-KILL").await;
-    wait_gone(pid, wait).await
+    wait_gone(pid, config, wait).await
 }
 
 /// Non-Unix stand-in; never reached since nothing is ours there.
 ///
-/// Call: `terminate(pid, wait).await`.
+/// Call: `terminate(pid, &config_path, wait).await`.
 /// Expects: anything.
 /// Output: `false`.
 #[cfg(not(unix))]
-pub async fn terminate(_pid: u32, _wait: std::time::Duration) -> bool {
+pub async fn terminate(
+    _pid: u32,
+    _config: &Path,
+    _wait: std::time::Duration,
+) -> bool {
     false
 }
 
@@ -315,8 +399,60 @@ mod tests {
     }
 
     #[test]
+    fn launch_digest_covers_binary_and_text() {
+        let a = launch_digest(Path::new("/a/heartwood"), "t");
+        assert_eq!(a, launch_digest(Path::new("/a/heartwood"), "t"));
+        assert_ne!(a, launch_digest(Path::new("/b/heartwood"), "t"));
+        assert_ne!(a, launch_digest(Path::new("/a/heartwood"), "u"));
+    }
+
+    #[test]
+    fn our_daemon_needs_name_config_and_daemon_command() {
+        let cfg = Path::new("/d/App Data/heartwood.toml");
+        let bin = "/Users/a/.cargo/bin/heartwood";
+        let ours = format!("{bin} --config /d/App Data/heartwood.toml daemon\n");
+        assert!(is_our_daemon(bin, &ours, cfg));
+        let other = format!("{bin} --config /e/heartwood.toml daemon");
+        assert!(!is_our_daemon(bin, &other, cfg));
+        let status = format!("{bin} --config /d/App Data/heartwood.toml status");
+        assert!(!is_our_daemon(bin, &status, cfg));
+        assert!(!is_our_daemon("/bin/sleep", &ours, cfg));
+        assert!(!is_our_daemon(bin, "", cfg));
+    }
+
+    #[test]
     fn record_lives_next_to_the_config() {
         let p = record_path(Path::new("/d/pl.cognifly.aplikacja/heartwood.toml"));
         assert_eq!(p, PathBuf::from("/d/pl.cognifly.aplikacja/heartwood.pid"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod file_tests {
+    use super::*;
+    use crate::heartwood::testutil::temp_dir;
+
+    #[test]
+    fn clear_if_keeps_a_newer_record() {
+        let cfg = temp_dir().join("hw.toml");
+        save(&cfg, 100, "aa");
+        clear_if(&cfg, 99);
+        assert_eq!(load(&cfg).map(|r| r.pid), Some(100));
+        clear_if(&cfg, 100);
+        assert!(load(&cfg).is_none());
+    }
+
+    #[test]
+    fn saved_record_is_owner_only_and_leaves_no_temp() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir();
+        let cfg = dir.join("hw.toml");
+        save(&cfg, 100, "aa");
+        save(&cfg, 101, "bb");
+        let meta = std::fs::metadata(record_path(&cfg)).unwrap();
+        assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+        assert_eq!(load(&cfg).map(|r| r.pid), Some(101));
+        let names: Vec<_> = std::fs::read_dir(&dir).unwrap().collect();
+        assert_eq!(names.len(), 1, "temp file left behind");
     }
 }
