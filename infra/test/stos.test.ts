@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test, beforeAll } from 'vitest';
 import { App } from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
@@ -73,13 +74,13 @@ describe('stos CogniFly', () => {
 
   test('Lambdy: Node 22, ARM64, logi 14 dni, nazwy z prefiksem', () => {
     const lambdy = zasoby('AWS::Lambda::Function').filter(([, r]) => r.Properties.Runtime);
-    expect(lambdy).toHaveLength(4);
+    expect(lambdy).toHaveLength(5);
     for (const [, r] of lambdy) {
       expect(r.Properties.Runtime).toBe('nodejs22.x');
       expect(r.Properties.Architectures).toEqual(['arm64']);
       expect(r.Properties.FunctionName).toMatch(/^cognifly-test-/);
     }
-    t.resourceCountIs('AWS::Logs::LogGroup', 4);
+    t.resourceCountIs('AWS::Logs::LogGroup', 5);
     for (const [, r] of zasoby('AWS::Logs::LogGroup')) expect(r.Properties.RetentionInDays).toBe(14);
   });
 
@@ -133,14 +134,14 @@ describe('stos CogniFly', () => {
     for (const s of stm) expect(s.Resource).not.toBe('*');
   });
 
-  test('HTTP API: webhook bez autoryzatora, 7 tras API z JWT (pula + klient)', () => {
+  test('HTTP API: webhook bez autoryzatora, 10 tras API z JWT (pula + klient)', () => {
     const trasy = zasoby('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
-    expect(trasy).toHaveLength(8);
+    expect(trasy).toHaveLength(11);
     const wh = trasy.find((r) => r.RouteKey === 'POST /webhook/github/{firma}');
     expect(wh).toBeDefined();
     expect(wh.AuthorizationType ?? 'NONE').toBe('NONE');
     expect(wh.AuthorizerId).toBeUndefined();
-    for (const k of ['GET /zdarzenia', 'GET /skrzynka', 'GET /zadania/{id}', 'POST /zadania/{id}/biore', 'POST /zadania/{id}/stan', 'GET /podsumowanie', 'GET /ja']) {
+    for (const k of ['GET /zdarzenia', 'GET /skrzynka', 'GET /zadania/{id}', 'POST /zadania/{id}/biore', 'POST /zadania/{id}/stan', 'POST /zadania/{id}/przekaz', 'GET /podsumowanie', 'GET /ja']) {
       const r = trasy.find((x) => x.RouteKey === k);
       expect(r, k).toBeDefined();
       expect(r.AuthorizationType).toBe('JWT');
@@ -175,7 +176,7 @@ describe('stos CogniFly', () => {
   });
 
   test('alarmy błędów Lambd -> SNS -> e-mail', () => {
-    t.resourceCountIs('AWS::CloudWatch::Alarm', 6);
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 7);
     t.hasResourceProperties('AWS::CloudWatch::Alarm', {
       MetricName: 'Errors', Namespace: 'AWS/Lambda', Threshold: 0,
       ComparisonOperator: 'GreaterThanThreshold', AlarmActions: [{ Ref: Match.stringLikeRegexp('Alarmy') }],
@@ -209,8 +210,38 @@ describe('stos CogniFly', () => {
       expect(s).toHaveLength(1);
       expect(JSON.stringify(s[0].Resource)).toContain('secret:cognifly-test/discord/*');
     }
-    const api = zasoby('AWS::IAM::Policy').find(([id]) => /^Api/.test(id));
-    expect(JSON.stringify(api ?? '')).not.toContain('secretsmanager');
+    for (const f of ['Api', 'Dostarczenia']) {
+      const s = sekretyDla(f);
+      expect(s).toHaveLength(1);
+      expect(JSON.stringify(s[0].Resource)).toContain('secret:cognifly-test/github-odczyt/*');
+    }
+  });
+
+  test('każda trasa obsługiwana przez Lambdę API istnieje w API Gateway z JWT', () => {
+    const zrodlo = readFileSync(new URL('../../serwer/src/api/index.ts', import.meta.url), 'utf8');
+    const klucze = [...zrodlo.matchAll(/'((?:GET|POST) \/[^']+)'/g)].map((m) => m[1]);
+    expect(klucze.length).toBeGreaterThan(5);
+    const trasy = zasoby('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
+    for (const k of klucze) {
+      const r = trasy.find((x) => x.RouteKey === k);
+      expect(r, k).toBeDefined();
+      expect(r.AuthorizationType, k).toBe('JWT');
+    }
+  });
+
+  test('dostarczenia: Lambda, reguła sygnałów z webhooka (poza potokiem zdarzeń) i harmonogram co 10 min', () => {
+    const [, f] = zasoby('AWS::Lambda::Function').find(([, r]) => r.Properties.FunctionName === 'cognifly-test-dostarczenia')!;
+    expect(f).toBeDefined();
+    t.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'cognifly-test-dostarczenia',
+      EventPattern: { source: ['dostarczenia.github'] },
+    });
+    t.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: 'cognifly-test-dostarczenia', ScheduleExpression: 'rate(10 minutes)',
+      FlexibleTimeWindow: { Mode: 'OFF' },
+    });
+    const [, rola] = zasoby('AWS::IAM::Role').find(([id]) => id.includes('PrzegladDostarczenRola'))!;
+    expect(JSON.stringify(rola.Properties.AssumeRolePolicyDocument)).toContain('aws:SourceAccount');
   });
 
   test('Cognito: odzyskiwanie konta tylko e-mailem', () => {

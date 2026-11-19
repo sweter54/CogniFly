@@ -56,3 +56,11 @@ export async function kontekst(event: ZdarzenieApi): Promise<Kontekst> {
   if (typeof osoba !== 'string' || osoba === '') throw new HttpBlad(403, 'BRAK_DOSTEPU');
   return { sub, firma, osoba };
 }
+
+/** Treść żądania jako obiekt JSON albo 400. */
+export function obiektJson(surowe: string | null | undefined): Record<string, unknown> {
+  let b: unknown;
+  try { b = JSON.parse(surowe ?? ''); } catch { throw new HttpBlad(400, 'ZLY_JSON'); }
+  if (typeof b !== 'object' || b === null || Array.isArray(b)) throw new HttpBlad(400, 'ZLE_DANE');
+  return b as Record<string, unknown>;
+}

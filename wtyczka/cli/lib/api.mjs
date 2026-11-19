@@ -7,6 +7,9 @@ import { Stan, katalog, czytaj, zapisz, punktCognito, odswiez, zaloguj, kod, wyl
 const DOBA = 86_400_000;
 const STANY = ['w_trakcie', 'do_akceptacji', 'zrobione'];
 const ID_ZADANIA = /^zad_([0-9a-f]{12}|[0-9a-f]{24})$/;
+const LOGIN_GITHUB = /^[A-Za-z0-9-]{1,39}(\[bot\])?$/;
+const REPO = /^[A-Za-z0-9][\w.-]*\/[A-Za-z0-9_.-]+$/;
+const SHA = /^[0-9a-f]{40}$/;
 const DOMYSLNA_KONF = fileURLToPath(new URL('../../konfiguracja.json', import.meta.url));
 
 // Kolejność: zmienne środowiskowe > konfiguracja wtyczki > <katalog>/konfiguracja.json (~/.cognifly) > domyślne.
@@ -139,7 +142,7 @@ export async function wykonaj(argv, env = process.env) {
   try {
     if (polecenie === 'wyloguj') return wyloguj(kat);
     if (polecenie === 'konfiguruj') return konfiguruj(kat, opcje);
-    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'zadanie', 'biore', 'stan', 'podsumowanie'];
+    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'zadanie', 'biore', 'stan', 'przekaz', 'ocena-dostarczenia', 'dostarczenie', 'podsumowanie'];
     if (!komendy.includes(polecenie)) throw new Stan('BLAD', { kod: 'NIEZNANE_POLECENIE' });
 
     // walidacje lokalne przed siecią i konfiguracją
@@ -151,11 +154,20 @@ export async function wykonaj(argv, env = process.env) {
       if (opcje.typ) q.set('typ', opcje.typ);
       zapytanie = `?${q}`;
     }
-    if (polecenie === 'zadanie' || polecenie === 'biore' || polecenie === 'stan') {
+    if (['zadanie', 'biore', 'stan', 'przekaz'].includes(polecenie)) {
       id = poz[1];
       if (!ID_ZADANIA.test(id ?? '')) throw new Stan('NIE_ZNALEZIONO');
     }
     if (polecenie === 'stan' && !STANY.includes(poz[2])) throw new Stan('ZLY_STAN');
+    if (polecenie === 'przekaz' && !LOGIN_GITHUB.test(opcje['do-loginu'] ?? '')) throw new Stan('ZLY_LOGIN');
+    let dostawa;
+    if (polecenie === 'ocena-dostarczenia' || polecenie === 'dostarczenie') {
+      dostawa = { repo: opcje.repo, pr: Number(opcje.pr) };
+      const zle = typeof dostawa.repo !== 'string' || !REPO.test(dostawa.repo) || dostawa.repo.split('/').includes('..')
+        || !Number.isInteger(dostawa.pr) || dostawa.pr < 1
+        || (polecenie === 'dostarczenie' && (!ID_ZADANIA.test(opcje.zadanie ?? '') || !SHA.test(opcje.sha ?? '')));
+      if (zle) throw new Stan('ZLE_PARAMETRY');
+    }
 
     const konf = wczytajKonfiguracje(env);
     if (!konf.adresApi || !konf.klientCognito) throw new Stan('BRAK_KONFIGURACJI');
@@ -208,6 +220,28 @@ export async function wykonaj(argv, env = process.env) {
           await pokazWAplikacji(id, env);
           return { stan: 'OK', zadanie: r.json.zadanie };
         }
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
+        return blad(r);
+      }
+      case 'przekaz': {
+        const r = await zSesja(ctx, 'POST', `/zadania/${id}/przekaz`, { doLoginu: opcje['do-loginu'] });
+        if (r.status === 200) return { stan: 'PRZEKAZANE', zadanie: r.json.zadanie };
+        if (r.status === 409 && r.json?.kod === 'BRAK_OSOBY') return { stan: 'BRAK_OSOBY' };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
+        return blad(r);
+      }
+      case 'ocena-dostarczenia': {
+        const q = new URLSearchParams({ repo: dostawa.repo, pr: String(dostawa.pr) });
+        const r = await zSesja(ctx, 'GET', `/dostarczenia/ocena?${q}`);
+        if (r.status === 200) return { stan: 'OK', ocena: r.json.ocena };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        return blad(r);
+      }
+      case 'dostarczenie': {
+        const r = await zSesja(ctx, 'POST', '/dostarczenia', { ...dostawa, zadanieId: opcje.zadanie, sha: opcje.sha });
+        if (r.status === 200) return { stan: 'NASLUCH', ocena: r.json.ocena };
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
         return blad(r);

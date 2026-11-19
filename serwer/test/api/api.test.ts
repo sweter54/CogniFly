@@ -1,7 +1,7 @@
 import { beforeAll, afterAll, describe, expect, test } from 'vitest';
 import { idZdarzenia, type Zdarzenie } from '@cognifly/wspolne';
 import { ustawTabeleTestowa } from '../dane/pomocnik.js';
-import { zapiszTozsamosc } from '../../src/dane/konfiguracja.js';
+import { zapiszLoginGithub, zapiszTozsamosc } from '../../src/dane/konfiguracja.js';
 import { zapiszZdarzenie } from '../../src/dane/historia.js';
 import { utworzZadanie, wez } from '../../src/dane/kolejka.js';
 import { handler } from '../../src/api/index.js';
@@ -154,6 +154,27 @@ describe('zadania', () => {
     const z = await utworzZadanie('f1', 'evt_' + 'c'.repeat(24), ['michal', 'ania'], { opis: 'wspolne' });
     await wywolaj('POST /zadania/{id}/biore', { id: z.id, sub: 'sub-ania' });
     expect((await wywolaj('GET /zadania/{id}', { id: z.id, sub: 'sub-ania' })).status).toBe(200);
+  });
+  test('przekaz: właściciel przekazuje zadanie autorowi z GitHuba → nowe u autora, znika u recenzenta', async () => {
+    await zapiszLoginGithub('f1', 'Ania-GH', 'ania');
+    const z = await utworzZadanie('f1', evt, ['michal'], { opis: 'Recenzja PR #9' });
+    expect((await wywolaj('POST /zadania/{id}/przekaz', { id: z.id, body: '{"doLoginu":"ania-gh"}' })).status).toBe(403); // nie wzięte
+    await wywolaj('POST /zadania/{id}/biore', { id: z.id });
+    const r = await wywolaj('POST /zadania/{id}/przekaz', { id: z.id, body: '{"doLoginu":"ania-gh"}' });
+    expect(r).toMatchObject({ status: 200, body: { zadanie: { stan: 'nowe', kandydaci: ['ania'], postep: 'Uwagi z code review do poprawy' } } });
+    expect(r.body.zadanie.wlasciciel).toBeUndefined();
+    const ania = await wywolaj('GET /skrzynka', { sub: 'sub-ania' });
+    expect(ania.body.zadania.map((x: { id: string }) => x.id)).toContain(z.id);
+    const michal = await wywolaj('GET /skrzynka');
+    expect(michal.body.zadania.map((x: { id: string }) => x.id)).not.toContain(z.id);
+  });
+  test('przekaz: autor spoza CogniFly → 409 BRAK_OSOBY i zadanie bez zmian; zły JSON → 400', async () => {
+    const z = await utworzZadanie('f1', evt, ['michal'], { opis: 'x' });
+    await wywolaj('POST /zadania/{id}/biore', { id: z.id });
+    expect(await wywolaj('POST /zadania/{id}/przekaz', { id: z.id, body: '{"doLoginu":"obcy"}' })).toMatchObject({ status: 409, body: { kod: 'BRAK_OSOBY' } });
+    expect((await wywolaj('POST /zadania/{id}/przekaz', { id: z.id, body: 'x' })).status).toBe(400);
+    expect((await wywolaj('POST /zadania/{id}/przekaz', { id: z.id, body: '{"doLoginu":"zly login!"}' })).status).toBe(400);
+    expect((await wywolaj('GET /zadania/{id}', { id: z.id })).body.zadanie).toMatchObject({ stan: 'wziete', wlasciciel: 'michal' });
   });
   test('stan: właściciel 200 + postep; nie-właściciel 403; nowe → 400; zły JSON → 400; postep > 200 → 400', async () => {
     const z = await utworzZadanie('f1', evt, ['michal', 'ania']);

@@ -1,6 +1,6 @@
 import { fileURLToPath } from 'node:url';
 import { ArnFormat, CfnOutput, Duration, RemovalPolicy, Stack, Tags, type StackProps } from 'aws-cdk-lib';
-import { CfnScheduleGroup } from 'aws-cdk-lib/aws-scheduler';
+import { CfnSchedule, CfnScheduleGroup } from 'aws-cdk-lib/aws-scheduler';
 import { Alarm, ComparisonOperator, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { AccountRecovery, FeaturePlan, UserPool, UserPoolEmail, UserPoolClient } from 'aws-cdk-lib/aws-cognito';
@@ -120,6 +120,8 @@ export class StosCogniFly extends Stack {
       COGNIFLY_TABELA: NAZWA_TABELI, COGNIFLY_NADAWCA: nadawca,
     }, dlqEskalacji);
     const api = wspolne('Api', 'api/index.ts', { COGNIFLY_TABELA: NAZWA_TABELI });
+    // Nasłuch dostarczeń: ocenia zaakceptowane PR (tylko odczyt GitHuba) i tworzy zadania „Dostarcz”.
+    const dostarczenia = wspolne('Dostarczenia', 'dostarczenia/obsluz.ts', { COGNIFLY_TABELA: NAZWA_TABELI });
 
     // Scheduler: grupa + rola, która może wyłącznie wywołać Lambdę eskalacji.
     const grupa = new CfnScheduleGroup(this, 'GrupaEskalacji', { name: NAZWA_GRUPY });
@@ -141,7 +143,7 @@ export class StosCogniFly extends Stack {
     }, dlq);
 
     // --- Uprawnienia (least privilege) ---
-    const odczytSekretow = (rodzaj: 'github' | 'discord') => new PolicyStatement({
+    const odczytSekretow = (rodzaj: 'github' | 'discord' | 'github-odczyt') => new PolicyStatement({
       actions: ['secretsmanager:GetSecretValue'],
       resources: [this.formatArn({ service: 'secretsmanager', resource: 'secret', resourceName: `${PREFIKS}/${rodzaj}/*`, arnFormat: ArnFormat.COLON_RESOURCE_NAME })],
     });
@@ -155,7 +157,9 @@ export class StosCogniFly extends Stack {
     szyna.grantPutEventsTo(webhook);
     webhook.addToRolePolicy(odczytSekretow('github')); // sekret podpisu cognifly-test/github/<firma>
 
-    for (const f of [przetwarzanie, eskalacja, api]) tabela.grantReadWriteData(f);
+    for (const f of [przetwarzanie, eskalacja, api, dostarczenia]) tabela.grantReadWriteData(f);
+    // Token GitHuba tylko do odczytu per firma: cognifly-test/github-odczyt/<firma> (wartość wpisuje admin).
+    for (const f of [api, dostarczenia]) f.addToRolePolicy(odczytSekretow('github-odczyt'));
     for (const f of [przetwarzanie, eskalacja]) {
       f.addToRolePolicy(odczytSekretow('discord')); // webhooki Discorda cognifly-test/discord/*
       f.addToRolePolicy(wysylkaSes);
@@ -176,6 +180,24 @@ export class StosCogniFly extends Stack {
       eventBus: szyna,
       eventPattern: { source: Match.prefix('cognifly.') as unknown as string[] },
       targets: [new LambdaFunction(przetwarzanie, { deadLetterQueue: dlq, retryAttempts: 2 })],
+    });
+
+    // --- Dostarczenia: sygnały z webhooka (osobne źródło, poza potokiem zdarzeń) + przegląd co 10 min ---
+    new Rule(this, 'RegulaDostarczen', {
+      ruleName: `${PREFIKS}-dostarczenia`,
+      eventBus: szyna,
+      eventPattern: { source: ['dostarczenia.github'] },
+      targets: [new LambdaFunction(dostarczenia, { retryAttempts: 2 })],
+    });
+    const rolaPrzegladu = new Role(this, 'PrzegladDostarczenRola', {
+      assumedBy: new ServicePrincipal('scheduler.amazonaws.com', { conditions: { StringEquals: { 'aws:SourceAccount': this.account } } }),
+    });
+    dostarczenia.grantInvoke(rolaPrzegladu);
+    new CfnSchedule(this, 'PrzegladDostarczen', {
+      name: `${PREFIKS}-dostarczenia`,
+      scheduleExpression: 'rate(10 minutes)',
+      flexibleTimeWindow: { mode: 'OFF' },
+      target: { arn: dostarczenia.functionArn, roleArn: rolaPrzegladu.roleArn, input: '{}' },
     });
 
     // --- Cognito ---
@@ -225,8 +247,9 @@ export class StosCogniFly extends Stack {
     const apiIntegracja = new HttpLambdaIntegration('ApiIntegracja', api);
     for (const [metoda, sciezka] of [
       [HttpMethod.GET, '/zdarzenia'], [HttpMethod.GET, '/skrzynka'], [HttpMethod.GET, '/zadania/{id}'],
-      [HttpMethod.POST, '/zadania/{id}/biore'], [HttpMethod.POST, '/zadania/{id}/stan'],
+      [HttpMethod.POST, '/zadania/{id}/biore'], [HttpMethod.POST, '/zadania/{id}/przekaz'], [HttpMethod.POST, '/zadania/{id}/stan'],
       [HttpMethod.GET, '/podsumowanie'], [HttpMethod.GET, '/ja'],
+      [HttpMethod.POST, '/dostarczenia'], [HttpMethod.GET, '/dostarczenia/ocena'],
     ] as const) {
       httpApi.addRoutes({ path: sciezka, methods: [metoda], integration: apiIntegracja, authorizer: autoryzator });
     }
@@ -234,7 +257,7 @@ export class StosCogniFly extends Stack {
     // --- Alarmy ---
     const alarmy = new Topic(this, 'Alarmy', { topicName: `${PREFIKS}-alarmy` });
     alarmy.addSubscription(new EmailSubscription(emailAlarmow));
-    for (const [nazwa, f] of Object.entries({ Webhook: webhook, Przetwarzanie: przetwarzanie, Eskalacja: eskalacja, Api: api })) {
+    for (const [nazwa, f] of Object.entries({ Webhook: webhook, Przetwarzanie: przetwarzanie, Eskalacja: eskalacja, Api: api, Dostarczenia: dostarczenia })) {
       new Alarm(this, `Alarm${nazwa}`, {
         alarmName: `${PREFIKS}-${nazwa.toLowerCase()}-bledy`,
         metric: f.metricErrors({ period: Duration.minutes(5), statistic: 'Sum' }),

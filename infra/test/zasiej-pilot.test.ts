@@ -43,6 +43,7 @@ describe('zasiej-pilot --wykonaj na atrapach (bez AWS)', () => {
     const dane = {
       zapiszTozsamosc: vi.fn(async () => {}), zapiszOsobe: vi.fn(async () => {}), zapiszRegule: vi.fn(async () => {}),
       zapiszKontakt: vi.fn(async () => {}), kontaktOsoby: vi.fn(async () => opcje.kontakt ?? {}),
+      zapiszLoginGithub: vi.fn(async () => {}),
     };
     return { sm, cog, dane, zal: { sm, cog, dane } as unknown as Zaleznosci };
   };
@@ -72,5 +73,14 @@ describe('zasiej-pilot --wykonaj na atrapach (bez AWS)', () => {
     expect(m.dane.zapiszKontakt).toHaveBeenCalledWith('pilot', 'michal', {
       email: 'm@example.com', discordWebhookRef: 'cognifly-test/discord/pilot/michal',
     });
+  });
+
+  test('--github-michal wiąże login GitHub z osobą; bez opcji nic nie zapisuje', async () => {
+    const m = zbuduj({ istniejacySekret: true });
+    await zasiej(opcje('--github-michal', 'sweter54'), () => {}, m.zal);
+    expect(m.dane.zapiszLoginGithub).toHaveBeenCalledWith('pilot', 'sweter54', 'michal');
+    const m2 = zbuduj({ istniejacySekret: true });
+    await zasiej(opcje(), () => {}, m2.zal);
+    expect(m2.dane.zapiszLoginGithub).not.toHaveBeenCalled();
   });
 });

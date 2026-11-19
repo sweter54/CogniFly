@@ -109,6 +109,26 @@ describe('handler', () => {
     expect(JSON.parse(c.Detail!).id).toBe(idZdarzenia('github', 'dostawa-1'));
     expect(sm.commandCalls(GetSecretValueCommand)[0]!.args[0].input.SecretId).toBe('cognifly-test/github/f1');
   });
+  const wpisy = () => eb.commandCalls(PutEventsCommand).flatMap((c) => c.args[0].input.Entries ?? []);
+  test('zdarzenia CI → tylko sygnał dostarczeń (bez zdarzenia w historii)', async () => {
+    const body = JSON.stringify({ action: 'completed', repository: { full_name: 'o/r' }, check_suite: { head_sha: 'abc' } });
+    expect(await kod(zadanie({ event: 'check_suite', body }))).toBe(202);
+    expect(wpisy()).toHaveLength(1);
+    expect(wpisy()[0]).toMatchObject({ Source: 'dostarczenia.github', DetailType: 'sygnal' });
+    expect(JSON.parse(wpisy()[0]!.Detail!)).toEqual({ firma: 'f1', repo: 'o/r' });
+    const status = JSON.stringify({ state: 'success', repository: { full_name: 'o/r' }, sha: 'abc', description: 'zignoruj' });
+    eb.resetHistory();
+    expect(await kod(zadanie({ event: 'status', body: status }))).toBe(202);
+    expect(wpisy().map((e) => e.Source)).toEqual(['dostarczenia.github']);
+  });
+  test('zmiana PR → zwykłe zdarzenie i sygnał; inne akcje CI pomijane', async () => {
+    expect(await kod(zadanie({ event: 'pull_request', body: JSON.stringify(fx('pull_request.synchronize')) }))).toBe(202);
+    expect(wpisy().map((e) => e.Source).sort()).toEqual(['cognifly.github', 'dostarczenia.github']);
+    eb.resetHistory();
+    const wtoku = JSON.stringify({ action: 'requested', repository: { full_name: 'o/r' }, check_suite: {} });
+    expect(await kod(zadanie({ event: 'check_suite', body: wtoku }))).toBe(202);
+    expect(wpisy()).toHaveLength(0);
+  });
   test('base64', async () => {
     expect(await kod(zadanie({ b64: true }))).toBe(202);
     expect(eb.commandCalls(PutEventsCommand)).toHaveLength(1);
