@@ -56,7 +56,7 @@ afterEach(() => { api.s.close(); cog.s.close(); rmSync(tmp, { recursive: true, f
 /** Writes a valid session (expires in an hour). */
 function zalogowany() {
   mkdirSync(kat, { recursive: true, mode: 0o700 });
-  writeFileSync(join(kat, 'sesja.json'), JSON.stringify({ accessToken: 'A', refreshToken: 'R', wygasa: Date.now() + 3_600_000 }), { mode: 0o600 });
+  writeFileSync(join(kat, 'sesja.json'), JSON.stringify({ accessToken: 'A', refreshToken: 'R', wygasa: Date.now() + 3_600_000, klient: 'KLIENT1' }), { mode: 0o600 });
 }
 
 const tekst = (w) => w.content.map((c) => c.text).join('\n');
@@ -108,7 +108,7 @@ describe('brak sesji (Review Focus 3)', () => {
 
   it('pusty katalog sesji i odrzucone odświeżenie też kończą się prośbą o logowanie', async () => {
     mkdirSync(kat, { recursive: true, mode: 0o700 });
-    writeFileSync(join(kat, 'sesja.json'), JSON.stringify({ accessToken: 'A', refreshToken: 'R', wygasa: 0 }), { mode: 0o600 });
+    writeFileSync(join(kat, 'sesja.json'), JSON.stringify({ accessToken: 'A', refreshToken: 'R', wygasa: 0, klient: 'KLIENT1' }), { mode: 0o600 });
     const w = await wywolaj('moje_zadania', {}, env);
     expect(w.isError).toBe(true);
     expect(tekst(w)).toBe('Zaloguj się: cognifly zaloguj');

@@ -1,11 +1,11 @@
 import { fileURLToPath } from 'node:url';
-import { ArnFormat, CfnOutput, Duration, RemovalPolicy, Stack, Tags, type StackProps } from 'aws-cdk-lib';
+import { Annotations, ArnFormat, CfnOutput, Duration, RemovalPolicy, Stack, Tags, type StackProps } from 'aws-cdk-lib';
 import { CfnSchedule, CfnScheduleGroup } from 'aws-cdk-lib/aws-scheduler';
 import { Alarm, ComparisonOperator, TreatMissingData } from 'aws-cdk-lib/aws-cloudwatch';
 import { SnsAction } from 'aws-cdk-lib/aws-cloudwatch-actions';
 import { AccountRecovery, FeaturePlan, UserPool, UserPoolEmail, UserPoolClient } from 'aws-cdk-lib/aws-cognito';
 import { AttributeType, BillingMode, StreamViewType, Table } from 'aws-cdk-lib/aws-dynamodb';
-import { EventBus, Match, Rule } from 'aws-cdk-lib/aws-events';
+import { EventBus, Match, Rule, Schedule } from 'aws-cdk-lib/aws-events';
 import { LambdaFunction } from 'aws-cdk-lib/aws-events-targets';
 import { HttpApi, HttpMethod, CorsHttpMethod } from 'aws-cdk-lib/aws-apigatewayv2';
 import { HttpJwtAuthorizer } from 'aws-cdk-lib/aws-apigatewayv2-authorizers';
@@ -18,12 +18,32 @@ import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Topic } from 'aws-cdk-lib/aws-sns';
 import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
+import { StringParameter } from 'aws-cdk-lib/aws-ssm';
+import { Trigger } from 'aws-cdk-lib/triggers';
 import type { Construct } from 'constructs';
 
 const PREFIKS = 'cognifly-test';
 const NAZWA_TABELI = `${PREFIKS}-dane`;
 const NAZWA_SZYNY = PREFIKS;
 const NAZWA_GRUPY = `${PREFIKS}-eskalacje`;
+/** Platforma stage whose shared resources (pool, hub) CogniFly uses. */
+const ETAP = 'test';
+
+/**
+ * Reads a Platforma SSM parameter at deploy time.
+ *
+ * Call: `ssm(scope, 'hub/arn')`.
+ * Expects: a parameter name relative to `/platforma/<ETAP>/`.
+ * Output: a token resolved by CloudFormation from SSM (a stack
+ *   parameter of type `AWS::SSM::Parameter::Value<String>`), so synth
+ *   needs no AWS access; deploy fails if the parameter is missing.
+ */
+export function ssm(scope: Construct, nazwa: string): string {
+  return StringParameter.valueForStringParameter(scope, `/platforma/${ETAP}/${nazwa}`);
+}
+
+/** Detail types of Identity events handled by `TozsamoscZdarzenia`. */
+const TYPY_TOZSAMOSCI = ['person.added', 'person.role_changed', 'person.removed'];
 
 const serwer = (sciezka: string) => fileURLToPath(new URL(`../../serwer/src/${sciezka}`, import.meta.url));
 const korzen = (sciezka: string) => fileURLToPath(new URL(`../../${sciezka}`, import.meta.url));
@@ -113,7 +133,17 @@ export class StosCogniFly extends Stack {
     });
 
     // --- Funkcje ---
-    const wspolne = (nazwa: string, wejscie: string, env: Record<string, string>, deadLetterQueue?: Queue) => {
+    /**
+     * Builds a Node 22 ARM Lambda with its own 14-day log group.
+     *
+     * Call: `wspolne('Api', 'api/index.ts', env, dlq?, timeout?)`.
+     * Expects: construct id `nazwa` (also gives function and log group
+     *   name `cognifly-test-<nazwa lowercased>`), entry path under
+     *   serwer/src, environment variables, an optional async-invoke DLQ
+     *   and an optional timeout (default 30 s).
+     * Output: the NodejsFunction (ESM bundle with source maps).
+     */
+    const wspolne = (nazwa: string, wejscie: string, env: Record<string, string>, deadLetterQueue?: Queue, timeout = Duration.seconds(30)) => {
       const logi = new LogGroup(this, `${nazwa}Logi`, {
         logGroupName: `/aws/lambda/${PREFIKS}-${nazwa.toLowerCase()}`,
         retention: RetentionDays.TWO_WEEKS,
@@ -128,7 +158,7 @@ export class StosCogniFly extends Stack {
         runtime: Runtime.NODEJS_22_X,
         architecture: Architecture.ARM_64,
         memorySize: 256,
-        timeout: Duration.seconds(30),
+        timeout,
         logGroup: logi,
         environment: env,
         ...(deadLetterQueue ? { deadLetterQueue } : {}),
@@ -206,11 +236,49 @@ export class StosCogniFly extends Stack {
     }));
     przetwarzanie.node.addDependency(grupa);
 
+    // --- Platforma: hub zdarzeń (wspólny) i Tożsamość ---
+    const hub = EventBus.fromEventBusArn(this, 'Hub', ssm(this, 'hub/arn'));
+    const envTozsamosci = { COGNIFLY_TABELA: NAZWA_TABELI, TOZSAMOSC_URL: ssm(this, 'tozsamosc/api-url') };
+    const tozsamoscZdarzenia = wspolne('TozsamoscZdarzenia', 'tozsamosc/zdarzenia.ts', envTozsamosci);
+    const uzgodnij = wspolne('TozsamoscUzgodnij', 'tozsamosc/uzgodnij.ts', envTozsamosci, undefined, Duration.minutes(5));
+    for (const f of [tozsamoscZdarzenia, uzgodnij]) tabela.grantReadWriteData(f);
+    uzgodnij.addToRolePolicy(new PolicyStatement({
+      // Wartość SSM to już pełny wzorzec zasobu .../*/*/int/*.
+      actions: ['execute-api:Invoke'], resources: [ssm(this, 'tozsamosc/int-invoke-arn')],
+    }));
+    const dlqTozsamosci = new Queue(this, 'DlqTozsamosci', {
+      queueName: `${PREFIKS}-tozsamosc-dlq`,
+      retentionPeriod: Duration.days(14),
+      enforceSSL: true,
+    });
+    const regulaTozsamosci = new Rule(this, 'RegulaTozsamosci', {
+      ruleName: `${PREFIKS}-tozsamosc`,
+      eventBus: hub,
+      eventPattern: { source: ['tozsamosc'], detailType: TYPY_TOZSAMOSCI },
+      targets: [new LambdaFunction(tozsamoscZdarzenia, { deadLetterQueue: dlqTozsamosci, retryAttempts: 4 })],
+    });
+    // Uzgadnianie: co godzinę (szyna domyślna) i po wdrożeniu, gdy zmieni się funkcja.
+    new Rule(this, 'RegulaUzgodnij', {
+      ruleName: `${PREFIKS}-uzgodnij`,
+      schedule: Schedule.rate(Duration.hours(1)),
+      targets: [new LambdaFunction(uzgodnij, { retryAttempts: 2 })],
+    });
+    // Runs as late as possible: more dependencies are added after the API.
+    const wyzwalacz = new Trigger(this, 'UzgodnijPoWdrozeniu', {
+      handler: uzgodnij,
+      executeAfter: [tabela],
+      timeout: Duration.minutes(5),
+    });
+    // Reguła woła funkcję bez kwalifikatora; wyzwalacz woła wersję przez IAM (`:*`).
+    Annotations.of(uzgodnij).acknowledgeWarning('@aws-cdk/aws-lambda:addPermissionsToVersionOrAlias',
+      'Version is invoked only by the trigger provider, whose role allows <fn>:*');
+
     // --- Heartwood (tylko z kontekstem `heartwood`):
     //     praca -> rejestr, zdarzenia -> zadania ---
     // Funkcje i kolejka Heartwood trafiają niżej do pętli alarmów.
     const funkcjeHeartwood: Record<string, NodejsFunction> = {};
     const kolejkiHeartwood: Record<string, Queue> = {};
+    const regulyHeartwood: Rule[] = [];
     if (heartwood) {
       const env = { HEARTWOOD_INT_URL: heartwood.intUrl, COGNIFLY_TABELA: NAZWA_TABELI };
       const praca = wspolne('HeartwoodPraca', 'heartwood/strumien.ts', env);
@@ -236,12 +304,14 @@ export class StosCogniFly extends Stack {
         reportBatchItemFailures: true, retryAttempts: 10, bisectBatchOnError: true,
         onFailure: new SqsDlq(dlqHeartwood),
       }));
-      new Rule(this, 'RegulaHeartwood', {
-        ruleName: `${PREFIKS}-heartwood`,
-        eventBus: szyna,
+      // New id and name: moving the rule to the hub replaces it, and
+      // CloudFormation cannot replace a custom-named resource in place.
+      regulyHeartwood.push(new Rule(this, 'RegulaHeartwoodHub', {
+        ruleName: `${PREFIKS}-heartwood-hub`,
+        eventBus: hub,
         eventPattern: { source: ['heartwood'], detailType: TYPY_HEARTWOOD },
         targets: [new LambdaFunction(zdarzenia, { deadLetterQueue: dlqHeartwood, retryAttempts: 2 })],
-      });
+      }));
     }
 
     // --- Reguła szyny -> przetwarzanie ---
@@ -270,7 +340,9 @@ export class StosCogniFly extends Stack {
       target: { arn: dostarczenia.functionArn, roleArn: rolaPrzegladu.roleArn, input: '{}' },
     });
 
-    // --- Cognito ---
+    // --- Cognito (stara pula) ---
+    // Do usunięcia po przepięciu: logowanie idzie przez pulę Platformy,
+    // pula i klient zostają tylko do sprzątania po udanym oknie.
     const pula = new UserPool(this, 'Pula', {
       userPoolName: `${PREFIKS}-uzytkownicy`,
       featurePlan: FeaturePlan.ESSENTIALS,
@@ -297,8 +369,10 @@ export class StosCogniFly extends Stack {
     });
 
     // --- HTTP API ---
-    const autoryzator = new HttpJwtAuthorizer('Autoryzator', `https://cognito-idp.${this.region}.${this.urlSuffix}/${pula.userPoolId}`, {
-      jwtAudience: [klient.userPoolClientId],
+    const wydawca = ssm(this, 'tozsamosc/issuer');
+    const klientCognifly = ssm(this, 'tozsamosc/client-id/cognifly');
+    const autoryzator = new HttpJwtAuthorizer('Autoryzator', wydawca, {
+      jwtAudience: [klientCognifly],
       identitySource: ['$request.header.Authorization'],
     });
     const httpApi = new HttpApi(this, 'HttpApi', {
@@ -327,11 +401,15 @@ export class StosCogniFly extends Stack {
     ] as const) {
       httpApi.addRoutes({ path: sciezka, methods: [metoda], integration: apiIntegracja, authorizer: autoryzator });
     }
+    // Reconcile only once the new API, authorizer and hub rules exist:
+    // its writes are the last step of the deploy.
+    wyzwalacz.executeAfter(httpApi, regulaTozsamosci, ...regulyHeartwood);
 
     // --- Alarmy ---
     const alarmy = new Topic(this, 'Alarmy', { topicName: `${PREFIKS}-alarmy` });
     alarmy.addSubscription(new EmailSubscription(emailAlarmow));
-    for (const [nazwa, f] of Object.entries({ Webhook: webhook, Przetwarzanie: przetwarzanie, Eskalacja: eskalacja, Api: api, Dostarczenia: dostarczenia, ...funkcjeHeartwood })) {
+    for (const [nazwa, f] of Object.entries({ Webhook: webhook, Przetwarzanie: przetwarzanie, Eskalacja: eskalacja, Api: api, Dostarczenia: dostarczenia,
+      TozsamoscZdarzenia: tozsamoscZdarzenia, TozsamoscUzgodnij: uzgodnij, ...funkcjeHeartwood })) {
       new Alarm(this, `Alarm${nazwa}`, {
         alarmName: `${PREFIKS}-${nazwa.toLowerCase()}-bledy`,
         metric: f.metricErrors({ period: Duration.minutes(5), statistic: 'Sum' }),
@@ -342,7 +420,7 @@ export class StosCogniFly extends Stack {
       }).addAlarmAction(new SnsAction(alarmy));
     }
 
-    for (const [nazwa, q] of Object.entries({ Przetwarzanie: dlq, Eskalacja: dlqEskalacji, ...kolejkiHeartwood })) {
+    for (const [nazwa, q] of Object.entries({ Przetwarzanie: dlq, Eskalacja: dlqEskalacji, Tozsamosc: dlqTozsamosci, ...kolejkiHeartwood })) {
       new Alarm(this, `AlarmDlq${nazwa}`, {
         alarmName: `${PREFIKS}-${nazwa.toLowerCase()}-dlq`,
         metric: q.metricApproximateNumberOfMessagesVisible({ period: Duration.minutes(5), statistic: 'Maximum' }),
@@ -360,6 +438,8 @@ export class StosCogniFly extends Stack {
     new CfnOutput(this, 'Region', { value: this.region });
     new CfnOutput(this, 'PulaCognito', { value: pula.userPoolId });
     new CfnOutput(this, 'KlientCognito', { value: klient.userPoolClientId });
+    new CfnOutput(this, 'Wydawca', { value: wydawca });
+    new CfnOutput(this, 'KlientCognifly', { value: klientCognifly });
     new CfnOutput(this, 'NazwaSzyny', { value: szyna.eventBusName });
 
     Tags.of(this).add('Project', 'cognifly');

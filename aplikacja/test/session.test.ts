@@ -5,15 +5,38 @@ import { SessionManager, subOf, type Session } from '../src/logic/session.js';
 import { jwt, memoryVault } from './helpers.js';
 
 const NOW = 10_000_000;
-const session = (expiresAt: number): Session => ({ accessToken: 'A1', refreshToken: 'R1', expiresAt, email: 'a@b.pl' });
+const CLIENT = 'klient1';
+const session = (expiresAt: number): Session => ({ accessToken: 'A1', refreshToken: 'R1', expiresAt, email: 'a@b.pl', clientId: CLIENT });
 const fresh: Tokens = { accessToken: 'A2', refreshToken: 'R1', expiresAt: NOW + 3_600_000 };
 
 function setup(stored: Session | null, refresher = vi.fn(async (): Promise<Tokens> => fresh)) {
   const vault = memoryVault(stored ? JSON.stringify(stored) : null);
-  return { vault, refresher, manager: new SessionManager(vault, refresher, () => NOW) };
+  return { vault, refresher, manager: new SessionManager(vault, refresher, CLIENT, () => NOW) };
 }
 
 describe('SessionManager', () => {
+  it('session_of_other_client_is_dropped_and_vault_cleared', async () => {
+    const { manager, vault } = setup({ ...session(NOW + 3_600_000), clientId: 'stary' });
+    expect(await manager.current()).toBeNull();
+    expect(vault.value()).toBeNull();
+    await expect(manager.accessToken()).rejects.toBeInstanceOf(LoginRequiredError);
+  });
+
+  it('session_without_client_id_is_dropped', async () => {
+    const { clientId: _omit, ...old } = session(NOW + 3_600_000);
+    const { manager, vault } = setup(old as Session);
+    expect(await manager.current()).toBeNull();
+    expect(vault.value()).toBeNull();
+  });
+
+  it('start_and_refresh_store_client_id', async () => {
+    const { manager, vault } = setup(null);
+    await manager.start('x@y.pl', { ...fresh, expiresAt: NOW });
+    expect(JSON.parse(vault.value()!).clientId).toBe(CLIENT);
+    await manager.forceRefresh();
+    expect(JSON.parse(vault.value()!)).toMatchObject({ accessToken: 'A2', clientId: CLIENT });
+  });
+
   it('uses the stored token while it is valid for more than 5 min', async () => {
     const { manager, refresher } = setup(session(NOW + 301_000));
     expect(await manager.accessToken()).toBe('A1');
@@ -24,7 +47,7 @@ describe('SessionManager', () => {
     const { manager, refresher, vault } = setup(session(NOW + 300_000));
     expect(await manager.accessToken()).toBe('A2');
     expect(refresher).toHaveBeenCalledWith('R1');
-    expect(JSON.parse(vault.value()!)).toEqual({ ...fresh, email: 'a@b.pl' });
+    expect(JSON.parse(vault.value()!)).toEqual({ ...fresh, email: 'a@b.pl', clientId: CLIENT });
   });
 
   it('shares one refresh between concurrent callers', async () => {
@@ -55,14 +78,14 @@ describe('SessionManager', () => {
 
   it('requires login without a session or with a corrupt vault value', async () => {
     await expect(setup(null).manager.accessToken()).rejects.toBeInstanceOf(LoginRequiredError);
-    const m = new SessionManager(memoryVault('{"accessToken":1}'), vi.fn(), () => NOW);
+    const m = new SessionManager(memoryVault('{"accessToken":1}'), vi.fn(), CLIENT, () => NOW);
     await expect(m.accessToken()).rejects.toBeInstanceOf(LoginRequiredError);
   });
 
   it('start() stores tokens with the e-mail; logout() clears them', async () => {
     const { manager, vault } = setup(null);
     await manager.start('x@y.pl', fresh);
-    expect(JSON.parse(vault.value()!)).toEqual({ ...fresh, email: 'x@y.pl' });
+    expect(JSON.parse(vault.value()!)).toEqual({ ...fresh, email: 'x@y.pl', clientId: CLIENT });
     await manager.logout();
     expect(vault.value()).toBeNull();
   });

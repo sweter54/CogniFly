@@ -4,7 +4,7 @@ Etap `test`, zasoby z prefiksem `cognifly-test-`. Wszystkie polecenia uruchamiaj
 
 ## 1. Lista kontrolna przed pierwszym wdrożeniem
 
-1. **Tożsamość SES nadawcy** jest zweryfikowana w regionie `eu-central-1` (adres podany jako `-c nadawca=...` albo, gdy używasz domeny, cała domena). Cognito (EMAIL_OTP) i powiadomienia wysyłają pocztę z tego adresu.
+1. **Tożsamość SES nadawcy** jest zweryfikowana w regionie `eu-central-1` (adres podany jako `-c nadawca=...` albo, gdy używasz domeny, cała domena). Powiadomienia wysyłają pocztę z tego adresu. Kody logowania wysyła pula Platformy (Tożsamość), nie CogniFly.
    - Gdy nadawcą ma być adres w zweryfikowanej domenie, dodaj `-c domenaSes=twoja-domena.pl`. Polityka IAM `ses:SendEmail` (zasób `identity/*` + warunek `ses:FromAddress` równy adresowi nadawcy) obejmuje zarówno tożsamość-adres, jak i tożsamość-domenę.
 2. **Sandbox SES.** Nowe konto jest w trybie sandbox: SES wysyła tylko do zweryfikowanych adresów. Zweryfikuj w `eu-central-1` także adresy odbiorców testowych (kody logowania i eskalacje) albo poproś o wyjście z sandboxa.
 3. **Bootstrap CDK** (jednorazowo, jeśli konto/region jeszcze go nie miały):
@@ -21,7 +21,7 @@ npx cdk deploy -c nadawca=nadawca@twoja-domena.pl -c emailAlarmow=alarmy@twoja-d
 # opcjonalnie: -c domenaSes=twoja-domena.pl
 ```
 
-Po wdrożeniu zapisz wartości wyjść stosu (`AdresApi`, `AdresWebhookGithub`, `KlientCognito`, `Region`, ...). Wyświetlisz je ponownie:
+Po wdrożeniu zapisz wartości wyjść stosu (`AdresApi`, `AdresWebhookGithub`, `KlientCognifly`, `Wydawca`, `Region`, ...). Wyświetlisz je ponownie:
 
 ```
 aws cloudformation describe-stacks --stack-name cognifly-test --region eu-central-1 --query "Stacks[0].Outputs" --output table
@@ -41,7 +41,7 @@ aws dynamodb scan --table-name cognifly-test-dane --select COUNT --region eu-cen
 aws dynamodb delete-table --table-name cognifly-test-dane --region eu-central-1
 ```
 
-Osierocone pule użytkowników (nazwa `cognifly-test-uzytkownicy`):
+Osierocone pule użytkowników (nazwa `cognifly-test-uzytkownicy`). Logowanie działa teraz przez pulę Platformy, a stara pula `eu-central-1_ho5yKP9z4` zostaje w stosie nieużywana (do wycofania, patrz `docs/przepiecie-na-platforme.md`). Nie usuwaj jej przed osobnym sprzątaniem po udanym oknie:
 ```
 aws cognito-idp list-user-pools --max-results 60 --region eu-central-1 \
   --query "UserPools[?Name=='cognifly-test-uzytkownicy'].[Id,Name]" --output text
@@ -71,23 +71,24 @@ aws cloudformation delete-stack --stack-name cognifly-test --region eu-central-1
 
 ## 5. Konfiguracja wtyczki z wyjść stosu
 
-Wtyczka potrzebuje czterech wartości. Wpisz je jednym poleceniem (zapisze `~/.cognifly/konfiguracja.json`, bez sekretów):
+Logowanie idzie przez pulę Platformy. Wtyczka potrzebuje czterech wartości. Wpisz je jednym poleceniem (zapisze `~/.cognifly/konfiguracja.json`, bez sekretów):
 
 ```
 node wtyczka/cli/cognifly.mjs konfiguruj \
-  --adres-api <AdresApi> --klient <KlientCognito> --region <Region> --firma pilot
+  --adres-api <AdresApi> --klient <KlientCognifly> --region <Region> --firma pilot
 ```
 
-Mapowanie: `AdresApi` -> `--adres-api`, `KlientCognito` -> `--klient`, `Region` -> `--region` (domyślnie `eu-central-1`), firma -> `--firma`. Alternatywnie zmienne środowiskowe `COGNIFLY_ADRES_API`, `COGNIFLY_KLIENT`, `COGNIFLY_REGION`, `COGNIFLY_FIRMA`. Potem zaloguj się kodem z maila (`zaloguj --email ...`, `kod --kod ...`); użytkownika w puli utwórz wcześniej (samorejestracja jest wyłączona).
+Mapowanie: `AdresApi` -> `--adres-api`, `KlientCognifly` -> `--klient`, `Region` -> `--region` (domyślnie `eu-central-1`), firma -> `--firma`. Alternatywnie zmienne środowiskowe `COGNIFLY_ADRES_API`, `COGNIFLY_KLIENT`, `COGNIFLY_REGION`, `COGNIFLY_FIRMA`.
+
+Wtyczka odrzuca zapisaną sesję innego klienta, więc po zmianie `--klient` zaloguj się od nowa kodem z maila (`zaloguj --email ...`, `kod --kod ...`). Osoby nie tworzysz w żadnej puli: konto zakłada Tożsamość, a rejestr osób CogniFly jest jej kopią.
 
 ## 6. Zasiew danych pilota
 
-Skrypt `infra/skrypty/zasiej-pilot.ts` (`npm run zasiej -w @cognifly/infra -- ...`) tworzy użytkowników w puli, sekret GitHuba i kontakty. Parametry przyjmuje flagami lub zmiennymi środowiskowymi: `ZASIEJ_EMAIL_MICHAL` (wymagany), `ZASIEJ_EMAIL_SZYMON`, `ZASIEJ_OSOBA_MICHAL`, `ZASIEJ_OSOBA_SZYMON`, `COGNIFLY_PULA` (wyjście `PulaCognito`), `ZASIEJ_DISCORD_MICHAL`, `ZASIEJ_DISCORD_SZYMON`, `ZASIEJ_SEKRET_GITHUB`. Domyślnie to DRY-RUN: najpierw sprawdź wypisany plan, dopiero potem dodaj `--wykonaj`.
+Skrypt `infra/skrypty/zasiej-pilot.ts` (`npm run zasiej -w @cognifly/infra -- ...`) zapisuje sekret GitHuba i kontakty. Nie tworzy użytkowników: osoby pochodzą z Tożsamości (Lambda `TozsamoscUzgodnij` kopiuje je do rejestru). Parametry przyjmuje flagami lub zmiennymi środowiskowymi: `ZASIEJ_EMAIL_MICHAL` (wymagany), `ZASIEJ_EMAIL_SZYMON`, `ZASIEJ_OSOBA_MICHAL`, `ZASIEJ_OSOBA_SZYMON`, `ZASIEJ_DISCORD_MICHAL`, `ZASIEJ_DISCORD_SZYMON`, `ZASIEJ_SEKRET_GITHUB`. Zmiennej `COGNIFLY_PULA` już nie ma. Domyślnie to DRY-RUN: najpierw sprawdź wypisany plan, dopiero potem dodaj `--wykonaj`.
 
 ```
 export AWS_REGION=eu-central-1
 export ZASIEJ_EMAIL_MICHAL=michal@twoja-domena.pl
-export COGNIFLY_PULA=<PulaCognito>
 npx tsx infra/skrypty/zasiej-pilot.ts            # plan, nic nie jest zapisywane
 npx tsx infra/skrypty/zasiej-pilot.ts --wykonaj  # zapis
 ```

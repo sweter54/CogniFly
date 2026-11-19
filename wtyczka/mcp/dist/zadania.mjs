@@ -21651,8 +21651,9 @@ async function cognito(endpoint, operacja, body, signal) {
   return { ok: json };
 }
 var TRZY_MIN = 3 * 6e4;
-function sesjaZWyniku(w, stara) {
+function sesjaZWyniku(w, stara, klient) {
   return {
+    klient,
     accessToken: w.AccessToken,
     idToken: w.IdToken ?? stara?.idToken,
     refreshToken: w.RefreshToken ?? stara?.refreshToken,
@@ -21673,7 +21674,7 @@ async function odswiez({ kat, konf, endpoint, sesja, signal }) {
     throw new Stan("BLAD", { kod: r.blad });
   }
   if (!r.ok.AuthenticationResult?.AccessToken) throw new Stan("BLAD", { kod: "ZLA_ODPOWIEDZ" });
-  const nowa = sesjaZWyniku(r.ok.AuthenticationResult, sesja);
+  const nowa = sesjaZWyniku(r.ok.AuthenticationResult, sesja, konf.klientCognito);
   zapisz(kat, "sesja.json", nowa);
   return nowa;
 }
@@ -21725,6 +21726,10 @@ async function wywolaj(url, metoda, sesja, firma, body, signal) {
 async function zSesja(ctx, metoda, sciezka, body) {
   const sesja0 = czytaj(ctx.kat, "sesja.json");
   if (!sesja0 || !sesja0.accessToken || !sesja0.refreshToken) throw new Stan("WYMAGA_LOGOWANIA");
+  if (sesja0.klient !== ctx.konf.klientCognito) {
+    usun(ctx.kat, "sesja.json");
+    throw new Stan("WYMAGA_LOGOWANIA");
+  }
   let sesja = sesja0, odswiezono = false;
   const dane = { kat: ctx.kat, konf: ctx.konf, endpoint: ctx.endpoint, signal: ctx.signal };
   if (!(sesja.wygasa - Date.now() > 6e4)) {

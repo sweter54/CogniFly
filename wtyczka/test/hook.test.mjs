@@ -110,7 +110,7 @@ describe('hook startu sesji', () => {
     await new Promise((ok) => s.listen(0, '127.0.0.1', ok));
     try {
       const kat = join(tmp, 'kat'); mkdirSync(kat, { mode: 0o700 });
-      writeFileSync(join(kat, 'sesja.json'), JSON.stringify({ accessToken: 'A', idToken: 'I', refreshToken: 'R', wygasa: Date.now() + 3_600_000 }), { mode: 0o600 });
+      writeFileSync(join(kat, 'sesja.json'), JSON.stringify({ accessToken: 'A', idToken: 'I', refreshToken: 'R', wygasa: Date.now() + 3_600_000, klient: 'k' }), { mode: 0o600 });
       writeFileSync(join(tmp, 'konf.json'), JSON.stringify({ klientCognito: 'k', region: 'eu-central-1', firmaDomyslna: 'f' }));
       const r = await hook({
         CLAUDE_PLUGIN_ROOT: KORZEN, COGNIFLY_KATALOG: kat, COGNIFLY_KONFIGURACJA: join(tmp, 'konf.json'),

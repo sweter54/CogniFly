@@ -6,13 +6,17 @@ describe('config', () => {
   it('defaults to the pilot stack', () => {
     expect(loadConfig(memoryStore())).toEqual({
       apiUrl: 'https://td5k44easl.execute-api.eu-central-1.amazonaws.com',
-      clientId: '67b7re8ou041svoosk3ukotqrq',
+      clientId: '130crcifqe1l4uggfap3p7kiml',
       region: 'eu-central-1',
       company: 'pilot',
       workFolder: '',
       heartwoodUrl: 'https://eohqtq0t3j.execute-api.eu-central-1.amazonaws.com',
       heartwoodWsUrl: 'wss://s0ulscfugh.execute-api.eu-central-1.amazonaws.com/prod',
     });
+  });
+
+  it('default_client_is_platforma_cognifly', () => {
+    expect(DEFAULT_CONFIG.clientId).toBe('130crcifqe1l4uggfap3p7kiml');
   });
 
   it('accepts an absolute work folder and strips its trailing slash', () => {

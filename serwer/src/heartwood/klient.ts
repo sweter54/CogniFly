@@ -77,6 +77,29 @@ export function sigV4Signer(region: string): Signer {
   };
 }
 
+/** Sends one signed request: `(method, url, body?)` -> raw response. */
+export type SignedFetch = (method: string, url: string, body?: string) => Promise<Response>;
+
+/**
+ * Builds a SigV4-signing fetch shared by the `/int` clients.
+ *
+ * Call: `signedFetch({ region })`; `fetch` and `sign` are for tests.
+ * Expects: the API region.
+ * Output: a `SignedFetch`; a body is sent as JSON, without a body the
+ * empty string is signed. Any status is returned as is; network and
+ * signing errors propagate.
+ */
+export function signedFetch(o: { region: string; fetch?: typeof fetch; sign?: Signer }): SignedFetch {
+  const doFetch = o.fetch ?? fetch;
+  const sign = o.sign ?? sigV4Signer(o.region);
+  return async (method, url, body) => {
+    const base: Record<string, string> = body === undefined ? {} : { 'content-type': 'application/json' };
+    const signed = await sign({ method, url, headers: base, body: body ?? '' });
+    const headers = { ...base, ...signed };
+    return doFetch(url, body === undefined ? { method, headers } : { method, headers, body });
+  };
+}
+
 /**
  * Reads the error code of a failed response.
  *
@@ -100,8 +123,7 @@ async function errorOf(res: Response): Promise<IntError> {
 export function intClient(o: {
   url: string; region: string; fetch?: typeof fetch; sign?: Signer;
 }): IntClient {
-  const doFetch = o.fetch ?? fetch;
-  const sign = o.sign ?? sigV4Signer(o.region);
+  const send = signedFetch(o);
   const base = o.url.replace(/\/+$/, '');
   const e = encodeURIComponent;
 
@@ -113,11 +135,7 @@ export function intClient(o: {
    * Output: resolves on 2xx; otherwise throws `IntError`.
    */
   async function put(path: string, payload: object): Promise<void> {
-    const url = `${base}/int${path}`;
-    const body = JSON.stringify(payload);
-    const baseHeaders = { 'content-type': 'application/json' };
-    const headers = await sign({ method: 'PUT', url, headers: baseHeaders, body });
-    const res = await doFetch(url, { method: 'PUT', headers: { ...baseHeaders, ...headers }, body });
+    const res = await send('PUT', `${base}/int${path}`, JSON.stringify(payload));
     if (!res.ok) throw await errorOf(res);
   }
 
@@ -129,9 +147,7 @@ export function intClient(o: {
    * Output: the parsed body; non-2xx throws `IntError`.
    */
   async function get<T>(path: string): Promise<T> {
-    const url = `${base}/int${path}`;
-    const headers = await sign({ method: 'GET', url, headers: {}, body: '' });
-    const res = await doFetch(url, { method: 'GET', headers });
+    const res = await send('GET', `${base}/int${path}`);
     if (!res.ok) throw await errorOf(res);
     return (await res.json()) as T;
   }

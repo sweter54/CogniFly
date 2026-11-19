@@ -10,8 +10,11 @@ export interface Vault {
   remove(): Promise<void>;
 }
 
-/** Stored session: tokens plus the e-mail shown in the UI. */
-export interface Session extends Tokens { email: string }
+/**
+ * Stored session: tokens, the e-mail shown in the UI and the Cognito
+ * app client that issued them (a session of another client is void).
+ */
+export interface Session extends Tokens { email: string; clientId: string }
 
 /**
  * Refresh when the access token expires within this window. Five
@@ -33,13 +36,15 @@ export class SessionManager {
   private generation = 0;
 
   /**
-   * Call: `new SessionManager(vault, refresher, now?)`.
-   * Expects: a vault and a refresher; `now` defaults to `Date.now`.
+   * Call: `new SessionManager(vault, refresher, clientId, now?)`.
+   * Expects: a vault, a refresher and the app client id the session
+   * must belong to; `now` defaults to `Date.now`.
    * Output: a manager that loads lazily from the vault.
    */
   constructor(
     private readonly vault: Vault,
     private readonly refresher: Refresher,
+    private readonly clientId: string,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -48,10 +53,20 @@ export class SessionManager {
    *
    * Call: `await manager.current()`.
    * Expects: nothing; a corrupt vault value counts as no session.
-   * Output: the session or `null` (first read hits the vault).
+   * Output: the session or `null` (first read hits the vault). A
+   * session without a `clientId`, or of another client, counts as no
+   * session and is removed from the vault, so no old token lingers.
    */
   async current(): Promise<Session | null> {
-    if (this.cached === undefined) this.cached = parseSession(await this.vault.read());
+    if (this.cached === undefined) {
+      const loaded = parseSession(await this.vault.read());
+      if (loaded && loaded.clientId !== this.clientId) {
+        await this.vault.remove();
+        this.cached = null;
+      } else {
+        this.cached = loaded;
+      }
+    }
     return this.cached;
   }
 
@@ -64,7 +79,7 @@ export class SessionManager {
    */
   async start(email: string, tokens: Tokens): Promise<void> {
     this.generation += 1;
-    await this.store({ ...tokens, email });
+    await this.store({ ...tokens, email, clientId: this.clientId });
   }
 
   /**
@@ -175,7 +190,7 @@ export class SessionManager {
       throw e;
     }
     if (this.generation !== started) throw new LoginRequiredError();
-    const next = { ...tokens, email: session.email };
+    const next = { ...tokens, email: session.email, clientId: this.clientId };
     await this.store(next);
     return next;
   }
@@ -199,7 +214,8 @@ export class SessionManager {
  * Call: `parseSession(raw)`.
  * Expects: the raw vault string or `null`.
  * Output: the session when all fields are present and typed,
- * otherwise `null`.
+ * otherwise `null`. A missing `clientId` parses as `''`, which never
+ * matches a real client (the manager then drops the session).
  */
 export function parseSession(raw: string | null): Session | null {
   if (!raw) return null;
@@ -207,7 +223,7 @@ export function parseSession(raw: string | null): Session | null {
     const o = JSON.parse(raw) as Partial<Session>;
     const ok = typeof o.accessToken === 'string' && typeof o.refreshToken === 'string'
       && typeof o.expiresAt === 'number' && typeof o.email === 'string';
-    return ok ? (o as Session) : null;
+    return ok ? ({ ...o, clientId: typeof o.clientId === 'string' ? o.clientId : '' } as Session) : null;
   } catch {
     return null;
   }

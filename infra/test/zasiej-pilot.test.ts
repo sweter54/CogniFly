@@ -1,6 +1,5 @@
 import { describe, expect, test, vi } from 'vitest';
 import { ResourceNotFoundException, CreateSecretCommand, DescribeSecretCommand, PutSecretValueCommand } from '@aws-sdk/client-secrets-manager';
-import { UserNotFoundException } from '@aws-sdk/client-cognito-identity-provider';
 import { przeczytajOpcje, regulaPilota, zasiej, type Zaleznosci } from '../skrypty/zasiej-pilot.js';
 
 describe('zasiej-pilot (tylko dry-run, bez AWS)', () => {
@@ -15,6 +14,8 @@ describe('zasiej-pilot (tylko dry-run, bez AWS)', () => {
     await zasiej(o, (s) => linie.push(s));
     const t = linie.join('\n');
     expect(t).toContain('DRY-RUN');
+    expect(t).toContain('Tożsamości');
+    expect(t).not.toContain('Cognito: użytkownik');
     expect(t).toContain('cognifly-test/github/pilot');
     expect(t).toContain('cognifly-test/discord/pilot/michal');
     expect(t).not.toContain('sekret.example');
@@ -36,18 +37,14 @@ describe('zasiej-pilot --wykonaj na atrapach (bez AWS)', () => {
       }
       return {};
     }) };
-    const cog = { send: vi.fn(async (c: { constructor: { name: string } }) => {
-      if (c.constructor.name === 'AdminGetUserCommand') return { UserAttributes: [{ Name: 'sub', Value: 'sub-1' }] };
-      throw new UserNotFoundException({ message: 'x', $metadata: {} });
-    }) };
     const dane = {
-      zapiszTozsamosc: vi.fn(async () => {}), zapiszOsobe: vi.fn(async () => {}), zapiszRegule: vi.fn(async () => {}),
+      zapiszRegule: vi.fn(async () => {}),
       zapiszKontakt: vi.fn(async () => {}), kontaktOsoby: vi.fn(async () => opcje.kontakt ?? {}),
       zapiszLoginGithub: vi.fn(async () => {}),
     };
-    return { sm, cog, dane, zal: { sm, cog, dane } as unknown as Zaleznosci };
+    return { sm, dane, zal: { sm, dane } as unknown as Zaleznosci };
   };
-  const opcje = (...a: string[]) => przeczytajOpcje(['--email-michal', 'm@example.com', '--pula', 'pula-1', '--wykonaj', ...a], {});
+  const opcje = (...a: string[]) => przeczytajOpcje(['--email-michal', 'm@example.com', '--wykonaj', ...a], {});
   const polecenia = (sm: { send: { mock: { calls: unknown[][] } } }, K: new (...a: never[]) => unknown) =>
     sm.send.mock.calls.filter(([c]) => c instanceof K);
 
@@ -60,7 +57,7 @@ describe('zasiej-pilot --wykonaj na atrapach (bez AWS)', () => {
 
   test('brakujący sekret GitHuba jest tworzony, a jawnie podany nadpisywany', async () => {
     const m = zbuduj({ istniejacySekret: false });
-    await zasiej(opcje(), () => {}, m);
+    await zasiej(opcje(), () => {}, m.zal);
     expect(polecenia(m.sm, CreateSecretCommand)).toHaveLength(1);
     const m2 = zbuduj({ istniejacySekret: true });
     await zasiej(opcje('--sekret-github', 'jawny'), () => {}, m2.zal);
@@ -75,10 +72,17 @@ describe('zasiej-pilot --wykonaj na atrapach (bez AWS)', () => {
     });
   });
 
-  test('sub z Cognito trafia do rekordu osoby', async () => {
+  test('no_cognito_and_no_person_records: only contact and rule are written', async () => {
     const m = zbuduj({ istniejacySekret: true });
     await zasiej(opcje(), () => {}, m.zal);
-    expect(m.dane.zapiszOsobe).toHaveBeenCalledWith('pilot', 'michal', { email: 'm@example.com', rola: 'admin', sub: 'sub-1' });
+    expect(Object.keys(m.dane).sort()).toEqual(
+      ['kontaktOsoby', 'zapiszKontakt', 'zapiszLoginGithub', 'zapiszRegule']);
+    expect(m.dane.zapiszKontakt).toHaveBeenCalledTimes(1);
+    expect(m.dane.zapiszRegule).toHaveBeenCalledTimes(1);
+  });
+
+  test('--pula is not an option anymore', () => {
+    expect(() => przeczytajOpcje(['--email-michal', 'm@x.pl', '--pula', 'p'], {})).toThrow();
   });
 
   test('--github-michal wiąże login GitHub z osobą; bez opcji nic nie zapisuje', async () => {

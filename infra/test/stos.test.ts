@@ -19,6 +19,21 @@ beforeAll(() => {
 
 const zasoby = (typ: string) => Object.entries<any>(json.Resources).filter(([, r]) => r.Type === typ);
 
+/** Asserts that `EventBusName` of the named rule refers to the hub. */
+const naHubie = (j: Record<string, any>, regula: string) => {
+  const [, r] = Object.entries<any>(j.Resources)
+    .find(([, x]) => x.Type === 'AWS::Events::Rule' && x.Properties.Name === regula)!;
+  expect(JSON.stringify(r.Properties.EventBusName), regula).toContain(`"Ref":"${parametrSsm(j, 'hub/arn')}"`);
+};
+
+/** Logical id of the CloudFormation SSM parameter for `/platforma/test/<name>`. */
+const parametrSsm = (j: Record<string, any>, nazwa: string) => {
+  const e = Object.entries<any>(j.Parameters ?? {}).find(([, p]) => p.Default === `/platforma/test/${nazwa}`);
+  expect(e, nazwa).toBeDefined();
+  expect(e![1].Type).toBe('AWS::SSM::Parameter::Value<String>');
+  return e![0];
+};
+
 describe('stos CogniFly', () => {
   test('brak kontekstu nadawca / emailAlarmow -> czytelny błąd', () => {
     expect(() => zbuduj({ emailAlarmow: 'a@example.com' })).toThrow(/-c nadawca=/);
@@ -54,7 +69,7 @@ describe('stos CogniFly', () => {
         DeadLetterConfig: { Arn: Match.anyValue() },
       })],
     });
-    t.resourceCountIs('AWS::SQS::Queue', 2);
+    t.resourceCountIs('AWS::SQS::Queue', 3);
   });
 
   test('DLQ na poziomie funkcji (async) dla przetwarzania i eskalacji + alarmy na DLQ', () => {
@@ -63,7 +78,7 @@ describe('stos CogniFly', () => {
       expect(r.Properties.DeadLetterConfig?.TargetArn, fragment).toBeDefined();
     }
     const kolejki = zasoby('AWS::CloudWatch::Alarm').filter(([, a]) => a.Properties.MetricName === 'ApproximateNumberOfMessagesVisible');
-    expect(kolejki).toHaveLength(2);
+    expect(kolejki).toHaveLength(3);
     for (const [, a] of kolejki) {
       expect(a.Properties.Namespace).toBe('AWS/SQS');
       expect(a.Properties.Threshold).toBe(0);
@@ -73,14 +88,15 @@ describe('stos CogniFly', () => {
   });
 
   test('Lambdy: Node 22, ARM64, logi 14 dni, nazwy z prefiksem', () => {
-    const lambdy = zasoby('AWS::Lambda::Function').filter(([, r]) => r.Properties.Runtime);
-    expect(lambdy).toHaveLength(5);
+    // Own functions only (the trigger's CDK provider function has no name).
+    const lambdy = zasoby('AWS::Lambda::Function').filter(([, r]) => r.Properties.FunctionName);
+    expect(lambdy).toHaveLength(7);
     for (const [, r] of lambdy) {
       expect(r.Properties.Runtime).toBe('nodejs22.x');
       expect(r.Properties.Architectures).toEqual(['arm64']);
       expect(r.Properties.FunctionName).toMatch(/^cognifly-test-/);
     }
-    t.resourceCountIs('AWS::Logs::LogGroup', 5);
+    t.resourceCountIs('AWS::Logs::LogGroup', 7);
     for (const [, r] of zasoby('AWS::Logs::LogGroup')) expect(r.Properties.RetentionInDays).toBe(14);
   });
 
@@ -134,7 +150,7 @@ describe('stos CogniFly', () => {
     for (const s of stm) expect(s.Resource).not.toBe('*');
   });
 
-  test('HTTP API: webhook bez autoryzatora, 18 tras API z JWT (pula + klient)', () => {
+  test('HTTP API: webhook bez autoryzatora, 18 tras API z JWT (Platforma)', () => {
     const trasy = zasoby('AWS::ApiGatewayV2::Route').map(([, r]) => r.Properties);
     expect(trasy).toHaveLength(19);
     const wh = trasy.find((r) => r.RouteKey === 'POST /webhook/github/{firma}');
@@ -150,7 +166,7 @@ describe('stos CogniFly', () => {
     t.hasResourceProperties('AWS::ApiGatewayV2::Authorizer', {
       AuthorizerType: 'JWT',
       IdentitySource: ['$request.header.Authorization'],
-      JwtConfiguration: { Audience: [{ Ref: Match.stringLikeRegexp('Klient') }], Issuer: Match.anyValue() },
+      JwtConfiguration: { Audience: [Match.anyValue()], Issuer: Match.anyValue() },
     });
   });
 
@@ -176,7 +192,10 @@ describe('stos CogniFly', () => {
   });
 
   test('alarmy błędów Lambd -> SNS -> e-mail', () => {
-    t.resourceCountIs('AWS::CloudWatch::Alarm', 7);
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 10);
+    for (const n of ['tozsamosczdarzenia-bledy', 'tozsamoscuzgodnij-bledy', 'tozsamosc-dlq']) {
+      t.hasResourceProperties('AWS::CloudWatch::Alarm', { AlarmName: `cognifly-test-${n}` });
+    }
     t.hasResourceProperties('AWS::CloudWatch::Alarm', {
       MetricName: 'Errors', Namespace: 'AWS/Lambda', Threshold: 0,
       ComparisonOperator: 'GreaterThanThreshold', AlarmActions: [{ Ref: Match.stringLikeRegexp('Alarmy') }],
@@ -186,8 +205,10 @@ describe('stos CogniFly', () => {
 
   test('wyjścia stosu', () => {
     expect(Object.keys(json.Outputs).sort()).toEqual(
-      ['AdresApi', 'AdresWebhookGithub', 'KlientCognito', 'NazwaSzyny', 'PulaCognito', 'Region'],
+      ['AdresApi', 'AdresWebhookGithub', 'KlientCognifly', 'KlientCognito', 'NazwaSzyny', 'PulaCognito', 'Region', 'Wydawca'],
     );
+    expect(json.Outputs.Wydawca.Value).toEqual({ Ref: parametrSsm(json, 'tozsamosc/issuer') });
+    expect(json.Outputs.KlientCognifly.Value).toEqual({ Ref: parametrSsm(json, 'tozsamosc/client-id/cognifly') });
     expect(JSON.stringify(json.Outputs.AdresWebhookGithub)).toContain('/webhook/github/{firma}');
     expect(JSON.stringify(json.Outputs.NazwaSzyny.Value)).toContain('Szyna');
   });
@@ -259,6 +280,103 @@ describe('stos CogniFly', () => {
     expect(ses).toContain('identity/example.com');
     t2.hasResource('AWS::Cognito::UserPool', { DeletionPolicy: 'Retain' });
     t2.hasResource('AWS::DynamoDB::Table', { DeletionPolicy: 'Retain' });
+  });
+
+  test('authorizer_uses_platforma_issuer_and_cognifly_client', () => {
+    t.resourceCountIs('AWS::ApiGatewayV2::Authorizer', 1);
+    t.hasResourceProperties('AWS::ApiGatewayV2::Authorizer', {
+      JwtConfiguration: {
+        Issuer: { Ref: parametrSsm(json, 'tozsamosc/issuer') },
+        Audience: [{ Ref: parametrSsm(json, 'tozsamosc/client-id/cognifly') }],
+      },
+    });
+  });
+
+  test('identity_rule_on_hub_targets_consumer_with_dlq', () => {
+    const [idQ] = zasoby('AWS::SQS::Queue').find(([, q]) => q.Properties.QueueName === 'cognifly-test-tozsamosc-dlq')!;
+    t.hasResourceProperties('AWS::SQS::Queue', {
+      QueueName: 'cognifly-test-tozsamosc-dlq', MessageRetentionPeriod: 14 * 24 * 3600,
+    });
+    t.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'cognifly-test-tozsamosc',
+      EventPattern: {
+        source: ['tozsamosc'],
+        'detail-type': ['person.added', 'person.role_changed', 'person.removed'],
+      },
+      Targets: [Match.objectLike({
+        Arn: { 'Fn::GetAtt': [Match.stringLikeRegexp('^TozsamoscZdarzenia'), 'Arn'] },
+        DeadLetterConfig: { Arn: { 'Fn::GetAtt': [idQ, 'Arn'] } },
+        RetryPolicy: { MaximumRetryAttempts: 4 },
+      })],
+    });
+    naHubie(json, 'cognifly-test-tozsamosc');
+    t.hasResourceProperties('AWS::Lambda::Function', {
+      FunctionName: 'cognifly-test-tozsamosczdarzenia',
+      Environment: { Variables: Match.objectLike({
+        COGNIFLY_TABELA: 'cognifly-test-dane',
+        TOZSAMOSC_URL: { Ref: parametrSsm(json, 'tozsamosc/api-url') },
+      }) },
+    });
+  });
+
+  test('reconcile_runs_hourly_and_after_deploy', () => {
+    const [idF, f] = zasoby('AWS::Lambda::Function')
+      .find(([, r]) => r.Properties.FunctionName === 'cognifly-test-tozsamoscuzgodnij')!;
+    expect(f.Properties.Timeout).toBe(300);
+    expect(f.Properties.Environment.Variables).toMatchObject({
+      COGNIFLY_TABELA: 'cognifly-test-dane',
+      TOZSAMOSC_URL: { Ref: parametrSsm(json, 'tozsamosc/api-url') },
+    });
+    t.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'cognifly-test-uzgodnij',
+      ScheduleExpression: 'rate(1 hour)',
+      Targets: [Match.objectLike({ Arn: { 'Fn::GetAtt': [idF, 'Arn'] } })],
+    });
+    const [, rule] = zasoby('AWS::Events::Rule').find(([, r]) => r.Properties.Name === 'cognifly-test-uzgodnij')!;
+    expect(rule.Properties.EventBusName).toBeUndefined(); // default bus
+    // executeOnHandlerChange: the trigger points at the function's current version.
+    const [, trig] = zasoby('Custom::Trigger')[0]!;
+    const [idV] = zasoby('AWS::Lambda::Version')
+      .find(([, v]) => v.Properties.FunctionName?.Ref === idF)!;
+    expect(trig.Properties.HandlerArn).toEqual({ Ref: idV });
+    const [idT] = zasoby('AWS::DynamoDB::Table')[0]!;
+    expect(([] as string[]).concat(trig.DependsOn ?? [])).toContain(idT);
+  });
+
+  test('reconcile_trigger_runs_after_api_and_identity_rule', () => {
+    const [, trig] = zasoby('Custom::Trigger')[0]!;
+    const zalezy = ([] as string[]).concat(trig.DependsOn ?? []);
+    const id = (typ: string, f: (r: any) => boolean = () => true) =>
+      zasoby(typ).filter(([, r]) => f(r)).map(([i]) => i);
+    const wymagane = [
+      ...id('AWS::Events::Rule', (r) => r.Properties.Name === 'cognifly-test-tozsamosc'),
+      ...id('AWS::ApiGatewayV2::Api'), ...id('AWS::ApiGatewayV2::Authorizer'),
+      ...id('AWS::ApiGatewayV2::Route'), ...id('AWS::ApiGatewayV2::Stage'),
+    ];
+    expect(wymagane.length).toBeGreaterThan(4);
+    for (const w of wymagane) expect(zalezy, w).toContain(w);
+  });
+
+  test('reconcile_may_invoke_identity_int_api_only', () => {
+    const invoke = zasoby('AWS::IAM::Policy').flatMap(([, p]) =>
+      (p.Properties.PolicyDocument.Statement as any[])
+        .filter((s) => ([] as string[]).concat(s.Action).includes('execute-api:Invoke'))
+        .map((s) => ({ roles: JSON.stringify(p.Properties.Roles), s })));
+    expect(invoke).toHaveLength(1);
+    expect(invoke[0]!.roles).toContain('TozsamoscUzgodnij');
+    expect(invoke[0]!.s).toEqual({
+      Action: 'execute-api:Invoke', Effect: 'Allow',
+      Resource: { Ref: parametrSsm(json, 'tozsamosc/int-invoke-arn') },
+    });
+  });
+
+  test('github_webhook_still_publishes_to_internal_bus', () => {
+    for (const n of ['cognifly-test-przetwarzanie', 'cognifly-test-dostarczenia']) {
+      const [, r] = zasoby('AWS::Events::Rule').find(([, x]) => x.Properties.Name === n)!;
+      expect(r.Properties.EventBusName, n).toEqual({ Ref: zasoby('AWS::Events::EventBus')[0]![0] });
+    }
+    const [, w] = zasoby('AWS::Lambda::Function').find(([, r]) => r.Properties.FunctionName === 'cognifly-test-webhook')!;
+    expect(w.Properties.Environment.Variables.COGNIFLY_SZYNA).toBe('cognifly-test');
   });
 
   test('tag Project=cognifly na zasobach z tagami', () => {
@@ -352,7 +470,31 @@ describe('stos z kontekstem heartwood', () => {
     for (const n of ['heartwoodpraca-bledy', 'heartwoodzdarzenia-bledy', 'heartwood-dlq']) {
       t2.hasResourceProperties('AWS::CloudWatch::Alarm', { AlarmName: `cognifly-test-${n}` });
     }
-    t2.resourceCountIs('AWS::CloudWatch::Alarm', 10);
+    t2.resourceCountIs('AWS::CloudWatch::Alarm', 13);
+  });
+
+  test('heartwood_rule_is_on_the_hub', () => {
+    const j2 = Template.fromStack(zbuduj({ ...KONTEKST, heartwood: HW })).toJSON();
+    naHubie(j2, 'cognifly-test-heartwood-hub');
+  });
+
+  test('heartwood_hub_rule_is_a_new_resource_under_a_new_name', () => {
+    // EventBusName change forces replacement; CFN cannot replace a
+    // custom-named resource, so the hub rule gets a new id and name.
+    const j2 = Template.fromStack(zbuduj({ ...KONTEKST, heartwood: HW })).toJSON();
+    const regulyHw = Object.entries<any>(j2.Resources).filter(([, r]) =>
+      r.Type === 'AWS::Events::Rule' && r.Properties.EventPattern?.source?.[0] === 'heartwood');
+    expect(regulyHw).toHaveLength(1);
+    expect(regulyHw[0]![0]).toMatch(/^RegulaHeartwoodHub/);
+    expect(regulyHw[0]![1].Properties.Name).toBe('cognifly-test-heartwood-hub');
+  });
+
+  test('reconcile_trigger_runs_after_heartwood_hub_rule', () => {
+    const j2 = Template.fromStack(zbuduj({ ...KONTEKST, heartwood: HW })).toJSON();
+    const [, trig] = Object.entries<any>(j2.Resources).find(([, r]) => r.Type === 'Custom::Trigger')!;
+    const [idR] = Object.entries<any>(j2.Resources).find(([, r]) =>
+      r.Type === 'AWS::Events::Rule' && r.Properties.Name === 'cognifly-test-heartwood-hub')!;
+    expect(([] as string[]).concat(trig.DependsOn ?? [])).toContain(idR);
   });
 
   test('zły kontekst heartwood -> czytelny błąd', () => {

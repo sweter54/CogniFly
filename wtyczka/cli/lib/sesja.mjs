@@ -92,8 +92,9 @@ export async function zaloguj({ kat, konf, endpoint, email, signal }) {
   return { stan: 'KOD_WYSLANY' };
 }
 
-function sesjaZWyniku(w, stara) {
+function sesjaZWyniku(w, stara, klient) {
   return {
+    klient,
     accessToken: w.AccessToken,
     idToken: w.IdToken ?? stara?.idToken,
     refreshToken: w.RefreshToken ?? stara?.refreshToken,
@@ -119,7 +120,7 @@ export async function kod({ kat, konf, endpoint, kod: k, signal }) {
     throw new Stan('BLAD', { kod: r.blad });
   }
   if (!r.ok.AuthenticationResult?.AccessToken) throw new Stan('ZLY_KOD');
-  zapisz(kat, 'sesja.json', sesjaZWyniku(r.ok.AuthenticationResult));
+  zapisz(kat, 'sesja.json', sesjaZWyniku(r.ok.AuthenticationResult, undefined, konf.klientCognito));
   usun(kat, 'oczekujace.json');
   return { stan: 'ZALOGOWANO', osoba: p.email, firmy: konf.firmaDomyslna ? [konf.firmaDomyslna] : [] };
 }
@@ -137,7 +138,7 @@ export async function odswiez({ kat, konf, endpoint, sesja, signal }) {
     throw new Stan('BLAD', { kod: r.blad });
   }
   if (!r.ok.AuthenticationResult?.AccessToken) throw new Stan('BLAD', { kod: 'ZLA_ODPOWIEDZ' });
-  const nowa = sesjaZWyniku(r.ok.AuthenticationResult, sesja);
+  const nowa = sesjaZWyniku(r.ok.AuthenticationResult, sesja, konf.klientCognito);
   zapisz(kat, 'sesja.json', nowa);
   return nowa;
 }
