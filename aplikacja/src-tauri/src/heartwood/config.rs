@@ -310,24 +310,32 @@ pub fn resolve(
 /// 0600 on Unix; `Err("CONFIG_WRITE")` on an I/O failure.
 pub fn write(resolved: &Resolved) -> Result<(), String> {
     let Some(text) = &resolved.text else { return Ok(()) };
-    let fail = |_| "CONFIG_WRITE".to_string();
-    if let Some(dir) = resolved.path.parent() {
-        std::fs::create_dir_all(dir).map_err(fail)?;
+    write_private(&resolved.path, text).map_err(|_| "CONFIG_WRITE".into())
+}
+
+/// Writes a file readable by its owner only.
+///
+/// Call: `write_private(&path, text)` for the config or PID record.
+/// Expects: any path; missing parent folders are created.
+/// Output: the file created or replaced with mode 0600 on Unix (an
+/// older file is tightened too), or the I/O error.
+pub fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
     }
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let mut file = options.open(&resolved.path).map_err(fail)?;
+    let mut file = options.open(path)?;
     // An older file keeps its mode on open: tighten it too.
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::Permissions::from_mode(0o600);
-        file.set_permissions(mode).map_err(fail)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
     }
     use std::io::Write as _;
-    file.write_all(text.as_bytes()).map_err(fail)
+    file.write_all(text.as_bytes())
 }
 
 /// Candidate paths of the `heartwood` binary, in D9 order.
