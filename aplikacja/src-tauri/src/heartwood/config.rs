@@ -166,7 +166,7 @@ pub fn string_value(text: &str, key: &str) -> Option<String> {
     None
 }
 
-/// Default sync root: `~/Heartwood` (D10).
+/// Fallback sync root for `COGNIFLY_HEARTWOOD_CONFIG` without `root`.
 ///
 /// Call: `default_root()`.
 /// Expects: nothing.
@@ -201,18 +201,68 @@ fn env_path(name: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
+/// Longest socket path a Unix socket accepts on macOS (SUN_LEN 104).
+const MAX_SOCKET_PATH: usize = 103;
+
+/// Checks the sync root chosen by CogniFly.
+///
+/// Call: `check_root(Path::new("/Users/a/Praca/Pliki"))`.
+/// Expects: the root sent by the app (work folder + `Pliki`).
+/// Output: `Ok(())` for an absolute path whose socket path fits;
+/// `Err("BAD_ROOT")` for a relative or empty path,
+/// `Err("ROOT_TOO_LONG")` when the socket path is too long.
+pub fn check_root(root: &Path) -> Result<(), String> {
+    if root.as_os_str().is_empty() || !root.is_absolute() {
+        return Err("BAD_ROOT".to_string());
+    }
+    if socket_path(root).as_os_str().len() > MAX_SOCKET_PATH {
+        return Err("ROOT_TOO_LONG".to_string());
+    }
+    Ok(())
+}
+
+/// Keeps the sync root out of the work folder's git repository.
+///
+/// Call: `exclude_from_git(&root)` before starting the daemon.
+/// Expects: the sync root; its parent may be a git work tree.
+/// Output: none; when `<parent>/.git` is a directory, the line
+/// `/<root name>/` is appended to `.git/info/exclude` once.
+/// Best effort: errors are ignored (the files still sync).
+pub fn exclude_from_git(root: &Path) {
+    let (Some(parent), Some(name)) = (root.parent(), root.file_name()) else {
+        return;
+    };
+    let git = parent.join(".git");
+    if !git.is_dir() {
+        return;
+    }
+    let line = format!("/{}/", name.to_string_lossy());
+    let file = git.join("info").join("exclude");
+    let text = std::fs::read_to_string(&file).unwrap_or_default();
+    if text.lines().any(|l| l.trim() == line) {
+        return;
+    }
+    let sep = if text.is_empty() || text.ends_with('\n') { "" } else { "\n" };
+    let _ = std::fs::create_dir_all(git.join("info"));
+    let _ = std::fs::write(&file, format!("{text}{sep}{line}\n"));
+}
+
 /// Resolves the config the daemon will run with (D10).
 ///
-/// Call: `resolve(server_url, ws_url, org)` on `heartwood_start`.
-/// Expects: the URLs built into the app (empty = disabled).
+/// Call: `resolve(server_url, ws_url, org, root)` on
+/// `heartwood_start`.
+/// Expects: the URLs built into the app (empty = disabled) and the
+/// sync root chosen by CogniFly (work folder + `Pliki`).
 /// Output: the env file as-is (root read from it, else the default)
 /// when `COGNIFLY_HEARTWOOD_CONFIG` is set; otherwise a generated
-/// config whose `token_command` is this app in token mode.
-/// `Err("DISABLED")` for empty URLs without the variable.
+/// config with `root` and `token_command` = this app in token mode.
+/// `Err("DISABLED")` for empty URLs without the variable;
+/// `BAD_ROOT` / `ROOT_TOO_LONG` from `check_root`.
 pub fn resolve(
     server_url: &str,
     ws_url: &str,
     org: &str,
+    root: &Path,
 ) -> Result<Resolved, String> {
     if let Some(path) = env_path(CONFIG_ENV) {
         let text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -224,6 +274,7 @@ pub fn resolve(
     if server_url.is_empty() || ws_url.is_empty() {
         return Err("DISABLED".to_string());
     }
+    check_root(root)?;
     let exe = std::env::current_exe().map_err(|_| "NO_EXE".to_string())?;
     let cfg = HwConfig {
         server_url: server_url.to_string(),
@@ -232,7 +283,7 @@ pub fn resolve(
             exe.to_string_lossy().into_owned(),
             crate::TOKEN_ARG.to_string(),
         ],
-        root: default_root(),
+        root: root.to_path_buf(),
         org: org.to_string(),
     };
     Ok(Resolved {
@@ -408,4 +459,37 @@ mod tests {
         }
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    #[test]
+    fn root_must_be_absolute_and_short() {
+        assert_eq!(check_root(Path::new("")), Err("BAD_ROOT".into()));
+        assert_eq!(check_root(Path::new("rel/Pliki")), Err("BAD_ROOT".into()));
+        assert!(check_root(Path::new("/Users/a/Praca/Pliki")).is_ok());
+        let long = format!("/{}/Pliki", "x".repeat(90));
+        assert_eq!(check_root(Path::new(&long)), Err("ROOT_TOO_LONG".into()));
+    }
+
+    #[test]
+    fn root_is_excluded_from_git_once() {
+        let dir = std::env::temp_dir().join(format!("hw-git-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".git").join("info")).unwrap();
+        std::fs::write(dir.join(".git/info/exclude"), "*.log").unwrap();
+        exclude_from_git(&dir.join("Pliki"));
+        exclude_from_git(&dir.join("Pliki"));
+        let text = std::fs::read_to_string(dir.join(".git/info/exclude")).unwrap();
+        assert_eq!(text, "*.log\n/Pliki/\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn no_git_means_no_exclude_file() {
+        let dir = std::env::temp_dir().join(format!("hw-nogit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        exclude_from_git(&dir.join("Pliki"));
+        assert!(!dir.join(".git").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
 }

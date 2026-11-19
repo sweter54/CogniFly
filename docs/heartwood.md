@@ -42,7 +42,7 @@ Heartwood i pokazuje zakładkę „Pliki”.
 | D7 | mapowanie zdarzeń na zadania i powiadomienia (wyżej) |
 | D8 | `token_command` = `[<binarka CogniFly>, "heartwood-token"]`; token ≥ 60 s, odświeżanie przy ≤ 5 min |
 | D9 | wyszukiwanie binarki `heartwood` (niżej) |
-| D10 | adresy serwera wbudowane w aplikację; konfiguracja w Application Support |
+| D10 | adresy serwera wbudowane w aplikację; konfiguracja w Application Support; folder plików = `<folder pracy>/Pliki` (ustala CogniFly) |
 | D11 | „Pliki zadania” z prawdy serwera (`work-files`), nie z lokalnej pamięci blokad |
 | D12 | licznik przy zegarze: `<zadania> ⚠<konflikty> ↑<niewysłane>` |
 
@@ -122,9 +122,15 @@ Kod: `aplikacja/src-tauri/src/heartwood/`, logika UI: `aplikacja/src/logic/heart
   pokazuje „Heartwood nie jest zainstalowany”. Pakowanie do `.app` zostaje na
   wydanie (repo Heartwood jest prywatne).
 - **Konfiguracja** (D10): adresy w `DEFAULT_CONFIG.heartwoodUrl/heartwoodWsUrl`
-  (`aplikacja/src/logic/config.ts`), dziś puste = wyłączone. Aplikacja pisze
-  `~/Library/Application Support/pl.cognifly.aplikacja/heartwood.toml`
-  (`root` = `~/Heartwood`). Zmienna `COGNIFLY_HEARTWOOD_CONFIG=<config.toml>`
+  (`aplikacja/src/logic/config.ts`; dziś instancja `heartwood-test`). Aplikacja
+  pisze `~/Library/Application Support/pl.cognifly.aplikacja/heartwood.toml`.
+- **Folder plików ustala CogniFly** (Michał, 2026-11-19): `root` =
+  `<folder pracy z Ustawień>/Pliki`, np. `~/Documents/CogniFlyWorkspace/Pliki/
+  wspolne/…`. Bez folderu pracy demon nie startuje; zmiana folderu pracy
+  restartuje demona z nowym `root`. Gdy folder pracy jest repozytorium git,
+  `/Pliki/` trafia do `.git/info/exclude`. Ścieżka gniazda
+  (`<root>/.heartwood/heartwood.sock`) musi mieć ≤ 103 znaki (`ROOT_TOO_LONG`).
+  Zmienna `COGNIFLY_HEARTWOOD_CONFIG=<config.toml>`
   używa gotowego pliku bez zmian (testy lokalne).
 - **Zakładka „Pliki”**: blokowanie ścieżek pod `root` (spoza `root` odmowa
   `OUTSIDE`/`BAD_REQUEST` po polsku), licznik (D12) i przeglądarka przestrzeni

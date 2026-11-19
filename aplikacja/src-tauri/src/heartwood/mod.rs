@@ -12,21 +12,27 @@ pub mod supervisor;
 mod testutil;
 
 use serde_json::Value;
+use std::path::Path;
 use supervisor::{HeartwoodInfo, Launch, Phase, Supervisor};
 use tauri::State;
 
 /// Resolves config and binary and writes the config file.
 ///
-/// Call: `prepare(server_url, ws_url, org)`.
-/// Expects: the URLs built into the app (empty = disabled).
-/// Output: the launch, or `DISABLED`, `NOT_INSTALLED`, `NO_EXE`,
-/// `CONFIG_WRITE`.
+/// Call: `prepare(server_url, ws_url, org, root)`.
+/// Expects: the URLs built into the app (empty = disabled) and the
+/// sync root chosen by CogniFly.
+/// Output: the launch (root kept out of the work folder's git), or
+/// `DISABLED`, `BAD_ROOT`, `ROOT_TOO_LONG`, `NOT_INSTALLED`,
+/// `NO_EXE`, `CONFIG_WRITE`.
 fn prepare(
     server_url: &str,
     ws_url: &str,
     org: &str,
+    root: &str,
 ) -> Result<Launch, String> {
-    let resolved = config::resolve(server_url, ws_url, org)?;
+    let resolved =
+        config::resolve(server_url, ws_url, org, Path::new(root))?;
+    config::exclude_from_git(&resolved.root);
     let bin = config::find_binary()?;
     config::write(&resolved)?;
     Ok(Launch { bin, config: resolved })
@@ -34,7 +40,7 @@ fn prepare(
 
 /// Starts the daemon (or keeps the running one).
 ///
-/// Call: `invoke('heartwood_start', { serverUrl, wsUrl, org })`.
+/// Call: `invoke('heartwood_start', { serverUrl, wsUrl, org, root })`.
 /// Expects: the background window; a session already exists, since
 /// the daemon asks this app for tokens.
 /// Output: the state; the same data again is a no-op, other data
@@ -45,9 +51,10 @@ pub async fn heartwood_start(
     server_url: String,
     ws_url: String,
     org: String,
+    root: String,
     sup: State<'_, Supervisor>,
 ) -> Result<HeartwoodInfo, String> {
-    match prepare(&server_url, &ws_url, &org) {
+    match prepare(&server_url, &ws_url, &org, &root) {
         Ok(launch) => Ok(sup.start(launch).await),
         Err(code) => {
             if let Some(phase) = Phase::for_error(&code) {

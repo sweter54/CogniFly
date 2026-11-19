@@ -68,7 +68,7 @@ function fakeHeartwood() {
 }
 
 /** Fake backend: routes by URL; `inbox` is mutable between polls. */
-function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
+function setup(opts: { session?: string | null; inbox?: unknown[]; workFolder?: string } = {}) {
   const state = { inbox: opts.inbox ?? [], offline: false, cognito: [] as unknown[], firmy: [{ firma: 'pilot', osoba: 'michal' }] };
   const fetch: FetchFn = vi.fn(async (url: string, init: RequestInit) => {
     if (state.offline) throw new TypeError('offline');
@@ -103,6 +103,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
     pickFolder: vi.fn(async (): Promise<string | null> => '/Users/m/repo'),
     now: () => NOW,
   };
+  if (opts.workFolder) ports.store.setItem('cognifly.config', JSON.stringify({ ...DEFAULT_CONFIG, workFolder: opts.workFolder }));
   return { c: new Controller(ports), ports, state, views, hw };
 }
 
@@ -373,11 +374,11 @@ describe('Controller', () => {
     const lockId = id(7);
 
     it('after login starts the daemon for the company; disabled does not break the inbox', async () => {
-      const { c, ports, hw } = setup({ inbox: [task(1)] });
+      const { c, ports, hw } = setup({ workFolder: '/Users/m/repo', inbox: [task(1)] });
       hw.state = 'disabled';
       hw.startError = 'DISABLED';
       const v = await c.start();
-      expect(ports.heartwood.start).toHaveBeenCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, 'pilot');
+      expect(ports.heartwood.start).toHaveBeenCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, 'pilot', '/Users/m/repo/Pliki');
       expect(v.tasks).toHaveLength(1);
       expect(v.files.info.state).toBe('disabled');
       expect(v.files.status).toBeNull();
@@ -386,8 +387,23 @@ describe('Controller', () => {
       expect(ports.heartwood.start).toHaveBeenCalledTimes(1);
     });
 
+    it('without a work folder the daemon is not started', async () => {
+      const { c, ports } = setup({ inbox: [] });
+      await c.start();
+      expect(ports.heartwood.start).not.toHaveBeenCalled();
+    });
+
+    it('a work folder change restarts the daemon with the new root', async () => {
+      const { c, ports } = setup({ workFolder: '/Users/m/repo', inbox: [] });
+      await c.start();
+      await c.handlers()['config.setWorkFolder']!({ path: '/Users/m/inne' });
+      await c.poll();
+      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, 'pilot', '/Users/m/inne/Pliki');
+      expect(ports.heartwood.start).toHaveBeenCalledTimes(2);
+    });
+
     it('running daemon: status is read at each poll and counted', async () => {
-      const { c } = setup({ inbox: [] });
+      const { c } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       const v = await c.start();
       expect(v.files.status?.connected).toBe(true);
       expect(v.files.counts).toEqual({ conflicts: 2, unsent: 7 });
@@ -395,16 +411,16 @@ describe('Controller', () => {
     });
 
     it('a company change restarts the daemon with the new org', async () => {
-      const { c, state, ports } = setup({ inbox: [] });
+      const { c, state, ports } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       state.firmy = [{ firma: 'pilot', osoba: 'michal' }, { firma: 'acme', osoba: 'mr' }];
       await c.start();
       await c.handlers()['config.setCompany']!({ company: 'acme' });
       await c.poll();
-      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, 'acme');
+      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, 'acme', '/Users/m/repo/Pliki');
     });
 
     it('lock refuses paths outside root without calling the daemon', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       hw.calls = [];
       hw.picked = [`${ROOT}/pilot/w1/a.docx`, '/Users/m/Desktop/x.docx'];
@@ -413,7 +429,7 @@ describe('Controller', () => {
     });
 
     it('lockFiles locks the picked files per space with the work id and keeps no memory', async () => {
-      const { c, hw, ports } = setup({ inbox: [] });
+      const { c, hw, ports } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       const picked = [`${ROOT}/pilot/w1/a.docx`, `${ROOT}/pilot/w2/b.xlsx`];
       hw.picked = picked;
@@ -426,7 +442,7 @@ describe('Controller', () => {
     });
 
     it('lockFiles and releaseFiles send at most 98 paths per request', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       hw.picked = Array.from({ length: 150 }, (_, i) => `${ROOT}/pilot/w1/f${i}.docx`);
       await c.handlers()['task.lockFiles']!({ id: lockId });
@@ -443,7 +459,7 @@ describe('Controller', () => {
     });
 
     it('a cancelled picker locks nothing; a bad task id is refused', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       hw.calls = [];
       expect(await c.handlers()['task.lockFiles']!({ id: lockId })).toEqual({ paths: [] });
@@ -452,7 +468,7 @@ describe('Controller', () => {
     });
 
     it('a daemon refusal surfaces as its code', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       hw.picked = [`${ROOT}/pilot/w1/a.docx`];
       hw.reply = () => ({ ok: false, code: 'LOCKED', message: 'Plik blokuje Ania.' });
@@ -460,7 +476,7 @@ describe('Controller', () => {
     });
 
     it('task.files calls work-files with the work id, merges version pages and returns me', async () => {
-      const { c, hw } = setup({ inbox: [], session: sessionOf('u-me') });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [], session: sessionOf('u-me') });
       await c.start();
       hw.reply = (req) => {
         if (req.cmd !== 'work-files') return STATUS_REPLY;
@@ -480,7 +496,7 @@ describe('Controller', () => {
     });
 
     it('task.files stops after 20 pages and keeps the cursor; a bad reply is BAD_RESPONSE', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       hw.reply = (req) => (req.cmd === 'work-files' ? workFiles([version(1)], 'more') : STATUS_REPLY);
       const r = await c.handlers()['task.files']!({ id: lockId }) as { files: { versions: unknown[]; cursor?: string }; me: unknown };
@@ -494,7 +510,7 @@ describe('Controller', () => {
     });
 
     it('releaseFiles without a path releases every visible lock, one call per space', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       const locks = [LOCK_W1, { ...LOCK_W1, path: 'Oferty', folder: true }, { ...LOCK_W1, space: 'ws:w2', path: 'b.xlsx' }];
       hw.reply = (req) => {
@@ -510,7 +526,7 @@ describe('Controller', () => {
     });
 
     it('releaseFiles with space and path releases one lock; a bad path is refused first', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       hw.calls = [];
       const h = c.handlers();
@@ -525,7 +541,7 @@ describe('Controller', () => {
     });
 
     it('files.tree passes space and folder and returns the parsed level', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       const entry = { path: 'Oferty/a.docx', localPath: null, folder: false, state: 'free' };
       hw.reply = (req) => (req.cmd === 'files' ? { ok: true, space: 'ws:w1', folder: 'Oferty', selected: false, entries: [entry, 7] } : STATUS_REPLY);
@@ -542,7 +558,7 @@ describe('Controller', () => {
     });
 
     it('files.lockFor checks the task id and path before locking with space and work id', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       hw.calls = [];
       const h = c.handlers();
@@ -559,7 +575,7 @@ describe('Controller', () => {
     });
 
     it('request release, history and download work with a space path', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       hw.reply = (req) => {
         if (req.cmd === 'history') return { ok: true, versions: [] };
@@ -587,14 +603,14 @@ describe('Controller', () => {
     });
 
     it('a transport failure (string code from invoke) surfaces as its code', async () => {
-      const { c, ports } = setup({ inbox: [] });
+      const { c, ports } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       (ports.heartwood.call as ReturnType<typeof vi.fn>).mockRejectedValueOnce('NOT_RUNNING');
       await expect(c.handlers()['files.history']!({ path: `${ROOT}/pilot/w1/a.docx` })).rejects.toMatchObject({ code: 'NOT_RUNNING' });
     });
 
     it('history, download and restore pass checked params to the daemon', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       const path = `${ROOT}/pilot/w1/a.docx`;
       const version = { seq: 3, versionId: 'v3', sha256: 'ab', size: 1, author: 'ania', at: '2026-11-19T10:00:00Z', kind: 'put' };
@@ -613,7 +629,7 @@ describe('Controller', () => {
     });
 
     it('select and unselect pass space, topics and confirmation', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       const h = c.handlers();
       expect(await h['files.select']!({ space: 'w1', topics: ['umowy'] })).toEqual({ ok: true });
@@ -624,7 +640,7 @@ describe('Controller', () => {
     });
 
     it('pickPath returns a picked file under root, null on cancel', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       expect(await c.handlers()['files.pickPath']!({})).toEqual({ path: null });
       hw.picked = [`${ROOT}/pilot/w1/a.docx`];
@@ -632,7 +648,7 @@ describe('Controller', () => {
     });
 
     it('a daemon refusal reaches the window with its code and Polish text', async () => {
-      const { c, hw } = setup({ inbox: [] });
+      const { c, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       hw.picked = [`${ROOT}/pilot/w1/a.docx`];
       hw.reply = () => ({ ok: false, code: 'LOCKED', message: 'Plik blokuje Ania.' });
@@ -646,7 +662,7 @@ describe('Controller', () => {
     });
 
     it('logout during an in-flight start: the next login starts the daemon again', async () => {
-      const { c, ports, hw } = setup({ inbox: [] });
+      const { c, ports, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       let open!: () => void;
       hw.startGate = new Promise((r) => { open = r; });
       const starting = c.start();
@@ -665,7 +681,7 @@ describe('Controller', () => {
     });
 
     it('a company change stops the old daemon; a failed new start shows no old status', async () => {
-      const { c, state, ports, hw } = setup({ inbox: [] });
+      const { c, state, ports, hw } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       state.firmy = [{ firma: 'pilot', osoba: 'michal' }, { firma: 'acme', osoba: 'mr' }];
       await c.start();
       expect(c.current().files.counts.conflicts).toBe(2);
@@ -673,7 +689,7 @@ describe('Controller', () => {
       await c.handlers()['config.setCompany']!({ company: 'acme' });
       await c.poll();
       expect(ports.heartwood.stop).toHaveBeenCalledTimes(1);
-      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, 'acme');
+      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, 'acme', '/Users/m/repo/Pliki');
       expect(c.current().files).toMatchObject({ status: null, counts: { conflicts: 0, unsent: 0 } });
       hw.startError = null;
       await c.poll();
@@ -681,7 +697,7 @@ describe('Controller', () => {
     });
 
     it('files.reveal opens the local folder of a selected space under the root', async () => {
-      const { c, hw, ports } = setup({ inbox: [] });
+      const { c, hw, ports } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       const spaces = [{ space: 'ws:w1', folder: `${ROOT}/pilot/w1`, lastSeq: 1, serverSeq: 1, unsent: 0 }];
       hw.reply = (req) => (req.cmd === 'status' ? { ...STATUS_REPLY, spaces } : { ok: true });
       await c.start();
@@ -696,7 +712,7 @@ describe('Controller', () => {
     });
 
     it('files.reveal refuses bad folders, unselected spaces and paths outside the root', async () => {
-      const { c, hw, ports } = setup({ inbox: [] });
+      const { c, hw, ports } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       const spaces = [{ space: 'ws:w1', folder: `${ROOT}/pilot/w1`, lastSeq: 1, serverSeq: 1, unsent: 0 }, { space: 'ws:x', folder: '/tmp/x', lastSeq: 1, serverSeq: 1, unsent: 0 }];
       hw.reply = (req) => (req.cmd === 'status' ? { ...STATUS_REPLY, spaces } : { ok: true });
       await c.start();
@@ -711,7 +727,7 @@ describe('Controller', () => {
     });
 
     it('files.reveal passes on the daemon error instead of NOT_LOCAL', async () => {
-      const { c, ports } = setup({ inbox: [] });
+      const { c, ports } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       (ports.heartwood.call as ReturnType<typeof vi.fn>).mockRejectedValueOnce('TIMEOUT');
       await expect(c.handlers()['files.reveal']!({ space: 'ws:w1', folder: '' })).rejects.toMatchObject({ code: 'TIMEOUT' });
@@ -719,7 +735,7 @@ describe('Controller', () => {
     });
 
     it('task.focus shows the task in the inbox and checks the id', async () => {
-      const { ports } = setup({ inbox: [task(1)] });
+      const { ports } = setup({ workFolder: '/Users/m/repo', inbox: [task(1)] });
       ports.store.setItem('cognifly.config', JSON.stringify({ ...DEFAULT_CONFIG, workFolder: '/Users/m' }));
       const c = new Controller(ports);
       await c.start();
@@ -729,7 +745,7 @@ describe('Controller', () => {
     });
 
     it('logout stops the daemon and clears the files view', async () => {
-      const { c, ports } = setup({ inbox: [] });
+      const { c, ports } = setup({ workFolder: '/Users/m/repo', inbox: [] });
       await c.start();
       await c.handlers()['session.logout']!({});
       expect(ports.heartwood.stop).toHaveBeenCalled();

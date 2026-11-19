@@ -151,7 +151,7 @@ async function pickFiles(root: string): Promise<string[]> {
  * Rejections carry code strings (`DISABLED`, `NOT_RUNNING`, …).
  */
 export const heartwoodPort: HeartwoodPort = {
-  start: (serverUrl, wsUrl, org) => invoke<HwInfo>('heartwood_start', { serverUrl, wsUrl, org }),
+  start: (serverUrl, wsUrl, org, root) => invoke<HwInfo>('heartwood_start', { serverUrl, wsUrl, org, root }),
   stop: () => invoke<void>('heartwood_stop'),
   info: () => invoke<HwInfo>('heartwood_info'),
   call: (request) => invoke<HwReply>('heartwood_call', { request }),

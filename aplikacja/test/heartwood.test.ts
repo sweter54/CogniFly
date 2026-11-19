@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  checkReply, fileCounts, groupBySpace, hwMessage, isSpacePath, isUnderRoot, locksBySpace, parseBrowse, parseStatus, parseVersions, parseWorkFiles, workIdFor,
+  checkReply, heartwoodRoot, fileCounts, groupBySpace, hwMessage, isSpacePath, isUnderRoot, locksBySpace, parseBrowse, parseStatus, parseVersions, parseWorkFiles, workIdFor,
 } from '../src/logic/heartwood.js';
 import { STATUS_REPLY } from './helpers.js';
 
@@ -165,4 +165,12 @@ describe('parseBrowse', () => {
     null, 7, { ok: false, code: 'NOT_FOUND' }, { ...BROWSE, space: 1 }, { ...BROWSE, folder: null },
     { ...BROWSE, selected: 'yes' }, { ...BROWSE, entries: 'x' },
   ])('refuses junk %j', (v) => expect(parseBrowse(v)).toBeNull());
+});
+
+describe('heartwoodRoot', () => {
+  it('puts Heartwood in Pliki inside the work folder', () => {
+    expect(heartwoodRoot('/Users/m/Praca')).toBe('/Users/m/Praca/Pliki');
+    expect(heartwoodRoot('/Users/m/Praca/')).toBe('/Users/m/Praca/Pliki');
+    expect(heartwoodRoot('')).toBe('');
+  });
 });

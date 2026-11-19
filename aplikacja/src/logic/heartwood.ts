@@ -23,8 +23,11 @@ export type HwReply = Record<string, unknown>;
 
 /** Platform effects of the files feature (background window only). */
 export interface HeartwoodPort {
-  /** Starts (or keeps) the daemon; rejects with a code string. */
-  start(serverUrl: string, wsUrl: string, org: string): Promise<HwInfo>;
+  /**
+   * Starts (or keeps) the daemon with the sync root chosen by
+   * CogniFly; rejects with a code string.
+   */
+  start(serverUrl: string, wsUrl: string, org: string, root: string): Promise<HwInfo>;
   /** Stops the daemon (logout). */
   stop(): Promise<void>;
   /** Current supervisor state. */
@@ -152,6 +155,8 @@ const ENTRY_STATES: readonly string[] = ['free', 'writable', 'locked', 'local_ch
 const MESSAGES: Readonly<Record<string, string>> = {
   NOT_RUNNING: 'Heartwood nie działa — uruchamiam ponownie…',
   NOT_INSTALLED: 'Heartwood nie jest zainstalowany na tym komputerze.',
+  BAD_ROOT: 'Najpierw wybierz folder pracy w Ustawieniach.',
+  ROOT_TOO_LONG: 'Ścieżka folderu pracy jest za długa dla plików Heartwood — wybierz krótszą.',
   DISABLED: 'Pliki nie są jeszcze włączone w tej wersji CogniFly.',
   TIMEOUT: 'Heartwood nie odpowiada.',
   OUTSIDE: 'Można wybrać tylko pliki z folderu Heartwood.',
@@ -550,4 +555,20 @@ export function checkReply(reply: HwReply): void {
   if (typeof reply.code !== 'string' || !CODE.test(reply.code)) throw new RefusalError('BAD_RESPONSE', undefined);
   const text = typeof reply.message === 'string' ? Array.from(oneLine(reply.message)).slice(0, MAX_REFUSAL_TEXT).join('') : '';
   throw new RefusalError(reply.code, text || undefined);
+}
+
+/** Name of the Heartwood folder inside the work folder. */
+export const FILES_FOLDER = 'Pliki';
+
+/**
+ * Sync root of Heartwood chosen by CogniFly.
+ *
+ * Call: `heartwoodRoot('/Users/m/Praca')`.
+ * Expects: the work folder from the settings (`''` = not chosen).
+ * Output: `<work folder>/Pliki` (trailing `/` dropped), or `''`
+ * when no work folder is set yet.
+ */
+export function heartwoodRoot(workFolder: string): string {
+  const base = workFolder.replace(/\/+$/, '');
+  return base ? `${base}/${FILES_FOLDER}` : '';
 }
