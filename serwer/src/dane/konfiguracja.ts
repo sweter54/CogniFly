@@ -69,6 +69,16 @@ export const zapiszKontakt = (firma: string, osoba: string, k: { email?: string;
 export const zapiszOsobe = (firma: string, osoba: string, o: { email: string; rola: 'admin' | 'czlonek' }) =>
   wstaw(firma, `OSOBA#${osoba}`, { ...o });
 
+/** Członkowie firmy z loginem GitHub (jeśli powiązany), posortowani po id; bez e-maili. */
+export async function osobyFirmy(firma: string): Promise<{ osoba: string; github?: string }[]> {
+  const [osoby, loginy] = await Promise.all([wszystkie(firma, 'OSOBA#'), wszystkie(firma, 'GITHUB#')]);
+  const login = new Map(loginy.map((it) => [it.osoba as string, (it.sk as string).slice('GITHUB#'.length)]));
+  return osoby
+    .map((it) => (it.sk as string).slice('OSOBA#'.length))
+    .sort()
+    .map((osoba) => (login.has(osoba) ? { osoba, github: login.get(osoba)! } : { osoba }));
+}
+
 /** Login GitHub (także konta botów `nazwa[bot]`). */
 export const LOGIN_GITHUB = /^[A-Za-z0-9-]{1,39}(\[bot\])?$/;
 

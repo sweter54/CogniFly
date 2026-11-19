@@ -1,24 +1,23 @@
 // Inbox screen: the user's tasks with "biorę" and state changes.
 // Task text is inserted with textContent only (it is data).
-import type { Task, UserSettableState } from '@cognifly/wspolne/api';
-import { displayOrder, isFinished, selectValue } from '../../logic/inbox-view.js';
+import type { Person, Task, UserSettableState } from '@cognifly/wspolne/api';
+import { onRender, requestHighlight, type Highlight } from '../../logic/highlight.js';
+import { displayOrder, isFinished, selectValue, taskNote } from '../../logic/inbox-view.js';
 import type { InboxView } from '../protocol.js';
 import { byId, messageFor, setStatus, type Call } from '../ui.js';
+import { acceptorFormOpen, askAcceptor, closeAcceptorForm, wireAcceptor, wireReject, wireReturned, wireThread, type Outcome } from './task-actions.js';
 
 /** Polish names of task states. */
 const STATE_NAMES: Record<string, string> = {
   nowe: 'nowe', eskalowane: 'eskalowane', wziete: 'wzięte', w_trakcie: 'w trakcie',
-  do_akceptacji: 'do akceptacji', zrobione: 'zrobione',
+  do_akceptacji: 'do akceptacji', zrobione: 'zrobione', odrzucone: 'odrzucone', usuniete: 'usunięte',
 };
 
 /** Badge text per state (what the user sees first). */
 const BADGES: Record<string, string> = {
   nowe: 'Nowe', eskalowane: 'Eskalacja', wziete: 'Wzięte', w_trakcie: 'W trakcie',
-  do_akceptacji: 'Do akceptacji', zrobione: 'Zrobione ✓',
+  do_akceptacji: 'Do akceptacji', zrobione: 'Zrobione ✓', odrzucone: 'Odrzucone', usuniete: 'Usunięte',
 };
-
-/** Outcome message of a user action. */
-type Outcome = { text: string; kind: 'ok' | 'error' };
 
 /** Handle returned by `mountInbox`. */
 export interface InboxScreen {
@@ -87,18 +86,6 @@ async function changeState(call: Call, id: string, state: UserSettableState): Pr
 const WORKING_STATES = ['wziete', 'w_trakcie', 'do_akceptacji'];
 
 /**
- * Opens a Claude Code session for a task.
- *
- * Call: `await openInClaude(call, id)`.
- * Expects: a task id.
- * Output: the message to show.
- */
-async function openInClaude(call: Call, id: string): Promise<Outcome> {
-  await call('task.openInClaude', { id });
-  return { text: 'Otwieram Claude — sprawdź polecenie i wyślij je w nowej sesji.', kind: 'ok' };
-}
-
-/**
  * Wires the inbox screen.
  *
  * Call: `mountInbox(call)` once at window start.
@@ -107,6 +94,20 @@ async function openInClaude(call: Call, id: string): Promise<Outcome> {
  */
 export function mountInbox(call: Call): InboxScreen {
   let me: string | null = null;
+  let peopleList: Promise<Person[]> | null = null;
+
+  /**
+   * Company members for the hand-over select, fetched once.
+   * Call: `people()`. Expects: nothing.
+   * Output: the list (a failed fetch is retried next time).
+   */
+  function people(): Promise<Person[]> {
+    peopleList ??= call('people.list', {}).then((r) => r.people).catch((e) => {
+      peopleList = null;
+      throw e;
+    });
+    return peopleList;
+  }
   /**
    * Runs an action and shows its outcome.
    * Call: `await report(action)`. Expects: an rpc action.
@@ -151,21 +152,28 @@ export function mountInbox(call: Call): InboxScreen {
     badge.dataset.state = task.stan;
     badge.textContent = BADGES[task.stan] ?? task.stan;
     (li.querySelector('.desc') as HTMLElement).textContent = task.opis;
-    (li.querySelector('.progress') as HTMLElement).textContent = task.postep ? `Postęp: ${task.postep}` : '';
+    (li.querySelector('.progress') as HTMLElement).textContent = taskNote(task) || (task.postep ? `Postęp: ${task.postep}` : '');
     (li.querySelector('.meta') as HTMLElement).textContent = metaText(task);
     const take = li.querySelector('.take') as HTMLButtonElement;
     const state = li.querySelector('.state') as HTMLSelectElement;
     const mine = me !== null && task.wlasciciel === me;
     take.hidden = task.stan !== 'nowe' && task.stan !== 'eskalowane';
-    state.hidden = !mine;
+    state.hidden = !mine || task.stan === 'odrzucone';
     state.value = selectValue(task);
-    const claude = li.querySelector('.claude') as HTMLButtonElement;
-    claude.hidden = !mine || !WORKING_STATES.includes(task.stan);
-    claude.addEventListener('click', () => void report(() => openInClaude(call, task.id)));
+    wireThread(li, task, mine && WORKING_STATES.includes(task.stan), call, report);
+    wireReject(li, task, me, call, act);
+    wireAcceptor(li, task, me, call, act);
+    wireReturned(li, task, mine, people, call, act);
     take.addEventListener('click', () => void act(() => takeTask(call, task.id)));
     state.addEventListener('change', () => {
+      if (state.value === 'do_akceptacji') return askAcceptor(li, task, people, call, act, () => (state.value = selectValue(task)));
+      closeAcceptorForm(li, task.id);
       if (state.value) void act(() => changeState(call, task.id, state.value as UserSettableState));
     });
+    if (mine && WORKING_STATES.includes(task.stan) && acceptorFormOpen(task.id)) {
+      state.value = 'do_akceptacji';
+      askAcceptor(li, task, people, call, act, () => (state.value = selectValue(task)));
+    }
     return li;
   }
 
@@ -179,12 +187,16 @@ export function mountInbox(call: Call): InboxScreen {
     me = view.osoba;
     const ordered = displayOrder(view.tasks);
     const done = ordered.filter(isFinished);
+    const active = document.activeElement?.matches('.reason') ? document.activeElement : null;
+    const typing = active ? { id: (active.closest('.task') as HTMLElement | null)?.dataset.id, form: active.closest('form')?.classList[0] } : null;
     byId('list').replaceChildren(...ordered.filter((t) => !isFinished(t)).map(item));
+    if (typing?.id && typing.form) taskElement(typing.id)?.querySelector<HTMLInputElement>(`.${typing.form} .reason`)?.focus(); // keep typing
     byId('done-list').replaceChildren(...done.map(item));
     const title = byId('done-title');
     title.hidden = done.length === 0;
     title.textContent = `Zakończone (${done.length})`;
     setStatus(statusText(view), view.offline ? 'error' : 'info');
+    applyHighlight();
   }
 
   /**
@@ -196,20 +208,61 @@ export function mountInbox(call: Call): InboxScreen {
     call('inbox.refresh', {}).then(render).catch((e) => setStatus(messageFor(e), 'error'));
   }
 
+  let pending: Highlight | null = null;
+  let endTimer: ReturnType<typeof setTimeout> | undefined;
+
   /**
-   * Draws attention to one task.
-   * Call: `highlight(id)` after the list was rendered.
-   * Expects: a task id (a missing task is ignored).
-   * Output: none; the task scrolls into view and flashes for ~4 s.
+   * Finds the list element of a task.
+   * Call: `taskElement(id)`. Expects: a task id.
+   * Output: the element or undefined when it is not on the list.
+   */
+  function taskElement(taskId: string): HTMLElement | undefined {
+    return Array.from(document.querySelectorAll<HTMLElement>('.task')).find((el) => el.dataset.id === taskId);
+  }
+
+  /**
+   * Applies the pending highlight to the current list.
+   * Call: after every render and when a highlight is requested.
+   * Expects: nothing. Output: none; on start the task scrolls into
+   * view, gets focus and flashes; redraws keep the flash until it
+   * ends (redraws replace the elements).
+   */
+  function applyHighlight(): void {
+    const li = pending ? taskElement(pending.id) : undefined;
+    const { next, flash } = onRender(pending, li !== undefined, Date.now());
+    pending = next;
+    if (!li || flash === 'none') return;
+    li.classList.add('flash');
+    if (flash !== 'start') return;
+    li.tabIndex = -1;
+    if (!document.activeElement?.matches('input, textarea, select')) li.focus({ preventScroll: true }); // don't steal typing
+    li.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    clearTimeout(endTimer);
+    endTimer = setTimeout(endHighlight, (next?.until ?? Date.now()) - Date.now());
+  }
+
+  /**
+   * Ends the flash on whatever element shows the task now.
+   * Call: by the timer. Expects: nothing. Output: none.
+   */
+  function endHighlight(): void {
+    const id = pending?.id;
+    pending = onRender(pending, false, Date.now()).next;
+    if (id && !pending) taskElement(id)?.classList.remove('flash');
+  }
+
+  /**
+   * Draws attention to one task for 5 s.
+   * Call: `highlight(id)` when the app was opened on a task.
+   * Expects: a task id; a task not on the list yet is highlighted
+   * when it appears (up to 15 s; the inbox is fetched at once).
+   * Output: none.
    */
   function highlight(taskId: string): void {
-    const li = Array.from(document.querySelectorAll<HTMLElement>('.task')).find((el) => el.dataset.id === taskId);
-    if (!li) return;
-    li.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    li.classList.remove('flash');
-    void li.offsetWidth; // restart the animation
-    li.classList.add('flash');
-    setTimeout(() => li.classList.remove('flash'), 4_000);
+    for (const el of Array.from(document.querySelectorAll('.task.flash'))) el.classList.remove('flash');
+    pending = requestHighlight(taskId, Date.now());
+    applyHighlight();
+    if (pending && pending.until === undefined) refresh();
   }
 
   byId('refresh').addEventListener('click', refresh);

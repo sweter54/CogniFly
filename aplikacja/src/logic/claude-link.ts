@@ -1,11 +1,13 @@
 // Builds the deep link that opens a Claude Code session for a task.
 // Only the task id goes into the prompt; the CogniFly plugin fetches
 // the rest itself (content from outsiders never travels in the link).
-import { TASK_ID_PATTERN } from '@cognifly/wspolne/api';
+import { TASK_ID_PATTERN, THREAD_PATTERN } from '@cognifly/wspolne/api';
 import { AppError } from './errors.js';
 
 /** Claude Desktop deep link for a new Claude Code session. */
 export const CLAUDE_CODE_NEW = 'claude://code/new';
+/** Claude Desktop deep link that reopens an existing session. */
+export const CLAUDE_CODE_CONTINUE = 'claude://code/continue';
 
 /**
  * Prompt prefilled in Claude for a task.
@@ -33,4 +35,18 @@ export function claudeLink(taskId: string, workFolder: string): string {
   const params = new URLSearchParams({ q: taskPrompt(taskId) });
   if (workFolder) params.set('folder', workFolder);
   return `${CLAUDE_CODE_NEW}?${params.toString().replace(/\+/g, '%20')}`;
+}
+
+/**
+ * Builds the link that reopens an existing Claude Desktop thread.
+ *
+ * Call: `threadLink(watek)`.
+ * Expects: a session id from the server (`local_<uuid>`).
+ * Output: `claude://code/continue?session=<id>`.
+ * Throws: `AppError('BAD_THREAD')` for anything else, so no other
+ * text can reach the link.
+ */
+export function threadLink(watek: string): string {
+  if (!THREAD_PATTERN.test(watek)) throw new AppError('BAD_THREAD');
+  return `${CLAUDE_CODE_CONTINUE}?session=${watek}`;
 }

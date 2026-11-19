@@ -2,7 +2,8 @@ import { kontekst, HttpBlad, type Odpowiedz, type ZdarzenieApi } from './konteks
 import { podsumowanie, skrzynkaOsoby } from './skrzynka.js';
 import { ocena, rozpocznij } from './dostarczenia.js';
 import { ja } from './ja.js';
-import { biore, przekaz, stan, szczegoly } from './zadania.js';
+import { osoby, zglos } from './recenzje.js';
+import { akceptuj, biore, doPoprawy, odrzuc, przekaz, stan, szczegoly, usun, watek } from './zadania.js';
 import { zdarzenia } from './zdarzenia.js';
 
 const NAGLOWKI = { 'content-type': 'application/json' };
@@ -21,8 +22,15 @@ export async function handler(event: ZdarzenieApi) {
       'POST /zadania/{id}/biore': (k) => biore(k, event.pathParameters?.id),
       'POST /zadania/{id}/stan': (k) => stan(k, event.pathParameters?.id, tresc(event)),
       'POST /zadania/{id}/przekaz': (k) => przekaz(k, event.pathParameters?.id, tresc(event)),
+      'POST /zadania/{id}/odrzuc': (k) => odrzuc(k, event.pathParameters?.id, tresc(event)),
+      'POST /zadania/{id}/usun': (k) => usun(k, event.pathParameters?.id),
+      'POST /zadania/{id}/akceptuj': (k) => akceptuj(k, event.pathParameters?.id),
+      'POST /zadania/{id}/do-poprawy': (k) => doPoprawy(k, event.pathParameters?.id, tresc(event)),
+      'POST /zadania/{id}/watek': (k) => watek(k, event.pathParameters?.id, tresc(event)),
       'GET /podsumowanie': (k) => podsumowanie(k),
       'POST /dostarczenia': (k) => rozpocznij(k, tresc(event)),
+      'GET /osoby': (k) => osoby(k),
+      'POST /recenzje': (k) => zglos(k, tresc(event)),
       'GET /dostarczenia/ocena': (k) => ocena(k, event.queryStringParameters),
     };
     if (event.routeKey === 'GET /ja') return odp(await ja(event)); // bez kontekstu firmy

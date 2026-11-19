@@ -4,6 +4,7 @@
 import { INBOX_EVENT, SCREEN_EVENT, type InboxView, type Screen } from './protocol.js';
 import { mountInbox } from './screens/inbox.js';
 import { mountLogin } from './screens/login.js';
+import { mountReviewRequest } from './screens/review-request.js';
 import { mountSettings } from './screens/settings.js';
 import { installErrorLog, reportError } from './diagnostics.js';
 import { tauriBus } from './tauri-bus.js';
@@ -64,6 +65,7 @@ async function main(): Promise<void> {
   let current: Screen = 'login';
   const login = mountLogin(call, () => view.workFolder !== '');
   const inbox = mountInbox(call);
+  mountReviewRequest(call, () => view.osoba, () => inbox.refresh());
   const settings = mountSettings(call, () => go(view.loggedIn ? 'inbox' : 'login'));
 
   /**

@@ -402,6 +402,82 @@ describe('polecenia', () => {
     expect((await cli(['przekaz', id, '--do-loginu', 'zly login'])).json.stan).toBe('ZLY_LOGIN');
     expect(api.log.length).toBe(0);
   });
+  it('przekaz --do-osoby: wysyła osobę z firmy; brak adresata lokalnie', async () => {
+    const id = 'zad_0123456789ab';
+    apiHandler = () => ({ status: 200, body: { zadanie: { id, stan: 'nowe' } } });
+    expect((await cli(['przekaz', id, '--do-osoby', 'bartek'])).json.stan).toBe('PRZEKAZANE');
+    expect(api.log[0]).toMatchObject({ url: `/zadania/${id}/przekaz`, body: { doOsoby: 'bartek' } });
+    api.log.length = 0;
+    expect((await cli(['przekaz', id])).json.stan).toBe('ZLY_LOGIN');
+    expect((await cli(['przekaz', id, '--do-osoby', 'zła osoba'])).json.stan).toBe('ZLE_PARAMETRY');
+    expect(api.log.length).toBe(0);
+  });
+  it('odrzuc: wysyła powód, nie otwiera aplikacji (zadanie wyszło ze skrzynki); zły powód lokalnie; kody serwera', async () => {
+    const id = 'zad_0123456789ab';
+    const zapis = join(kat, 'otwarte.txt');
+    const otwieracz = join(kat, 'otwieracz.sh');
+    writeFileSync(otwieracz, `#!/bin/sh\necho "$@" >> "${zapis}"\n`, { mode: 0o700 });
+    apiHandler = () => ({ status: 200, body: { zadanie: { id, stan: 'odrzucone' } } });
+    expect((await cli(['odrzuc', id, '--powod', 'Nie mój obszar'], { COGNIFLY_OTWIERACZ: otwieracz })).json)
+      .toEqual({ stan: 'ODRZUCONE', zadanie: { id, stan: 'odrzucone' } });
+    expect(api.log[0]).toMatchObject({ method: 'POST', url: `/zadania/${id}/odrzuc`, body: { powod: 'Nie mój obszar' } });
+    expect(existsSync(zapis)).toBe(false);
+    api.log.length = 0;
+    expect((await cli(['odrzuc', id])).json.stan).toBe('ZLY_POWOD');
+    expect((await cli(['odrzuc', id, '--powod', 'x'.repeat(201)])).json.stan).toBe('ZLY_POWOD');
+    expect(api.log.length).toBe(0);
+    for (const kod of ['BRAK_NADAWCY', 'KONFLIKT']) {
+      apiHandler = () => ({ status: 409, body: { kod } });
+      expect((await cli(['odrzuc', id, '--powod', 'x'])).json).toEqual({ stan: kod });
+    }
+  });
+  it('usun: USUNIETE; KONFLIKT gdy zadanie nie jest odrzucone', async () => {
+    const id = 'zad_0123456789ab';
+    apiHandler = () => ({ status: 200, body: { zadanie: { id, stan: 'usuniete' } } });
+    expect((await cli(['usun', id])).json).toEqual({ stan: 'USUNIETE', zadanie: { id, stan: 'usuniete' } });
+    expect(api.log[0]).toMatchObject({ method: 'POST', url: `/zadania/${id}/usun` });
+    apiHandler = () => ({ status: 409, body: { kod: 'KONFLIKT' } });
+    expect((await cli(['usun', id])).json).toEqual({ stan: 'KONFLIKT' });
+  });
+  it('zadanie/biore/stan zapisują wątek Claude Desktop, gdy jest znany; błąd zapisu nie psuje wyniku', async () => {
+    const id = 'zad_0123456789ab';
+    const W = 'local_1fb5034c-8723-4c40-85c5-981eca105464';
+    apiHandler = (r) => (r.url.endsWith('/watek') ? { status: 500, body: {} } : { status: 200, body: { zadanie: { id }, zdarzenie: null } });
+    expect((await cli(['zadanie', id], { CLAUDE_CODE_HOST_SESSION_ID: W })).json.stan).toBe('OK');
+    await cli(['biore', id], { CLAUDE_CODE_HOST_SESSION_ID: W });
+    await cli(['stan', id, 'w_trakcie'], { CLAUDE_CODE_HOST_SESSION_ID: W });
+    const watki = api.log.filter((x) => x.url === `/zadania/${id}/watek`);
+    expect(watki).toHaveLength(3);
+    expect(watki[0]).toMatchObject({ method: 'POST', body: { watek: W } });
+    api.log.length = 0;
+    await cli(['zadanie', id]);
+    await cli(['zadanie', id], { CLAUDE_CODE_HOST_SESSION_ID: 'local_zly&q=1' });
+    expect(api.log.filter((x) => x.url.endsWith('/watek'))).toHaveLength(0);
+  });
+  it('stan do_akceptacji --akceptujacy: wysyła osobę; zła osoba lokalnie; błędy serwera', async () => {
+    const id = 'zad_0123456789ab';
+    apiHandler = () => ({ status: 200, body: { zadanie: { id, stan: 'do_akceptacji' } } });
+    await cli(['stan', id, 'do_akceptacji', '--akceptujacy', 'bartek']);
+    expect(api.log[0]).toMatchObject({ url: `/zadania/${id}/stan`, body: { stan: 'do_akceptacji', akceptujacy: 'bartek' } });
+    api.log.length = 0;
+    expect((await cli(['stan', id, 'do_akceptacji', '--akceptujacy', 'zła osoba'])).json.stan).toBe('ZLE_PARAMETRY');
+    expect(api.log.length).toBe(0);
+    for (const kod of ['BRAK_AKCEPTUJACEGO', 'ZLY_AKCEPTUJACY']) {
+      apiHandler = () => ({ status: 400, body: { kod } });
+      expect((await cli(['stan', id, 'do_akceptacji'])).json).toEqual({ stan: kod });
+    }
+  });
+  it('akceptuj i do-poprawy: wywołują API; powód sprawdzany lokalnie', async () => {
+    const id = 'zad_0123456789ab';
+    apiHandler = () => ({ status: 200, body: { zadanie: { id, stan: 'zrobione' } } });
+    expect((await cli(['akceptuj', id])).json).toEqual({ stan: 'ZAAKCEPTOWANE', zadanie: { id, stan: 'zrobione' } });
+    apiHandler = () => ({ status: 200, body: { zadanie: { id, stan: 'w_trakcie' } } });
+    expect((await cli(['do-poprawy', id, '--powod', 'Brak testów'])).json.stan).toBe('DO_POPRAWY');
+    expect(api.log.map((x) => [x.url, x.body])).toEqual([[`/zadania/${id}/akceptuj`, undefined], [`/zadania/${id}/do-poprawy`, { powod: 'Brak testów' }]]);
+    expect((await cli(['do-poprawy', id])).json.stan).toBe('ZLY_POWOD');
+    apiHandler = () => ({ status: 409, body: { kod: 'KONFLIKT' } });
+    expect((await cli(['akceptuj', id])).json).toEqual({ stan: 'KONFLIKT' });
+  });
   it('ocena-dostarczenia i dostarczenie: przekazują repo/PR/sha i zwracają ocenę', async () => {
     const ocena = { ready: false, reasons: ['CI_W_TOKU'], order: [] };
     apiHandler = () => ({ status: 200, body: { ocena } });
@@ -412,6 +488,23 @@ describe('polecenia', () => {
     expect(api.log[1]).toMatchObject({ method: 'POST', url: '/dostarczenia', body: { repo: 'o/r', pr: 7, zadanieId: 'zad_0123456789ab', sha } });
     api.log.length = 0;
     expect((await cli(['ocena-dostarczenia', '--repo', '../x', '--pr', '7'])).json.stan).toBe('ZLE_PARAMETRY');
+    expect(api.log.length).toBe(0);
+  });
+  it('osoby i zglos-cr: lista osób, zgłoszenie z recenzentami; błędy serwera i walidacja lokalna', async () => {
+    const osoby = [{ osoba: 'ania', github: 'ania-gh' }, { osoba: 'michal' }];
+    apiHandler = () => ({ status: 200, body: { osoby } });
+    expect((await cli(['osoby'])).json).toEqual({ stan: 'OK', osoby });
+    expect(api.log[0]).toMatchObject({ method: 'GET', url: '/osoby' });
+    apiHandler = () => ({ status: 200, body: { zadanie: { id: 'zad_0123456789ab' } } });
+    expect((await cli(['zglos-cr', '--repo', 'o/r', '--pr', '4', '--recenzenci', 'ania, szymon'])).json)
+      .toEqual({ stan: 'ZGLOSZONO', zadanie: { id: 'zad_0123456789ab' } });
+    expect(api.log[1]).toMatchObject({ method: 'POST', url: '/recenzje', body: { repo: 'o/r', pr: 4, recenzenci: ['ania', 'szymon'] } });
+    apiHandler = () => ({ status: 400, body: { kod: 'ZLI_RECENZENCI' } });
+    expect((await cli(['zglos-cr', '--repo', 'o/r', '--pr', '4', '--recenzenci', 'obcy'])).json).toEqual({ stan: 'ZLI_RECENZENCI' });
+    apiHandler = () => ({ status: 409, body: { kod: 'PR_ZAMKNIETY' } });
+    expect((await cli(['zglos-cr', '--repo', 'o/r', '--pr', '4', '--recenzenci', 'ania'])).json).toEqual({ stan: 'PR_ZAMKNIETY' });
+    api.log.length = 0;
+    expect((await cli(['zglos-cr', '--repo', 'o/r', '--pr', '4', '--recenzenci', ''])).json.stan).toBe('ZLE_PARAMETRY');
     expect(api.log.length).toBe(0);
   });
   it('stan: OK, ZLY_STAN lokalnie, postep przekazany', async () => {

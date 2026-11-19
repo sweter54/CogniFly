@@ -1,12 +1,15 @@
 import { skrzynka as pobierz } from '../dane/kolejka.js';
-import { WAITING_STATES } from '@cognifly/wspolne/api';
+import { watkiOsoby } from '../dane/watki.js';
+import { RETURNED_STATES, WAITING_STATES } from '@cognifly/wspolne/api';
 import type { Kontekst, Odpowiedz } from './kontekst.js';
 
 export async function skrzynkaOsoby(k: Kontekst): Promise<Odpowiedz> {
-  return { status: 200, body: { zadania: await pobierz(k.firma, k.osoba) } };
+  const [zadania, watki] = await Promise.all([pobierz(k.firma, k.osoba), watkiOsoby(k.firma, k.osoba)]);
+  return { status: 200, body: { zadania: zadania.map((z) => (watki.has(z.id) ? { ...z, watek: watki.get(z.id) } : z)) } };
 }
 
-const ISTOTNE = WAITING_STATES;
+/** Zadania czekające na osobę: do wzięcia albo odrzucone (decyzja nadawcy). */
+const ISTOTNE = [...WAITING_STATES, ...RETURNED_STATES];
 
 
 /** Polska liczba mnoga: 1 zadanie, 2-4 zadania (nie 12-14), reszta zadań. */
@@ -42,6 +45,7 @@ export function liniaPodsumowania(opisy: string[]): string {
 }
 
 export async function podsumowanie(k: Kontekst): Promise<Odpowiedz> {
-  const czekajace = await pobierz(k.firma, k.osoba, [...ISTOTNE]);
+  const wszystkie = await pobierz(k.firma, k.osoba, [...ISTOTNE, 'do_akceptacji']);
+  const czekajace = wszystkie.filter((z) => z.stan !== 'do_akceptacji' || z.akceptujacy === k.osoba);
   return { status: 200, body: { linia: liniaPodsumowania(czekajace.map((z) => z.opis)) } };
 }

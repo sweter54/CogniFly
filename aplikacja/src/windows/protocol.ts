@@ -39,10 +39,17 @@ export interface Methods {
   'inbox.get': { params: Record<string, never>; result: InboxView };
   'inbox.refresh': { params: Record<string, never>; result: InboxView };
   'inbox.take': { params: { id: string }; result: { status: 'TAKEN' } | { status: 'BUSY'; owner: string } };
-  'inbox.setState': { params: { id: string; state: UserSettableState }; result: { ok: true } };
+  'inbox.setState': { params: { id: string; state: UserSettableState; acceptor?: string }; result: { ok: true } };
+  'task.accept': { params: { id: string }; result: { ok: true } };
+  'task.sendBack': { params: { id: string; reason: string }; result: { ok: true } };
   'session.logout': { params: Record<string, never>; result: { ok: true } };
-  'task.openInClaude': { params: { id: string }; result: { ok: true } };
+  'task.openInClaude': { params: { id: string; newThread?: boolean }; result: { ok: true } };
+  'task.reject': { params: { id: string; reason: string }; result: { ok: true } };
+  'task.remove': { params: { id: string }; result: { ok: true } };
+  'task.handOver': { params: { id: string; person: string }; result: { ok: true } };
   'config.pickFolder': { params: { current: string }; result: { path: string | null } };
   'config.setWorkFolder': { params: { path: string }; result: { ok: true } };
+  'people.list': { params: Record<string, never>; result: { people: { osoba: string; github?: string }[] } };
+  'review.request': { params: { repo: string; pr: number; reviewers: string[] }; result: { taskId: string } };
 }
 export type Method = keyof Methods;

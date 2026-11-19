@@ -1,12 +1,12 @@
 // Brain of the background window: owns config, session, polling,
 // notifications and the rpc handlers. Platform effects are injected
 // as ports, so the whole flow is unit-tested without Tauri.
-import type { Task, UserSettableState } from '@cognifly/wspolne/api';
+import { THREAD_PATTERN, type Task, type UserSettableState } from '@cognifly/wspolne/api';
 import type { InboxView, Methods, Screen } from '../windows/protocol.js';
 import { ApiClient, type Membership } from './api.js';
 import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, type PendingLogin } from './cognito.js';
 import { isSafeFolder, loadConfig, saveChoices, type AppConfig, type UserChoices } from './config.js';
-import { claudeLink } from './claude-link.js';
+import { claudeLink, threadLink } from './claude-link.js';
 import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
 import type { FetchFn } from './http.js';
 import { clearSeen, loadSeen, notificationBody, notificationTitle, pickNew, saveSeen, waitingTasks } from './notify.js';
@@ -163,10 +163,17 @@ export class Controller {
       'inbox.get': async () => this.view,
       'inbox.refresh': () => this.poll(),
       'inbox.take': (p) => this.take(text(p, 'id')),
-      'inbox.setState': (p) => this.setState(text(p, 'id'), text(p, 'state')),
-      'task.openInClaude': (p) => this.openInClaude(text(p, 'id')),
+      'inbox.setState': (p) => this.change(() => this.api().setState(text(p, 'id'), text(p, 'state') as UserSettableState, optionalText(p, 'acceptor'))),
+      'task.accept': (p) => this.change(() => this.api().accept(text(p, 'id'))),
+      'task.sendBack': (p) => this.change(() => this.api().sendBack(text(p, 'id'), text(p, 'reason'))),
+      'task.openInClaude': (p) => this.openInClaude(text(p, 'id'), field(p, 'newThread') === true),
+      'task.reject': (p) => this.change(() => this.api().reject(text(p, 'id'), text(p, 'reason'))),
+      'task.remove': (p) => this.change(() => this.api().remove(text(p, 'id'))),
+      'task.handOver': (p) => this.change(() => this.api().handOver(text(p, 'id'), text(p, 'person'))),
       'config.pickFolder': (p) => this.pickFolder(text(p, 'current')),
       'config.setWorkFolder': (p) => this.setWorkFolder(text(p, 'path')),
+      'people.list': async () => ({ people: await this.api().people() }),
+      'review.request': (p) => this.requestReview(p),
       'session.logout': async () => {
         await this.logout();
         return { ok: true };
@@ -190,7 +197,7 @@ export class Controller {
       const tasks = await this.api().inbox();
       if (this.session.epoch() !== epoch || !this.view.loggedIn) return this.view; // logged out meanwhile
       const fresh = await this.announce(tasks);
-      this.ports.log?.(`poll ok: tasks=${tasks.length} waiting=${waitingTasks(tasks).length} new=${fresh}`);
+      this.ports.log?.(`poll ok: tasks=${tasks.length} waiting=${waitingTasks(tasks, this.view.osoba).length} new=${fresh}`);
       this.update({ offline: false, tasks, updatedAt: new Date(this.time()).toISOString() });
     } catch (e) {
       await this.pollFailed(e);
@@ -227,7 +234,7 @@ export class Controller {
    * skipped (the tray count still shows the task); seen set saved.
    */
   private async announce(tasks: Task[]): Promise<number> {
-    const { fresh, seen } = pickNew(tasks, loadSeen(this.ports.store));
+    const { fresh, seen } = pickNew(tasks, loadSeen(this.ports.store), this.view.osoba);
     saveSeen(this.ports.store, seen);
     for (const t of fresh) {
       await this.ports.notify(notificationTitle(t), notificationBody(t.opis))
@@ -326,17 +333,32 @@ export class Controller {
   }
 
   /**
-   * Changes a task's state and refreshes the inbox.
+   * Runs one change of a task and refreshes the inbox.
    *
-   * Call: rpc `inbox.setState`.
-   * Expects: id and state; `ApiClient.setState` rejects states
-   * outside `USER_SETTABLE_STATES` before any request.
-   * Output: `{ ok: true }`.
+   * Call: `this.change(() => api.reject(...))` from rpc handlers.
+   * Expects: an API call that validates its own input.
+   * Output: `{ ok: true }`; errors of the call propagate to the UI.
    */
-  private async setState(id: string, state: string): Promise<{ ok: true }> {
-    await this.api().setState(id, state as UserSettableState);
+  private async change(op: () => Promise<unknown>): Promise<{ ok: true }> {
+    await op();
     void this.poll();
     return { ok: true };
+  }
+
+  /**
+   * Asks colleagues to review a PR and refreshes the inbox.
+   *
+   * Call: rpc `review.request` with `{ repo, pr, reviewers }`.
+   * Expects: values from the form (validated by `ApiClient`).
+   * Output: `{ taskId }` of the created review-request task.
+   */
+  private async requestReview(p: unknown): Promise<{ taskId: string }> {
+    const reviewers = field(p, 'reviewers');
+    const list = Array.isArray(reviewers) ? reviewers.filter((r): r is string => typeof r === 'string') : [];
+    const pr = field(p, 'pr');
+    const task = await this.api().requestReview(text(p, 'repo'), typeof pr === 'number' ? pr : NaN, list);
+    void this.poll();
+    return { taskId: task.id };
   }
 
   /**
@@ -387,21 +409,24 @@ export class Controller {
   }
 
   /**
-   * Opens a Claude Code session for a task.
+   * Opens Claude Code for a task: the remembered thread, or a new one.
    *
-   * Call: rpc `task.openInClaude`.
-   * Expects: a task id; the link holds only the id and the work folder.
+   * Call: rpc `task.openInClaude` (`newThread: true` forces a new one).
+   * Expects: a task id; a new-session link holds only the id and the
+   * work folder; a thread comes from the last fetched inbox and must
+   * be a Claude Desktop session id.
    * Output: `{ ok: true }` once the OS accepted the link.
    * Throws: `AppError('NO_WORK_FOLDER')` before setup is finished,
    * `AppError('BAD_TASK_ID')`, `AppError('CLAUDE_NOT_FOUND')` when no
    * app handles `claude://` (the cause is logged).
    */
-  private async openInClaude(id: string): Promise<{ ok: true }> {
+  private async openInClaude(id: string, newThread: boolean): Promise<{ ok: true }> {
     if (!this.config.workFolder) {
       await this.ports.showScreen('login');
       throw new AppError('NO_WORK_FOLDER');
     }
-    const link = claudeLink(id, this.config.workFolder);
+    const thread = newThread ? undefined : this.view.tasks.find((t) => t.id === id)?.watek;
+    const link = thread && THREAD_PATTERN.test(thread) ? threadLink(thread) : claudeLink(id, this.config.workFolder);
     try {
       await this.ports.openUrl(link);
     } catch (e) {
@@ -465,7 +490,7 @@ export class Controller {
  * Output: number of `nowe`/`eskalowane` tasks.
  */
 export function waitingCount(view: InboxView): number {
-  return waitingTasks(view.tasks).length;
+  return waitingTasks(view.tasks, view.osoba).length;
 }
 
 /**
@@ -477,6 +502,18 @@ export function waitingCount(view: InboxView): number {
  */
 function field(params: unknown, name: string): unknown {
   return typeof params === 'object' && params !== null ? (params as Record<string, unknown>)[name] : undefined;
+}
+
+/**
+ * Reads an optional string field of rpc params.
+ *
+ * Call: `optionalText(params, 'acceptor')`.
+ * Expects: anything as params.
+ * Output: the string, or undefined when missing or not a string.
+ */
+function optionalText(params: unknown, name: string): string | undefined {
+  const v = field(params, name);
+  return typeof v === 'string' ? v : undefined;
 }
 
 /**

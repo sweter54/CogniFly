@@ -1,6 +1,6 @@
 // Client of the CogniFly HTTP API (Cognito JWT + X-Cognifly-Firma).
 import {
-  TASK_ID_PATTERN, USER_SETTABLE_STATES, type MeResponse, type Task, type UserSettableState,
+  isRepo, TASK_ID_PATTERN, USER_SETTABLE_STATES, type MeResponse, type Person, type Task, type UserSettableState,
 } from '@cognifly/wspolne/api';
 import type { AppConfig } from './config.js';
 import { ApiError, LoginRequiredError } from './errors.js';
@@ -46,6 +46,39 @@ export class ApiClient {
   }
 
   /**
+   * People of the company (reviewer picker).
+   *
+   * Call: `await api.people()` (`GET /osoby`).
+   * Expects: a session.
+   * Output: well-formed people (`osoba`, optional `github`).
+   * Throws: `ApiError`, session errors.
+   */
+  async people(): Promise<Person[]> {
+    const r = await this.call('GET', '/osoby');
+    if (r.status !== 200) throw apiError(r);
+    const list = (r.json as { osoby?: unknown }).osoby;
+    return Array.isArray(list) ? list.filter(isPerson) : [];
+  }
+
+  /**
+   * Asks colleagues to review a PR.
+   *
+   * Call: `await api.requestReview(repo, pr, reviewers)` (`POST /recenzje`).
+   * Expects: `owner/name`, a positive PR number, 1+ person ids.
+   * Output: the created "Prośba o recenzję" task.
+   * Throws: `ApiError(400, 'ZLE_REPO' | 'ZLY_PR' | 'ZLI_RECENZENCI')`
+   * locally; server codes (`BRAK_PR`, `PR_ZAMKNIETY`, …) otherwise.
+   */
+  async requestReview(repo: string, pr: number, reviewers: string[]): Promise<Task> {
+    if (!isRepo(repo)) throw new ApiError(400, 'ZLE_REPO');
+    if (!Number.isInteger(pr) || pr < 1) throw new ApiError(400, 'ZLY_PR');
+    if (!reviewers.length) throw new ApiError(400, 'ZLI_RECENZENCI');
+    const r = await this.call('POST', '/recenzje', { repo, pr, recenzenci: reviewers });
+    if (r.status !== 200) throw apiError(r);
+    return taskFrom(r);
+  }
+
+  /**
    * Lists the user's tasks.
    *
    * Call: `await api.inbox()` (`GET /skrzynka`).
@@ -78,15 +111,92 @@ export class ApiClient {
   /**
    * Changes the state of the user's task.
    *
-   * Call: `await api.setState(id, state)` (`POST /zadania/{id}/stan`).
-   * Expects: a valid id and one of `USER_SETTABLE_STATES`.
+   * Call: `await api.setState(id, state, acceptor?)` (`POST .../stan`).
+   * Expects: a valid id and one of `USER_SETTABLE_STATES`; for
+   * `do_akceptacji` optionally the person who should accept it.
    * Output: the updated task.
    * Throws: `ApiError('ZLY_STAN')` locally for other states; API and
    * session errors as in `take`.
    */
-  async setState(id: string, state: UserSettableState): Promise<Task> {
+  async setState(id: string, state: UserSettableState, acceptor?: string): Promise<Task> {
     if (!(USER_SETTABLE_STATES as readonly string[]).includes(state)) throw new ApiError(400, 'ZLY_STAN');
-    const r = await this.call('POST', `/zadania/${checkedId(id)}/stan`, { stan: state });
+    const extra = acceptor !== undefined && state === 'do_akceptacji' ? { akceptujacy: checkedPerson(acceptor) } : {};
+    return this.taskAction(id, 'stan', { stan: state, ...extra });
+  }
+
+  /**
+   * Accepts a task the user was asked to check.
+   *
+   * Call: `await api.accept(id)` (`POST /zadania/{id}/akceptuj`).
+   * Expects: a valid id of a `do_akceptacji` task naming the user.
+   * Output: the task, now `zrobione`.
+   * Throws: API errors (`KONFLIKT`, `BRAK_DOSTEPU`), session errors.
+   */
+  async accept(id: string): Promise<Task> {
+    return this.taskAction(id, 'akceptuj');
+  }
+
+  /**
+   * Sends a task the user checked back to its owner for fixes.
+   *
+   * Call: `await api.sendBack(id, reason)` (`POST .../do-poprawy`).
+   * Expects: a valid id and what to fix (1–200 characters).
+   * Output: the task, now `w_trakcie` with `uwagi`.
+   * Throws: `ApiError('ZLY_POWOD')` locally; API and session errors.
+   */
+  async sendBack(id: string, reason: string): Promise<Task> {
+    return this.taskAction(id, 'do-poprawy', { powod: checkedReason(reason) });
+  }
+
+  /**
+   * Rejects a task back to its sender.
+   *
+   * Call: `await api.reject(id, reason)` (`POST /zadania/{id}/odrzuc`).
+   * Expects: a valid id and the user's reason (1–200 characters
+   * after trimming, no control characters).
+   * Output: the task after the rejection.
+   * Throws: `ApiError('ZLY_POWOD')` locally; API errors
+   * (`BRAK_NADAWCY`, `KONFLIKT`, `BRAK_DOSTEPU`) and session errors.
+   */
+  async reject(id: string, reason: string): Promise<Task> {
+    return this.taskAction(id, 'odrzuc', { powod: checkedReason(reason) });
+  }
+
+  /**
+   * Deletes a task that was rejected back to the user.
+   *
+   * Call: `await api.remove(id)` (`POST /zadania/{id}/usun`).
+   * Expects: a valid id of an `odrzucone` task the user owns.
+   * Output: the task in state `usuniete`.
+   * Throws: API errors (`KONFLIKT`, `BRAK_DOSTEPU`), session errors.
+   */
+  async remove(id: string): Promise<Task> {
+    return this.taskAction(id, 'usun');
+  }
+
+  /**
+   * Hands the user's task to another person of the company.
+   *
+   * Call: `await api.handOver(id, person)` (`POST .../przekaz`).
+   * Expects: a valid id and a person id from `GET /osoby`.
+   * Output: the task, now new for that person.
+   * Throws: `ApiError('ZLA_OSOBA')` locally; API errors
+   * (`BRAK_OSOBY`, `BRAK_DOSTEPU`, `KONFLIKT`), session errors.
+   */
+  async handOver(id: string, person: string): Promise<Task> {
+    return this.taskAction(id, 'przekaz', { doOsoby: checkedPerson(person) });
+  }
+
+  /**
+   * Posts one action on a task and returns the task.
+   *
+   * Call: `await this.taskAction(id, 'stan', body?)`.
+   * Expects: an action path segment; any id (checked here).
+   * Output: the task from a 200 response.
+   * Throws: `ApiError` for an invalid id or a non-200 answer.
+   */
+  private async taskAction(id: string, action: string, body?: unknown): Promise<Task> {
+    const r = await this.call('POST', `/zadania/${checkedId(id)}/${action}`, body);
     if (r.status !== 200) throw apiError(r);
     return taskFrom(r);
   }
@@ -133,6 +243,33 @@ export class ApiClient {
 function checkedId(id: string): string {
   if (!TASK_ID_PATTERN.test(id)) throw new ApiError(404, 'NIE_ZNALEZIONO');
   return id;
+}
+
+/**
+ * Validates a person's free-text reason before sending it.
+ *
+ * Call: `checkedReason(text)`.
+ * Expects: any string from a form.
+ * Output: the trimmed text (1–200 characters, no control chars).
+ * Throws: `ApiError(400, 'ZLY_POWOD')`.
+ */
+function checkedReason(text: string): string {
+  const t = text.trim();
+  if (!t || t.length > 200 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(t)) throw new ApiError(400, 'ZLY_POWOD');
+  return t;
+}
+
+/**
+ * Validates a person id before sending it.
+ *
+ * Call: `checkedPerson(id)`.
+ * Expects: a value from `GET /osoby`.
+ * Output: the same id.
+ * Throws: `ApiError(400, 'ZLA_OSOBA')` for anything else.
+ */
+function checkedPerson(person: string): string {
+  if (!/^[A-Za-z0-9._-]{1,64}$/.test(person)) throw new ApiError(400, 'ZLA_OSOBA');
+  return person;
 }
 
 /**
@@ -186,4 +323,18 @@ function isMembership(x: unknown): x is Membership {
   if (typeof x !== 'object' || x === null) return false;
   const m = x as Record<string, unknown>;
   return typeof m.firma === 'string' && m.firma !== '' && typeof m.osoba === 'string' && m.osoba !== '';
+}
+
+/**
+ * Checks one `GET /osoby` entry.
+ *
+ * Call: `isPerson(x)`.
+ * Expects: anything from the network.
+ * Output: true when `osoba` is a non-empty string and `github`, if
+ * present, is a string.
+ */
+function isPerson(x: unknown): x is Person {
+  if (typeof x !== 'object' || x === null) return false;
+  const p = x as Record<string, unknown>;
+  return typeof p.osoba === 'string' && p.osoba !== '' && (p.github === undefined || typeof p.github === 'string');
 }

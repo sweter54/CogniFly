@@ -133,6 +133,54 @@ export function pokazWAplikacji(id, env = process.env) {
   });
 }
 
+// Wątek Claude Desktop (CLAUDE_CODE_HOST_SESSION_ID) — tylko ten format trafia do API.
+const WATEK = /^local_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Remembers the current Claude Desktop thread for a task, so the app
+ * can offer "Wróć do wątku w Claude".
+ *
+ * Call: `await zapamietajWatek(ctx, id, env)` after a successful call.
+ * Expects: a validated task id.
+ * Output: none; outside Claude Desktop or on any error nothing happens.
+ */
+async function zapamietajWatek(ctx, id, env) {
+  const watek = env.CLAUDE_CODE_HOST_SESSION_ID;
+  if (!WATEK.test(watek ?? '')) return;
+  try { await zSesja(ctx, 'POST', `/zadania/${id}/watek`, { watek }); } catch { /* best effort */ }
+}
+
+/**
+ * Validates a rejection reason given on the command line.
+ *
+ * Call: `powodOdrzucenia(opcje.powod)`.
+ * Expects: the option value (may be missing or `true`).
+ * Output: the trimmed reason (1–200 characters, no control chars).
+ * Throws: `Stan('ZLY_POWOD')`.
+ */
+function powodOdrzucenia(v) {
+  const p = typeof v === 'string' ? v.trim() : '';
+  if (!p || p.length > 200 || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(p)) throw new Stan('ZLY_POWOD');
+  return p;
+}
+
+/**
+ * Handover target from the options.
+ *
+ * Call: `adresatPrzekazania(opcje)`.
+ * Expects: `--do-osoby <osoba>` or `--do-loginu <login GitHub>`.
+ * Output: the request body (`{doOsoby}` or `{doLoginu}`).
+ * Throws: `Stan('ZLE_PARAMETRY')` (bad person), `Stan('ZLY_LOGIN')`.
+ */
+function adresatPrzekazania(opcje) {
+  if (opcje['do-osoby'] !== undefined) {
+    if (!/^[A-Za-z0-9._-]{1,64}$/.test(String(opcje['do-osoby']))) throw new Stan('ZLE_PARAMETRY');
+    return { doOsoby: opcje['do-osoby'] };
+  }
+  if (!LOGIN_GITHUB.test(opcje['do-loginu'] ?? '')) throw new Stan('ZLY_LOGIN');
+  return { doLoginu: opcje['do-loginu'] };
+}
+
 const blad = (r) => ({ stan: 'BLAD', kod: typeof r.json?.kod === 'string' ? r.json.kod : `HTTP_${r.status}` });
 
 export async function wykonaj(argv, env = process.env) {
@@ -142,7 +190,7 @@ export async function wykonaj(argv, env = process.env) {
   try {
     if (polecenie === 'wyloguj') return wyloguj(kat);
     if (polecenie === 'konfiguruj') return konfiguruj(kat, opcje);
-    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'zadanie', 'biore', 'stan', 'przekaz', 'ocena-dostarczenia', 'dostarczenie', 'podsumowanie'];
+    const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'zadanie', 'biore', 'stan', 'przekaz', 'odrzuc', 'usun', 'akceptuj', 'do-poprawy', 'ocena-dostarczenia', 'dostarczenie', 'osoby', 'zglos-cr', 'podsumowanie'];
     if (!komendy.includes(polecenie)) throw new Stan('BLAD', { kod: 'NIEZNANE_POLECENIE' });
 
     // walidacje lokalne przed siecią i konfiguracją
@@ -154,14 +202,21 @@ export async function wykonaj(argv, env = process.env) {
       if (opcje.typ) q.set('typ', opcje.typ);
       zapytanie = `?${q}`;
     }
-    if (['zadanie', 'biore', 'stan', 'przekaz'].includes(polecenie)) {
+    if (['zadanie', 'biore', 'stan', 'przekaz', 'odrzuc', 'usun', 'akceptuj', 'do-poprawy'].includes(polecenie)) {
       id = poz[1];
       if (!ID_ZADANIA.test(id ?? '')) throw new Stan('NIE_ZNALEZIONO');
     }
     if (polecenie === 'stan' && !STANY.includes(poz[2])) throw new Stan('ZLY_STAN');
-    if (polecenie === 'przekaz' && !LOGIN_GITHUB.test(opcje['do-loginu'] ?? '')) throw new Stan('ZLY_LOGIN');
+    const adresat = polecenie === 'przekaz' ? adresatPrzekazania(opcje) : undefined;
+    const powod = ['odrzuc', 'do-poprawy'].includes(polecenie) ? powodOdrzucenia(opcje.powod) : undefined;
+    if (opcje.akceptujacy !== undefined && !/^[A-Za-z0-9._-]{1,64}$/.test(String(opcje.akceptujacy))) throw new Stan('ZLE_PARAMETRY');
     let dostawa;
-    if (polecenie === 'ocena-dostarczenia' || polecenie === 'dostarczenie') {
+    let recenzenci;
+    if (polecenie === 'zglos-cr') {
+      recenzenci = String(opcje.recenzenci ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+      if (!recenzenci.length || !recenzenci.every((x) => /^[A-Za-z0-9._-]{1,64}$/.test(x))) throw new Stan('ZLE_PARAMETRY');
+    }
+    if (['ocena-dostarczenia', 'dostarczenie', 'zglos-cr'].includes(polecenie)) {
       dostawa = { repo: opcje.repo, pr: Number(opcje.pr) };
       const zle = typeof dostawa.repo !== 'string' || !REPO.test(dostawa.repo) || dostawa.repo.split('/').includes('..')
         || !Number.isInteger(dostawa.pr) || dostawa.pr < 1
@@ -197,7 +252,10 @@ export async function wykonaj(argv, env = process.env) {
       case 'zadanie': {
         // Zdarzenie odchudzane także tutaj (obrona w głąb): bez `dane` i nazwy gałęzi.
         const r = await zSesja(ctx, 'GET', `/zadania/${id}`);
-        if (r.status === 200) return { stan: 'OK', zadanie: r.json.zadanie, zdarzenie: r.json.zdarzenie ? odchudz(r.json.zdarzenie) : null };
+        if (r.status === 200) {
+          await zapamietajWatek(ctx, id, env);
+          return { stan: 'OK', zadanie: r.json.zadanie, zdarzenie: r.json.zdarzenie ? odchudz(r.json.zdarzenie) : null };
+        }
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
         return blad(r);
@@ -205,6 +263,7 @@ export async function wykonaj(argv, env = process.env) {
       case 'biore': {
         const r = await zSesja(ctx, 'POST', `/zadania/${id}/biore`);
         if (r.status === 200) {
+          await zapamietajWatek(ctx, id, env);
           await pokazWAplikacji(id, env);
           return { stan: 'WZIETE', zadanie: r.json.zadanie };
         }
@@ -214,20 +273,52 @@ export async function wykonaj(argv, env = process.env) {
         return blad(r);
       }
       case 'stan': {
-        const body = { stan: poz[2], ...(opcje.postep !== undefined ? { postep: opcje.postep } : {}) };
+        const body = {
+          stan: poz[2],
+          ...(opcje.postep !== undefined ? { postep: opcje.postep } : {}),
+          ...(opcje.akceptujacy !== undefined ? { akceptujacy: opcje.akceptujacy } : {}),
+        };
         const r = await zSesja(ctx, 'POST', `/zadania/${id}/stan`, body);
         if (r.status === 200) {
+          await zapamietajWatek(ctx, id, env);
           await pokazWAplikacji(id, env);
           return { stan: 'OK', zadanie: r.json.zadanie };
         }
+        if (['BRAK_AKCEPTUJACEGO', 'ZLY_AKCEPTUJACY'].includes(r.json?.kod)) return { stan: r.json.kod };
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
         return blad(r);
       }
       case 'przekaz': {
-        const r = await zSesja(ctx, 'POST', `/zadania/${id}/przekaz`, { doLoginu: opcje['do-loginu'] });
+        const r = await zSesja(ctx, 'POST', `/zadania/${id}/przekaz`, adresat);
         if (r.status === 200) return { stan: 'PRZEKAZANE', zadanie: r.json.zadanie };
         if (r.status === 409 && r.json?.kod === 'BRAK_OSOBY') return { stan: 'BRAK_OSOBY' };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
+        return blad(r);
+      }
+      case 'odrzuc': {
+        const r = await zSesja(ctx, 'POST', `/zadania/${id}/odrzuc`, { powod });
+        if (r.status === 200) return { stan: 'ODRZUCONE', zadanie: r.json.zadanie }; // zadanie wyszło ze skrzynki — nie otwieramy aplikacji
+        if (['BRAK_NADAWCY', 'KONFLIKT', 'ZLY_POWOD'].includes(r.json?.kod)) return { stan: r.json.kod };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
+        return blad(r);
+      }
+      case 'usun': {
+        const r = await zSesja(ctx, 'POST', `/zadania/${id}/usun`);
+        if (r.status === 200) return { stan: 'USUNIETE', zadanie: r.json.zadanie };
+        if (r.json?.kod === 'KONFLIKT') return { stan: 'KONFLIKT' };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
+        return blad(r);
+      }
+      case 'akceptuj':
+      case 'do-poprawy': {
+        const akcept = polecenie === 'akceptuj';
+        const r = await zSesja(ctx, 'POST', `/zadania/${id}/${polecenie}`, akcept ? undefined : { powod });
+        if (r.status === 200) return { stan: akcept ? 'ZAAKCEPTOWANE' : 'DO_POPRAWY', zadanie: r.json.zadanie };
+        if (r.json?.kod === 'KONFLIKT') return { stan: 'KONFLIKT' };
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
         return blad(r);
@@ -244,6 +335,19 @@ export async function wykonaj(argv, env = process.env) {
         if (r.status === 200) return { stan: 'NASLUCH', ocena: r.json.ocena };
         if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         if (r.status === 404) return { stan: 'NIE_ZNALEZIONO' };
+        return blad(r);
+      }
+      case 'osoby': {
+        const r = await zSesja(ctx, 'GET', '/osoby');
+        if (r.status === 200) return { stan: 'OK', osoby: Array.isArray(r.json.osoby) ? r.json.osoby : [] };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
+        return blad(r);
+      }
+      case 'zglos-cr': {
+        const r = await zSesja(ctx, 'POST', '/recenzje', { ...dostawa, recenzenci });
+        if (r.status === 200) return { stan: 'ZGLOSZONO', zadanie: r.json.zadanie };
+        if (['ZLI_RECENZENCI', 'BRAK_PR', 'PR_ZAMKNIETY'].includes(r.json?.kod)) return { stan: r.json.kod };
+        if (r.status === 403) return { stan: 'BRAK_DOSTEPU' };
         return blad(r);
       }
       case 'podsumowanie': {

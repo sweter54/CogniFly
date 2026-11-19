@@ -35,6 +35,54 @@ describe('pickNew', () => {
   });
 });
 
+describe('returned tasks', () => {
+  it('a task rejected back to me notifies once and counts as waiting', async () => {
+    const { pickNew, notificationTitle, waitingTasks } = await import('../src/logic/notify.js');
+    const back = { id: 'zad_000000000001', firma: 'f', zdarzenieId: 'e', kandydaci: ['m'], stan: 'odrzucone' as const, utworzono: '', opis: 'X' };
+    const first = pickNew([back], new Set());
+    expect(first.fresh).toHaveLength(1);
+    expect(pickNew([back], first.seen).fresh).toHaveLength(0);
+    expect(waitingTasks([back])).toHaveLength(1);
+    expect(notificationTitle(back)).toBe('CogniFly — zadanie odrzucone');
+    expect(waitingTasks([{ ...back, stan: 'usuniete' }])).toHaveLength(0);
+  });
+});
+
+describe('acceptance', () => {
+  const base = { id: 'zad_000000000002', firma: 'f', zdarzenieId: 'e', kandydaci: ['ania', 'bartek'], utworzono: '', opis: 'Zrób X', wlasciciel: 'ania' };
+  it('a task waiting for my acceptance notifies me, not the owner', async () => {
+    const { pickNew, notificationTitle, waitingTasks } = await import('../src/logic/notify.js');
+    const t = { ...base, stan: 'do_akceptacji' as const, akceptujacy: 'bartek' };
+    expect(waitingTasks([t], 'bartek')).toHaveLength(1);
+    expect(waitingTasks([t], 'ania')).toHaveLength(0);
+    expect(pickNew([t], new Set(), 'bartek').fresh).toHaveLength(1);
+    expect(notificationTitle(t)).toBe('CogniFly — do akceptacji');
+  });
+  it('a task sent back for fixes notifies its owner', async () => {
+    const { pickNew, notificationTitle, waitingTasks } = await import('../src/logic/notify.js');
+    const t = { ...base, stan: 'w_trakcie' as const, uwagi: { osoba: 'bartek', powod: 'Brak testów' } };
+    expect(waitingTasks([t], 'ania')).toHaveLength(1);
+    expect(waitingTasks([t], 'bartek')).toHaveLength(0);
+    expect(pickNew([t], new Set(), 'ania').fresh).toHaveLength(1);
+    expect(notificationTitle(t)).toBe('CogniFly — do poprawy');
+  });
+});
+
+describe('repeated acceptance rounds', () => {
+  it('a new round of fixes or a new submission notifies again', async () => {
+    const { pickNew } = await import('../src/logic/notify.js');
+    const base = { id: 'zad_000000000003', firma: 'f', zdarzenieId: 'e', kandydaci: ['ania', 'bartek'], utworzono: '', opis: 'X', wlasciciel: 'ania' };
+    const fix1 = { ...base, stan: 'w_trakcie' as const, uwagi: { osoba: 'bartek', powod: 'a', czas: '2026-11-18T10:00:00Z' } };
+    const fix2 = { ...fix1, uwagi: { ...fix1.uwagi, czas: '2026-11-18T11:00:00Z' } };
+    const seen = pickNew([fix1], new Set(), 'ania').seen;
+    expect(pickNew([fix2], seen, 'ania').fresh).toHaveLength(1);
+    const sub1 = { ...base, stan: 'do_akceptacji' as const, akceptujacy: 'bartek', oddano: '2026-11-18T10:00:00Z' };
+    const seenB = pickNew([sub1], new Set(), 'bartek').seen;
+    expect(pickNew([{ ...sub1, oddano: '2026-11-18T12:00:00Z' }], seenB, 'bartek').fresh).toHaveLength(1);
+    expect(pickNew([sub1], seenB, 'bartek').fresh).toHaveLength(0);
+  });
+});
+
 describe('notificationBody', () => {
   it('collapses line breaks and control characters into one line', () => {
     expect(notificationBody('Review\nPR #1 \u0007 teraz')).toBe('Review PR #1 teraz');

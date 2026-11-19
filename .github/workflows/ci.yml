@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  testy:
+    name: Testy (npm)
+    runs-on: ubuntu-latest
+    services:
+      dynamodb:
+        image: amazon/dynamodb-local
+        ports:
+          - 8000:8000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Typy aplikacji
+        run: npx tsc --noEmit
+        working-directory: aplikacja
+      - run: npm test
+        env:
+          DYNAMODB_ENDPOINT: http://localhost:8000
+          AWS_REGION: eu-central-1
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+
+  rust:
+    name: Aplikacja (cargo)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: aplikacja/src-tauri
+      - name: Pusty frontend (cargo check go wymaga)
+        run: mkdir -p aplikacja/dist
+      - run: cargo check --locked
+        working-directory: aplikacja/src-tauri
+      - run: cargo test --locked
+        working-directory: aplikacja/src-tauri
