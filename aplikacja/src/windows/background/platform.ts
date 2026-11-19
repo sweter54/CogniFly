@@ -36,16 +36,18 @@ export const pluginFetch: FetchFn = (url, init) => httpFetch(url, init).catch((e
 /**
  * Brings the main window to the front on a screen.
  *
- * Call: `await showScreen('login')` or `showScreen('inbox', taskId)`
- * from the tray, notification click, controller or an app link.
- * Expects: the `main` window declared in tauri.conf.json.
+ * Call: `await showScreen('login')`, `showScreen('inbox', taskId)`
+ * or `showScreen('files', conflictKey)` from the tray, notification
+ * click, controller or an app link.
+ * Expects: the `main` window declared in tauri.conf.json; the
+ * highlight is a task id (inbox) or a conflict key (files).
  * Output: none; never throws, so menu actions and startup keep
  * working; failures go to the app log. The screen request is sent
  * first, so no stale screen flashes.
  */
-export async function showScreen(screen: Screen, highlightTask?: string): Promise<void> {
+export async function showScreen(screen: Screen, highlight?: string): Promise<void> {
   try {
-    await emitTo(WINDOWS.main, SCREEN_EVENT, { screen, highlight: highlightTask ?? null });
+    await emitTo(WINDOWS.main, SCREEN_EVENT, { screen, highlight: highlight ?? null });
     const w = await WebviewWindow.getByLabel(WINDOWS.main);
     if (!w) throw new Error('main window missing');
     await w.show();

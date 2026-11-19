@@ -49,6 +49,7 @@ async function main(): Promise<void> {
   tray = await createTray({
     openMain: () => void showScreen(controller.current().loggedIn ? 'inbox' : 'login'),
     openInbox: () => void showScreen('inbox'),
+    show: (screen, highlight) => void showScreen(screen, highlight),
     refresh: () => void controller.poll(),
     openSettings: () => void showScreen('settings'),
     login: () => void showScreen('login'),

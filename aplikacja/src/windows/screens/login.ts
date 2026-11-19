@@ -1,6 +1,6 @@
 // Guided login screen: e-mail → code → done. Tokens never reach this
 // window; the background window keeps them.
-import { byId, formValues, messageFor, pickFolder, setBusy, setStatus, type Call } from '../ui.js';
+import { byId, formValues, messageFor, pickFolder, setBusy, setPath, setStatus, type Call } from '../ui.js';
 
 /** Steps of the guided setup. */
 export type LoginStep = 'email' | 'code' | 'folder' | 'done';
@@ -82,7 +82,7 @@ function wireFolderStep(call: Call, onDone: () => void): void {
     pickFolder(call, chosen).then((path) => {
       if (path === null) return;
       chosen = path;
-      shown.textContent = path;
+      setPath(shown, path);
       next.disabled = false;
       setStatus('');
     }, (e) => setStatus(messageFor(e), 'error'));

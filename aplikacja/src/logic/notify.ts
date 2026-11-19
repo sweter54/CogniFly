@@ -2,6 +2,7 @@
 // `opis` ever reaches a notification (other task text is data).
 import { RETURNED_STATES, WAITING_STATES, type Task } from '@cognifly/wspolne/api';
 import { readJson, writeJson, type KeyValueStore } from './storage.js';
+import { plural } from './text.js';
 
 /** Maximum notification body length (characters). */
 export const MAX_BODY_CHARS = 200;
@@ -131,6 +132,39 @@ export function trayTitle(state: TrayState): string {
   const conflicts = state.conflicts > 0 ? `⚠${capped(state.conflicts)}` : '';
   const unsent = state.unsent > 0 ? `↑${capped(state.unsent)}` : '';
   return [tasks, conflicts, unsent].filter(Boolean).join(' ');
+}
+
+/**
+ * Tooltip of the menu-bar icon: the title spelled out in Polish.
+ *
+ * Call: `trayTooltip(state)` on every render.
+ * Expects: the same state as `trayTitle`.
+ * Output: `CogniFly: ` plus, joined by ` · `, the offline note and
+ * the counts that apply, e.g. `CogniFly: 3 zadania czekają ·
+ * 1 konflikt pliku · 2 pliki do wysłania`; "niezalogowano" when
+ * logged out, "wszystko załatwione" when nothing is pending.
+ */
+export function trayTooltip(state: TrayState): string {
+  if (!state.loggedIn) return 'CogniFly: niezalogowano';
+  const parts = [
+    state.offline ? 'brak połączenia z serwerem' : '',
+    state.waiting > 0 ? waitingText(state.waiting) : '',
+    state.conflicts > 0 ? `${state.conflicts} ${plural(state.conflicts, 'konflikt pliku', 'konflikty plików', 'konfliktów plików')}` : '',
+    state.unsent > 0 ? `${state.unsent} ${plural(state.unsent, 'plik', 'pliki', 'plików')} do wysłania` : '',
+  ].filter(Boolean);
+  return `CogniFly: ${parts.length ? parts.join(' · ') : 'wszystko załatwione'}`;
+}
+
+/**
+ * Waiting tasks in Polish, with the verb agreeing with the count.
+ *
+ * Call: `waitingText(3)`.
+ * Expects: a count ≥ 1.
+ * Output: e.g. "1 zadanie czeka", "3 zadania czekają",
+ * "5 zadań czeka".
+ */
+function waitingText(n: number): string {
+  return `${n} ${plural(n, 'zadanie czeka', 'zadania czekają', 'zadań czeka')}`;
 }
 
 /**

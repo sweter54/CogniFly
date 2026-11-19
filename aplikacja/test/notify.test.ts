@@ -1,6 +1,6 @@
 import type { Task } from '@cognifly/wspolne/api';
 import { describe, expect, it } from 'vitest';
-import { loadSeen, notificationBody, notificationTitle, pickNew, saveSeen, trayTitle } from '../src/logic/notify.js';
+import { loadSeen, notificationBody, notificationTitle, pickNew, saveSeen, trayTitle, trayTooltip } from '../src/logic/notify.js';
 import { memoryStore } from '../src/logic/storage.js';
 
 const t = (n: number, stan: Task['stan'] = 'nowe'): Task => ({
@@ -111,6 +111,19 @@ describe('trayTitle', () => {
     [{ loggedIn: true, offline: false, waiting: 0, conflicts: 0, unsent: 4 }, '↑4'],
     [{ loggedIn: true, offline: true, waiting: 0, conflicts: 0, unsent: 4 }, '! ↑4'],
   ])('%j → %s', (state, title) => expect(trayTitle(state)).toBe(title));
+});
+
+describe('trayTooltip', () => {
+  const base = { loggedIn: true, offline: false, waiting: 0, conflicts: 0, unsent: 0 };
+  it.each([
+    [{ ...base, loggedIn: false, waiting: 3 }, 'CogniFly: niezalogowano'],
+    [base, 'CogniFly: wszystko załatwione'],
+    [{ ...base, offline: true }, 'CogniFly: brak połączenia z serwerem'],
+    [{ ...base, waiting: 3, conflicts: 1, unsent: 2 }, 'CogniFly: 3 zadania czekają · 1 konflikt pliku · 2 pliki do wysłania'],
+    [{ ...base, waiting: 1, conflicts: 2, unsent: 1 }, 'CogniFly: 1 zadanie czeka · 2 konflikty plików · 1 plik do wysłania'],
+    [{ ...base, waiting: 5, conflicts: 5, unsent: 12 }, 'CogniFly: 5 zadań czeka · 5 konfliktów plików · 12 plików do wysłania'],
+    [{ ...base, offline: true, waiting: 22 }, 'CogniFly: brak połączenia z serwerem · 22 zadania czekają'],
+  ])('%j → %s', (state, text) => expect(trayTooltip(state)).toBe(text));
 });
 
 describe('seen persistence', () => {

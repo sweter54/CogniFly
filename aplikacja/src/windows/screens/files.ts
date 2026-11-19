@@ -3,14 +3,14 @@
 // file. Paths, names and reasons come from the daemon: they are data
 // and go into the page via textContent only.
 import {
-  adoptErrorText, fileErrorText, filesViewModel, lockableTasks, parseTopics, spaceStatusText, versionLine, type ConflictRow, type FilesModel,
+  adoptErrorText, conflictKey, fileErrorText, filesViewModel, lockableTasks, parseTopics, spaceStatusText, versionLine, type ConflictRow, type FilesModel,
   type SpaceRow, type TaskRef, type UntrackedRow,
 } from '../../logic/files-view.js';
 import type { FilesView, HwIssue, HwSkipped, HwVersion } from '../../logic/heartwood.js';
 import { RpcError } from '../../logic/rpc.js';
 import type { InboxView } from '../protocol.js';
 import {
-  armed, button, byId, DAEMON_WAIT_MS, el, formValues, PICKER_WAIT_MS, prime, row, runFileAction, setBusy, setStatus, takePrimed,
+  armed, button, byId, DAEMON_WAIT_MS, el, flasher, formValues, pathEl, PICKER_WAIT_MS, prime, row, runFileAction, setBusy, setStatus, takePrimed,
   type Call, type Said,
 } from '../ui.js';
 import { mountTree } from './files-tree.js';
@@ -23,6 +23,8 @@ export interface FilesScreen {
   show(view: InboxView): void;
   /** Stops refreshing (screen left). */
   hide(): void;
+  /** Scrolls to a conflict (`conflictKey`) and makes it flash. */
+  highlight(key: string): void;
 }
 
 /** Where a history points: a local path or a path in a space. */
@@ -79,7 +81,7 @@ async function unselect(call: Call, button: HTMLButtonElement, space: string): P
 function spaceRow(call: Call, space: SpaceRow): HTMLLIElement {
   const unsel = button('Odznacz', 'secondary');
   unsel.addEventListener('click', () => void runFileAction(unsel, () => unselect(call, unsel, space.label)));
-  return row(el('strong', space.folder), el('span', space.label, 'muted'), el('span', spaceStatusText(space), 'state'), unsel);
+  return row(pathEl('strong', space.folder), el('span', space.label, 'muted'), el('span', spaceStatusText(space), 'state'), unsel);
 }
 
 /**
@@ -88,7 +90,7 @@ function spaceRow(call: Call, space: SpaceRow): HTMLLIElement {
  * Output: path, reason and "Przenieś do zadania…".
  */
 function untrackedRow(ctx: ListContext, u: UntrackedRow): HTMLLIElement {
-  return row(el('strong', u.label, 'path'), el('span', u.reasonText, 'muted'), adoptButton(ctx, u));
+  return row(pathEl('strong', u.label), el('span', u.reasonText, 'muted'), adoptButton(ctx, u));
 }
 
 /**
@@ -149,10 +151,12 @@ async function adopt(ctx: ListContext, pick: HTMLSelectElement, move: HTMLButton
  * Row of one conflicting file (its conflicts grouped).
  * Call: `conflictRow(ctx, c)`. Expects: a row of the model.
  * Output: path, "N kopii", "Pokaż kopię" (when a copy is left)
- * and "Oznacz jako rozwiązane" (asks, then clears every copy).
+ * and "Oznacz jako rozwiązane" (asks, then clears every copy);
+ * `data-key` holds its `conflictKey` (tray highlight).
  */
 function conflictRow(ctx: ListContext, c: ConflictRow): HTMLLIElement {
-  const li = row(el('strong', c.label, 'path'), el('span', c.countText, 'state'));
+  const li = row(pathEl('strong', c.label), el('span', c.countText, 'state'));
+  li.dataset.key = conflictKey(c.space, c.path);
   if (c.copyPath) li.append(showCopyButton(ctx.call, c.copyPath));
   const done = button('Oznacz jako rozwiązane', 'secondary');
   armed(done, RESOLVE_QUESTION, () => runFileAction(done, async () => {
@@ -184,7 +188,7 @@ function showCopyButton(call: Call, copyPath: string): HTMLButtonElement {
  * Output: path, reason and the suggested name (or the hint).
  */
 function skippedRow(s: HwSkipped): HTMLLIElement {
-  const li = row(el('strong', s.path, 'path'), el('span', s.reasonText));
+  const li = row(pathEl('strong', s.path), el('span', s.reasonText));
   const tip = s.suggestion ? `Propozycja: ${s.suggestion}` : s.hint;
   if (tip) li.append(el('span', tip, 'muted'));
   return li;
@@ -307,7 +311,7 @@ async function showHistory(call: Call, target: HistoryTarget): Promise<void> {
   const { versions } = await call('files.history', target);
   const reload = () => showHistory(call, target).catch((e) => setStatus(fileErrorText(e), 'error'));
   const name = target.space === undefined ? target.path : `${target.space}: ${target.path}`;
-  byId('history-path').textContent = versions.length ? name : `${name} — brak wersji.`;
+  byId('history-path').replaceChildren(pathEl('strong', name), ...(versions.length ? [] : [el('span', '— brak wersji.')]));
   const newest = [...versions].sort((a, b) => b.seq - a.seq);
   byId('files-versions').replaceChildren(...newest.map((v) => versionRow(call, target, v, reload)));
   byId('history-path').scrollIntoView({ block: 'nearest' });
@@ -349,6 +353,7 @@ export function mountFiles(call: Call): FilesScreen {
       if (view) renderFiles(view.files);
     },
   };
+  const flash = flasher(conflictElement, '#files-conflicts li.flash');
   const tree = mountTree(call, (space, path) => {
     showHistory(call, { space, path }).catch((e) => setStatus(fileErrorText(e), 'error'));
   });
@@ -357,15 +362,17 @@ export function mountFiles(call: Call): FilesScreen {
    * Draws the files part when its model changed (keeps open
    * questions; an open task select of "Nieśledzone" keeps its list).
    * Call: `renderFiles(files)`. Expects: the files part of a view.
-   * Output: none.
+   * Output: none; a requested conflict highlight is re-applied.
    */
   function renderFiles(files: FilesView): void {
     if (view) view = { ...view, files };
     const model = filesViewModel(files);
     const key = JSON.stringify(model);
-    if (key === drawn) return;
-    drawn = key;
-    draw(ctx, model);
+    if (key !== drawn) {
+      drawn = key;
+      draw(ctx, model);
+    }
+    flash.apply();
   }
 
   /**
@@ -413,5 +420,19 @@ export function mountFiles(call: Call): FilesScreen {
       clearInterval(timer);
       timer = undefined;
     },
+    highlight(key) {
+      if (!flash.request(key)) refresh(false);
+    },
   };
+}
+
+/**
+ * Finds the row of a conflicting file.
+ *
+ * Call: `conflictElement(conflictKey(space, path))`.
+ * Expects: a key of `conflictKey`.
+ * Output: the `<li>` of "Konflikty", or undefined when not listed.
+ */
+function conflictElement(key: string): HTMLElement | undefined {
+  return Array.from(document.querySelectorAll<HTMLElement>('#files-conflicts li')).find((li) => li.dataset.key === key);
 }

@@ -3,7 +3,9 @@
 // Text from the network is always set via `textContent`.
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { fileErrorText } from '../logic/files-view.js';
+import { onRender, requestHighlight, type Highlight } from '../logic/highlight.js';
 import { rpcClient, RpcError } from '../logic/rpc.js';
+import { shortPath } from '../logic/text.js';
 import type { Method, Methods } from './protocol.js';
 import { currentLabel, tauriBus } from './tauri-bus.js';
 
@@ -218,6 +220,39 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, 
   return node;
 }
 
+/** Longest path put into the page; CSS cuts it further to fit. */
+export const PATH_CHARS = 80;
+/** Left-to-right mark: keeps a path's order in a `.path` (rtl) box. */
+const LRM = '‎';
+
+/**
+ * Shows a path on one line with its end (the name) visible.
+ *
+ * Call: `setPath(node, path)`; `''` clears it.
+ * Expects: any element; it gets class `path` (one line, cut at
+ * the start by CSS when the box is narrower).
+ * Output: none; the text is `shortPath(path, maxChars)` and the
+ * full path goes to the `title` tooltip.
+ */
+export function setPath(node: HTMLElement, path: string, maxChars = PATH_CHARS): void {
+  node.textContent = path ? `${LRM}${shortPath(path, maxChars)}${LRM}` : '';
+  node.title = path;
+  node.classList.add('path');
+}
+
+/**
+ * Builds an element showing a path (see `setPath`).
+ *
+ * Call: `pathEl('strong', row.label)`.
+ * Expects: a tag name, a path (data) and optional extra classes.
+ * Output: the element with class `path` and the tooltip.
+ */
+export function pathEl<K extends keyof HTMLElementTagNameMap>(tag: K, path: string, cls?: string): HTMLElementTagNameMap[K] {
+  const node = el(tag, '', cls);
+  setPath(node, path);
+  return node;
+}
+
 /**
  * Builds a button that is not a form submit.
  *
@@ -262,4 +297,66 @@ export async function runFileAction(b: HTMLButtonElement, action: () => Promise<
   } finally {
     b.disabled = false;
   }
+}
+
+/** Flashes one list element picked by id (see `flasher`). */
+export interface Flasher {
+  /** Starts a highlight; `true` when the element is shown already. */
+  request(id: string): boolean;
+  /** Re-applies the highlight; call after every redraw of the list. */
+  apply(): void;
+}
+
+/**
+ * Highlights an element of a list that is redrawn often.
+ *
+ * Call: `const f = flasher(find, '.task.flash')` once per list;
+ * `f.request(id)` to start, `f.apply()` after every redraw.
+ * Expects: `find(id)` returning the element showing `id` now, and
+ * a selector of the flashing elements of this list.
+ * Output: the handle; timing follows `onRender` (waits up to 15 s
+ * for the element, flashes 5 s; redraws keep the flash).
+ */
+export function flasher(find: (id: string) => HTMLElement | undefined, flashing: string): Flasher {
+  let pending: Highlight | null = null;
+  let endTimer: ReturnType<typeof setTimeout> | undefined;
+  const end = () => {
+    const id = pending?.id;
+    pending = onRender(pending, false, Date.now()).next;
+    if (id && !pending) find(id)?.classList.remove('flash');
+  };
+  const apply = () => {
+    const node = pending ? find(pending.id) : undefined;
+    const { next, flash } = onRender(pending, node !== undefined, Date.now());
+    pending = next;
+    if (!node || flash === 'none') return;
+    node.classList.add('flash');
+    if (flash !== 'start') return;
+    startFlash(node);
+    clearTimeout(endTimer);
+    endTimer = setTimeout(end, (next?.until ?? Date.now()) - Date.now());
+  };
+  return {
+    request(id) {
+      for (const node of Array.from(document.querySelectorAll(flashing))) node.classList.remove('flash');
+      pending = requestHighlight(id, Date.now());
+      apply();
+      return pending?.until !== undefined;
+    },
+    apply,
+  };
+}
+
+/**
+ * Brings a just highlighted element to the user's eye.
+ *
+ * Call: `startFlash(node)` when a flash starts.
+ * Expects: an element in the page.
+ * Output: none; it scrolls into view and gets focus, unless a
+ * field has focus (typing is not interrupted).
+ */
+function startFlash(node: HTMLElement): void {
+  node.tabIndex = -1;
+  if (!document.activeElement?.matches('input, textarea, select')) node.focus({ preventScroll: true });
+  node.scrollIntoView({ block: 'center', behavior: 'smooth' });
 }

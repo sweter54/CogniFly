@@ -113,6 +113,7 @@ async function main(): Promise<void> {
     const { screen, highlight } = p as { screen: Screen; highlight?: string | null };
     go(screen);
     if (highlight && current === 'inbox') inbox.highlight(highlight);
+    if (highlight && current === 'files') files.highlight(highlight);
   });
   for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-go]'))) {
     el.addEventListener('click', () => go(el.dataset.go as Screen));
