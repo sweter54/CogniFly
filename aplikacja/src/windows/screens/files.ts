@@ -35,6 +35,8 @@ interface ListContext {
   tasks: () => TaskRef[];
   /** Asks for a fresh status after a change. */
   changed: () => void;
+  /** Redraws the lists from the last model (after a picker closes). */
+  redraw: () => void;
 }
 
 /** How often the open screen asks for a fresh status. */
@@ -108,7 +110,9 @@ function adoptButton(ctx: ListContext, u: UntrackedRow): HTMLButtonElement {
     });
     // Nothing picked: give the button back (unless adopt did).
     const cancel = () => {
-      if (!pick.value && pick.isConnected) pick.replaceWith(move);
+      if (pick.value || !pick.isConnected) return;
+      pick.replaceWith(move);
+      ctx.redraw();
     };
     pick.addEventListener('blur', cancel);
     pick.addEventListener('keydown', (e) => {
@@ -137,6 +141,7 @@ async function adopt(ctx: ListContext, pick: HTMLSelectElement, move: HTMLButton
     setStatus(adoptErrorText(e), 'error');
   } finally {
     pick.replaceWith(move);
+    ctx.redraw();
   }
 }
 
@@ -339,6 +344,10 @@ export function mountFiles(call: Call): FilesScreen {
     call,
     tasks: () => (view ? lockableTasks(view.tasks, view.osoba, view.files.info.state) : []),
     changed: () => refresh(false),
+    redraw: () => {
+      drawn = '';
+      if (view) renderFiles(view.files);
+    },
   };
   const tree = mountTree(call, (space, path) => {
     showHistory(call, { space, path }).catch((e) => setStatus(fileErrorText(e), 'error'));
