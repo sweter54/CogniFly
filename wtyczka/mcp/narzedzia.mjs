@@ -22,7 +22,7 @@ const KOMUNIKATY = {
   NIE_ZNALEZIONO: 'Nie ma takiego zadania.',
   PLIKI_WYLACZONE: 'Pliki zadań są wyłączone: CogniFly nie jest połączony z Heartwood.',
   ZLE_ZADANIE: 'Nieprawidłowy identyfikator zadania (oczekiwano zad_ i 12 lub 24 cyfr szesnastkowych).',
-  ZLA_PRZESTRZEN: 'Nieprawidłowa przestrzeń (np. team:projekt).',
+  ZLA_PRZESTRZEN: 'Nieprawidłowa przestrzeń (np. ws:wspolne lub user:<sub>).',
   ZLA_SCIEZKA: 'Nieprawidłowa ścieżka pliku (względna w przestrzeni, bez „..”).',
 };
 
@@ -127,7 +127,8 @@ async function ktoJa(ctx) {
  * Call: `await mojeZadania(ctx)`.
  * Expects: a context from `kontekst()`.
  * Output: `{zadania: [{id, opis, stan, wlasciciel, akceptujacy,
- * moge_blokowac}]}` (missing people as null).
+ * moge_blokowac}]}` (missing people as null), tasks the user can
+ * lock first.
  * Throws: `Stan` on session or API errors.
  */
 async function mojeZadania(ctx) {
@@ -135,12 +136,13 @@ async function mojeZadania(ctx) {
   const r = await zSesja(ctx, 'GET', '/skrzynka');
   if (r.status !== 200) odmowa(r);
   const lista = Array.isArray(r.json?.zadania) ? r.json.zadania : [];
-  return {
-    zadania: lista.map((z) => ({
-      id: z.id, opis: z.opis ?? '', stan: z.stan, wlasciciel: z.wlasciciel ?? null,
-      akceptujacy: z.akceptujacy ?? null, moge_blokowac: mogeBlokowac(z, ja),
-    })),
-  };
+  const zadania = lista.map((z) => ({
+    id: z.id, opis: z.opis ?? '', stan: z.stan, wlasciciel: z.wlasciciel ?? null,
+    akceptujacy: z.akceptujacy ?? null, moge_blokowac: mogeBlokowac(z, ja),
+  }));
+  // Stable sort: lockable tasks first, so the cut keeps them.
+  zadania.sort((a, b) => Number(b.moge_blokowac) - Number(a.moge_blokowac));
+  return { zadania };
 }
 
 /**
@@ -288,7 +290,7 @@ export const NARZEDZIA = [
 /** Polish descriptions of tool arguments (shared by all tools). */
 export const OPISY_ARGUMENTOW = {
   zadanie: 'Identyfikator zadania, np. zad_0123456789ab.',
-  przestrzen: 'Przestrzeń Heartwood, np. team:projekt.',
+  przestrzen: 'Przestrzeń Heartwood, np. ws:wspolne lub user:<sub>.',
   sciezka: 'Ścieżka pliku względna w przestrzeni, np. Zadania/raport.docx.',
 };
 

@@ -214,10 +214,11 @@ niej zadań) i woła `adopt` z `workId` = `cognifly:<id>` oraz `taskFolder`:
 ### Konflikty
 
 Sekcja „Konflikty” grupuje konflikty per plik (demon wysyła jeden wiersz na
-plik): ścieżka, „N kopii”, „Pokaż kopie” i „Oznacz jako rozwiązane”. Kopie
-leżą obok pliku w `<temat>/Kopie konfliktów/` (także `.heartwood-kopie`).
+plik): ścieżka, „N kopii”, „Pokaż kopię” i „Oznacz jako rozwiązane”. Kopie
+leżą w folderze `Kopie konfliktów/` tematu pliku (dla plików z korzenia
+przestrzeni: w jej korzeniu), także `.heartwood-kopie`.
 
-- „Pokaż kopie” (`files.revealCopy`) zaznacza najnowszą kopię w Finderze;
+- „Pokaż kopię” (`files.revealCopy`) zaznacza najnowszą kopię w Finderze;
   błędy: `OUTSIDE` (poza `root`), `NOT_COPY` (ścieżka nie jest kopią
   konfliktu, `isConflictCopy`), `OPEN_FAILED`.
 - „Oznacz jako rozwiązane” (`files.resolve`) pyta: „Usunąć kopie konfliktu?

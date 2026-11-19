@@ -1,7 +1,7 @@
 // "Pliki" screen: the space browser, Heartwood spaces, untracked
-// files, conflicts, skipped files and the version history of one file. Paths, names and
-// reasons come from the daemon: they are data and go into the page via
-// textContent only.
+// files, conflicts, skipped files and the version history of one
+// file. Paths, names and reasons come from the daemon: they are data
+// and go into the page via textContent only.
 import {
   adoptErrorText, fileErrorText, filesViewModel, lockableTasks, parseTopics, spaceStatusText, versionLine, type ConflictRow, type FilesModel,
   type SpaceRow, type TaskRef, type UntrackedRow,
@@ -106,6 +106,14 @@ function adoptButton(ctx: ListContext, u: UntrackedRow): HTMLButtonElement {
     pick.addEventListener('change', () => {
       if (pick.value) void adopt(ctx, pick, move, u.path);
     });
+    // Nothing picked: give the button back (unless adopt did).
+    const cancel = () => {
+      if (!pick.value && pick.isConnected) pick.replaceWith(move);
+    };
+    pick.addEventListener('blur', cancel);
+    pick.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') cancel();
+    });
     move.replaceWith(pick);
     pick.focus();
   });
@@ -135,7 +143,7 @@ async function adopt(ctx: ListContext, pick: HTMLSelectElement, move: HTMLButton
 /**
  * Row of one conflicting file (its conflicts grouped).
  * Call: `conflictRow(ctx, c)`. Expects: a row of the model.
- * Output: path, "N kopii", "Pokaż kopie" (when a copy is left)
+ * Output: path, "N kopii", "Pokaż kopię" (when a copy is left)
  * and "Oznacz jako rozwiązane" (asks, then clears every copy).
  */
 function conflictRow(ctx: ListContext, c: ConflictRow): HTMLLIElement {
@@ -152,12 +160,12 @@ function conflictRow(ctx: ListContext, c: ConflictRow): HTMLLIElement {
 }
 
 /**
- * "Pokaż kopie": selects the newest copy in Finder.
+ * "Pokaż kopię": selects the newest copy in Finder.
  * Call: `showCopyButton(call, copyPath)`. Expects: a copy path.
  * Output: the button.
  */
 function showCopyButton(call: Call, copyPath: string): HTMLButtonElement {
-  const show = button('Pokaż kopie', 'secondary');
+  const show = button('Pokaż kopię', 'secondary');
   show.addEventListener('click', () => void runFileAction(show, async () => {
     await call('files.revealCopy', { copyPath });
     return { text: '', kind: 'info' };
@@ -213,7 +221,10 @@ function draw(ctx: ListContext, model: FilesModel): void {
   byId('files-body').hidden = !model.ready;
   fillList('files-issues', null, model.issues.map(issueRow));
   byId('files-spaces').replaceChildren(...model.spaces.map((s) => spaceRow(ctx.call, s)));
-  fillList('files-untracked', 'untracked-title', model.untracked.map((u) => untrackedRow(ctx, u)));
+  // An open task picker keeps its list; the others redraw anyway.
+  if (!document.querySelector('#files-untracked select')) {
+    fillList('files-untracked', 'untracked-title', model.untracked.map((u) => untrackedRow(ctx, u)));
+  }
   fillList('files-conflicts', 'conflicts-title', model.conflicts.map((c) => conflictRow(ctx, c)));
   fillList('files-skipped', 'skipped-title', model.skipped.map(skippedRow));
 }
@@ -335,7 +346,7 @@ export function mountFiles(call: Call): FilesScreen {
 
   /**
    * Draws the files part when its model changed (keeps open
-   * questions; waits while a task select of "Nieśledzone" is open).
+   * questions; an open task select of "Nieśledzone" keeps its list).
    * Call: `renderFiles(files)`. Expects: the files part of a view.
    * Output: none.
    */
@@ -343,7 +354,7 @@ export function mountFiles(call: Call): FilesScreen {
     if (view) view = { ...view, files };
     const model = filesViewModel(files);
     const key = JSON.stringify(model);
-    if (key === drawn || document.querySelector('#files-untracked select')) return;
+    if (key === drawn) return;
     drawn = key;
     draw(ctx, model);
   }

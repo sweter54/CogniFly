@@ -21761,7 +21761,7 @@ var KOMUNIKATY = {
   NIE_ZNALEZIONO: "Nie ma takiego zadania.",
   PLIKI_WYLACZONE: "Pliki zada\u0144 s\u0105 wy\u0142\u0105czone: CogniFly nie jest po\u0142\u0105czony z Heartwood.",
   ZLE_ZADANIE: "Nieprawid\u0142owy identyfikator zadania (oczekiwano zad_ i 12 lub 24 cyfr szesnastkowych).",
-  ZLA_PRZESTRZEN: "Nieprawid\u0142owa przestrze\u0144 (np. team:projekt).",
+  ZLA_PRZESTRZEN: "Nieprawid\u0142owa przestrze\u0144 (np. ws:wspolne lub user:<sub>).",
   ZLA_SCIEZKA: "Nieprawid\u0142owa \u015Bcie\u017Cka pliku (wzgl\u0119dna w przestrzeni, bez \u201E..\u201D)."
 };
 function wynikBledu(e) {
@@ -21809,16 +21809,16 @@ async function mojeZadania(ctx) {
   const r = await zSesja(ctx, "GET", "/skrzynka");
   if (r.status !== 200) odmowa(r);
   const lista = Array.isArray(r.json?.zadania) ? r.json.zadania : [];
-  return {
-    zadania: lista.map((z) => ({
-      id: z.id,
-      opis: z.opis ?? "",
-      stan: z.stan,
-      wlasciciel: z.wlasciciel ?? null,
-      akceptujacy: z.akceptujacy ?? null,
-      moge_blokowac: mogeBlokowac(z, ja)
-    }))
-  };
+  const zadania = lista.map((z) => ({
+    id: z.id,
+    opis: z.opis ?? "",
+    stan: z.stan,
+    wlasciciel: z.wlasciciel ?? null,
+    akceptujacy: z.akceptujacy ?? null,
+    moge_blokowac: mogeBlokowac(z, ja)
+  }));
+  zadania.sort((a, b) => Number(b.moge_blokowac) - Number(a.moge_blokowac));
+  return { zadania };
 }
 async function plikiZadania(ctx, id) {
   const r = await zSesja(ctx, "GET", `/zadania/${id}/pliki`);
@@ -21899,7 +21899,7 @@ var NARZEDZIA = [
 ];
 var OPISY_ARGUMENTOW = {
   zadanie: "Identyfikator zadania, np. zad_0123456789ab.",
-  przestrzen: "Przestrze\u0144 Heartwood, np. team:projekt.",
+  przestrzen: "Przestrze\u0144 Heartwood, np. ws:wspolne lub user:<sub>.",
   sciezka: "\u015Acie\u017Cka pliku wzgl\u0119dna w przestrzeni, np. Zadania/raport.docx."
 };
 async function wywolaj2(nazwa, args, env = process.env) {

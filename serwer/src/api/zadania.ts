@@ -50,7 +50,10 @@ export function jestUczestnikiem(
   return z.kandydaci.includes(osoba) || z.wlasciciel === osoba || z.akceptujacy === osoba;
 }
 
-/** GET /zadania/{id}: zadanie i jego zdarzenie — tylko dla uczestnika (inaczej 403). */
+/**
+ * GET /zadania/{id}: zadanie i jego zdarzenie, tylko dla
+ * uczestnika (inaczej 403).
+ */
 export async function szczegoly(k: Kontekst, id: string | undefined): Promise<Odpowiedz> {
   const zadanie = await pobierzZadanie(k.firma, sprawdzId(id));
   if (!zadanie) throw new HttpBlad(404, 'NIE_ZNALEZIONO');
