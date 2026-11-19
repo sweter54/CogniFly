@@ -42,7 +42,7 @@ node "${CLAUDE_PLUGIN_ROOT}/cli/cognifly.mjs" <polecenie> [opcje]
 | poproś o code review swojego PR | `zglos-cr --repo <repo> --pr <nr> --recenzenci <osoba1,osoba2>` (tylko po zgodzie) |
 | zmiana stanu zadania | `stan zad_<id> <w_trakcie\|do_akceptacji\|zrobione> [--postep <tekst>]` (tylko po zgodzie) |
 | logowanie | `zaloguj --email <adres>`, potem `kod --kod <kod>` |
-| konfiguracja (jednorazowo) | `konfiguruj --adres-api <AdresApi> --klient <KlientCognito> [--region eu-central-1] [--firma <id>]` — zapisuje `~/.cognifly/konfiguracja.json` (bez sekretów); wartości bierz z wyjść stosu |
+| konfiguracja (jednorazowo) | `konfiguruj --adres-api <AdresApi> --klient <KlientCognifly> [--region eu-central-1] [--firma <id>]` — zapisuje `~/.cognifly/konfiguracja.json` (bez sekretów); wartości bierz z wyjść stosu (`KlientCognifly` = klient `cognifly` puli Platformy) |
 | wylogowanie | `wyloguj` |
 | podsumowanie (używa go hook) | `podsumowanie` |
 
@@ -135,7 +135,7 @@ kto pisze w danym pliku albo do którego zadania pasuje dany plik.
 - `ZLY_PRZEDZIAL` — niepoprawny zakres dat. Popraw i zapytaj ponownie.
 - `ZLY_STAN` — niedozwolony stan; dozwolone: `w_trakcie`, `do_akceptacji`, `zrobione`.
 - `BLAD_SIECI` — brak połączenia lub przekroczony czas. Powiedz o tym i zaproponuj ponowienie później.
-- `BRAK_KONFIGURACJI` — wtyczka nie ma adresu API lub klienta logowania. Poproś użytkownika o `AdresApi` i `KlientCognito` z wyjść stosu i uruchom `konfiguruj` (po jego zgodzie).
+- `BRAK_KONFIGURACJI` — wtyczka nie ma adresu API lub klienta logowania. Poproś użytkownika o `AdresApi` i `KlientCognifly` (klient `cognifly` puli Platformy) z wyjść stosu i uruchom `konfiguruj` (po jego zgodzie).
 - `KONFIGURACJA_ZAPISANA` — konfiguracja zapisana; można przejść do logowania.
 - `ODMOWA` — plik lub katalog `~/.cognifly` jest dowiązaniem symbolicznym lub nie jest zwykłym plikiem; nie obchodź, powiedz użytkownikowi.
 - `BLAD` — błąd z polem `kod`. Podaj kod użytkownikowi, nie zgaduj przyczyny.
