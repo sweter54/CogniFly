@@ -188,17 +188,18 @@ const MESSAGES: Readonly<Record<string, string>> = {
  *
  * Call: `parseStatus(reply)`.
  * Expects: anything (untrusted JSON from the daemon).
- * Output: the status with `null` optional texts dropped, or `null`
- * when the reply is a refusal or any part is malformed.
+ * Output: the status with `null` optional texts dropped and bad
+ * conflict, copy and untracked rows dropped one by one, or `null`
+ * when the reply is a refusal, the top or another list is malformed.
  */
 export function parseStatus(v: unknown): HwStatus | null {
   const o = record(v);
   if (!o || o.ok === false || typeof o.running !== 'boolean' || typeof o.connected !== 'boolean') return null;
   const spaces = list(o.spaces, parseSpace);
   const pending = list(o.pending, (x) => texts(x, ['space', 'op', 'path', 'status'], ['toPath', 'message']) as HwPending | null);
-  const conflicts = list(o.conflicts, parseConflict);
+  const conflicts = Array.isArray(o.conflicts) ? rows(o.conflicts, parseConflict) : null;
   const skipped = list(o.skipped, (x) => texts(x, ['space', 'path', 'reason', 'reasonText'], ['suggestion', 'hint']) as HwSkipped | null);
-  const untracked = o.untracked === undefined ? [] : list(o.untracked, parseUntracked);
+  const untracked = o.untracked === undefined ? [] : Array.isArray(o.untracked) ? rows(o.untracked, parseUntracked) : null;
   const issues = list(o.issues, (x) => texts(x, ['space', 'message']) as HwIssue | null);
   if (!spaces || !pending || !conflicts || !skipped || !untracked || !issues) return null;
   return { running: o.running, connected: o.connected, spaces, pending, conflicts, skipped, untracked, issues };
@@ -207,18 +208,19 @@ export function parseStatus(v: unknown): HwStatus | null {
 /**
  * Reads one conflict row (one file).
  *
- * Call: `parseConflict(row)` via `list`.
+ * Call: `parseConflict(row)` via `rows`.
  * Expects: anything; an older daemon sends no `count`/`copies`,
  * then the row counts as one conflict with its `copyPath` (if any).
- * Output: the row, or `null` when a field is missing or mistyped.
+ * Output: the row with bad copies dropped, or `null` when a field
+ * is missing or mistyped (`copies` not a list included).
  */
 function parseConflict(v: unknown): HwConflict | null {
   const t = texts(v, ['space', 'path', 'copyPath', 'at', 'message']);
   const o = record(v);
   if (!t || !o) return null;
   if (o.count !== undefined && !isCount(o.count)) return null;
-  const copies = o.copies === undefined ? (t.copyPath ? [{ copyPath: t.copyPath, at: t.at! }] : []) : list(o.copies, parseCopy);
-  if (!copies) return null;
+  if (o.copies !== undefined && !Array.isArray(o.copies)) return null;
+  const copies = o.copies === undefined ? (t.copyPath ? [{ copyPath: t.copyPath, at: t.at! }] : []) : rows(o.copies, parseCopy);
   const count = (o.count as number | undefined) ?? 1;
   return { space: t.space!, path: t.path!, copyPath: t.copyPath!, at: t.at!, message: t.message!, count, copies };
 }
@@ -226,7 +228,7 @@ function parseConflict(v: unknown): HwConflict | null {
 /**
  * Reads one conflict copy.
  *
- * Call: `parseCopy(item)` via `list`.
+ * Call: `parseCopy(item)` via `rows`.
  * Expects: anything.
  * Output: `{ copyPath, at }`, or `null` when malformed.
  */
@@ -238,7 +240,7 @@ function parseCopy(v: unknown): HwConflictCopy | null {
 /**
  * Reads one untracked file row.
  *
- * Call: `parseUntracked(row)` via `list`.
+ * Call: `parseUntracked(row)` via `rows`.
  * Expects: anything.
  * Output: the row, or `null` when a field is missing or mistyped.
  */
@@ -638,8 +640,23 @@ export function heartwoodRoot(workFolder: string): string {
   return base ? `${base}/${FILES_FOLDER}` : '';
 }
 
+/**
+ * Local path inside a space folder.
+ *
+ * Call: `inSpaceFolder(space.folder, path)`; `path` `''` gives the
+ * folder's prefix (`<folder>/`).
+ * Expects: a space folder from `status` (a trailing `/` allowed).
+ * Output: `<folder>/<path>` with one `/` between them.
+ */
+export function inSpaceFolder(folder: string, path: string): string {
+  return `${folder.replace(/\/+$/, '')}/${path}`;
+}
+
 /** Topic holding the task folders in a space. */
 export const TASKS_TOPIC = 'Zadania';
+
+/** Windows device names Heartwood refuses as a name's first part. */
+const RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/;
 
 /** Longest description part of a task folder name (code points). */
 const TASK_NAME_MAX = 60;
@@ -660,8 +677,34 @@ const COPY_FOLDERS: readonly string[] = ['kopie konfliktów', '.heartwood-kopie'
 export function taskFolderName(task: { id: string; opis: string }): string {
   const clean = task.opis.normalize('NFC').replace(/[/\\:*?"<>|\p{Cc}]/gu, (c) => (/\s/.test(c) ? ' ' : ''));
   const flat = clean.replace(/\s+/g, ' ').replace(/^[\s.~$]+/, '');
-  const head = Array.from(flat).slice(0, TASK_NAME_MAX).join('').trimEnd();
+  const head = cutName(escapeReserved(cutName(flat)));
   return head ? `${head} (${task.id})` : `(${task.id})`;
+}
+
+/**
+ * Cuts a task folder description.
+ *
+ * Call: `cutName(text)`.
+ * Expects: a cleaned description.
+ * Output: at most 60 code points, no trailing whitespace.
+ */
+function cutName(text: string): string {
+  return Array.from(text).slice(0, TASK_NAME_MAX).join('').trimEnd();
+}
+
+/**
+ * Keeps a name off Windows device names (Heartwood `RESERVED_NAME`).
+ *
+ * Call: `escapeReserved(head)`.
+ * Expects: a cut description.
+ * Output: `_` + the text when its part before the first `.` is
+ * con, prn, aux, nul, com1–9 or lpt1–9 (any case), else as is.
+ * Only that part counts, so it is checked before ` (<id>)` is added
+ * and `aux` alone stays (it becomes `aux (zad_…)`).
+ */
+function escapeReserved(head: string): string {
+  if (!head.includes('.')) return head;
+  return RESERVED.test(head.split('.')[0]!.toLowerCase()) ? `_${head}` : head;
 }
 
 /**

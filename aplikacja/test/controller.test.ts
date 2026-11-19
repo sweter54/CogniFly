@@ -783,6 +783,14 @@ describe('Controller', () => {
         expect(r).toEqual({ folder: `Zadania/${taskFolder}`, moved: paths.map((from) => ({ from, to: `${W1}/Zadania/${taskFolder}/x` })) });
       });
 
+      it('adopt finds the space of a folder written with a trailing slash', async () => {
+        const { c, hw } = await adoptSetup();
+        const base = hw.reply;
+        hw.reply = (req) => (req.cmd === 'status' ? { ...STATUS_REPLY, spaces: [{ ...SPACES[0], folder: `${W1}/` }] } : base(req));
+        await c.handlers()['files.adopt']!({ paths: [`${W1}/luzem.txt`], taskId: mine.id });
+        expect(daemonCalls(hw)[0]).toEqual({ cmd: 'files', space: 'ws:w1', folder: 'Zadania' });
+      });
+
       it('adopt reuses the existing folder of the task', async () => {
         const entries = [dir('Zadania/Inna (zad_000000000001)'), dir(`Zadania/Stara nazwa (${mine.id})`)];
         const { c, hw } = await adoptSetup({ ok: true, space: 'ws:w1', folder: 'Zadania', selected: true, entries });

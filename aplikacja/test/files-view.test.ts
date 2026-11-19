@@ -345,6 +345,11 @@ describe('untrackedRows', () => {
     ]);
   });
 
+  it('drops a trailing slash of the space folder', () => {
+    const st = parseStatus({ ...STATUS_REPLY, spaces: [{ space: 'ws:w1', folder: `${R}/`, lastSeq: 1, serverSeq: 1, unsent: 0 }] })!;
+    expect(untrackedRows(st)[1]!.path).toBe(`${R}/luzem.txt`);
+  });
+
   it('skips rows of spaces not on this computer', () => {
     const rows = untrackedRows(status([{ space: 'ws:w9', path: 'a.txt', folder: false, reason: 'no_lock', reasonText: 'r' }]));
     expect(rows).toEqual([]);

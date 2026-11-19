@@ -3,7 +3,7 @@
 // reasons from the daemon are data; the UI sets them via textContent.
 import { TASK_ID_PATTERN, type Task } from '@cognifly/wspolne/api';
 import {
-  hwMessage, type FilesView, type HwBrowse, type HwBrowseEntry, type HwConflict, type HwEntryState, type HwInfo, type HwIssue,
+  hwMessage, inSpaceFolder, type FilesView, type HwBrowse, type HwBrowseEntry, type HwConflict, type HwEntryState, type HwInfo, type HwIssue,
   type HwSkipped, type HwState, type HwStatus, type HwVersion, type HwWorkFiles, type HwWorkLock, type HwWorkVersion, workIdFor,
 } from './heartwood.js';
 import { RpcError } from './rpc.js';
@@ -220,7 +220,7 @@ export function untrackedRows(s: HwStatus | null): UntrackedRow[] {
   return s.untracked.flatMap((u) => {
     const folder = folders.get(u.space);
     if (folder === undefined) return [];
-    return [{ path: `${folder}/${u.path}`, label: spacePath(u.space, u.path), reasonText: u.reasonText, space: u.space }];
+    return [{ path: inSpaceFolder(folder, u.path), label: spacePath(u.space, u.path), reasonText: u.reasonText, space: u.space }];
   });
 }
 

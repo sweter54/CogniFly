@@ -18,7 +18,7 @@ describe('parseStatus', () => {
     expect(s.issues).toEqual([{ space: '', message: 'Brak połączenia z serwerem.' }]);
   });
 
-  it.each([null, 'x', 42, {}, { ok: false, code: 'X' }, { ...STATUS_REPLY, spaces: 'a' }, { ...STATUS_REPLY, conflicts: [{ space: 1 }] }])(
+  it.each([null, 'x', 42, {}, { ok: false, code: 'X' }, { ...STATUS_REPLY, spaces: 'a' }, { ...STATUS_REPLY, conflicts: 'x' }])(
     'refuses junk %j', (v) => expect(parseStatus(v)).toBeNull(),
   );
 });
@@ -207,15 +207,24 @@ describe('parseStatus: untracked files and grouped conflicts', () => {
 
   const conflict = STATUS_REPLY.conflicts[0]!;
   const loose = STATUS_REPLY.untracked[0]!;
-  it.each([
-    { untracked: 'x' },
-    { untracked: [{ ...loose, folder: 'no' }] },
-    { untracked: [{ ...loose, reasonText: 3 }] },
-    { conflicts: [{ ...conflict, count: -1 }] },
-    { conflicts: [{ ...conflict, count: 1.5 }] },
-    { conflicts: [{ ...conflict, copies: 'x' }] },
-    { conflicts: [{ ...conflict, copies: [{ copyPath: 1, at: 'T' }] }] },
-  ])('refuses malformed %j', (patch) => expect(parseStatus({ ...STATUS_REPLY, ...patch })).toBeNull());
+  it('a non-list untracked field is a malformed status', () => expect(parseStatus({ ...STATUS_REPLY, untracked: 'x' })).toBeNull());
+
+  it('drops bad untracked rows one by one', () => {
+    const s = parseStatus({ ...STATUS_REPLY, untracked: [{ ...loose, folder: 'no' }, loose, { ...loose, reasonText: 3 }, 'x'] })!;
+    expect(s.untracked).toEqual([loose]);
+  });
+
+  it('drops bad conflict rows one by one, keeping the rest of the status', () => {
+    const bad = [{ ...conflict, count: -1 }, { ...conflict, count: 1.5 }, { ...conflict, copies: 'x' }, { ...conflict, path: 3 }, null];
+    const s = parseStatus({ ...STATUS_REPLY, conflicts: [...bad, conflict] })!;
+    expect(s.conflicts.map((c) => c.path)).toEqual(['b.docx']);
+    expect(s.spaces).toHaveLength(2);
+  });
+
+  it('drops bad copies one by one', () => {
+    const copies = [{ copyPath: 1, at: 'T' }, { copyPath: 'k.docx', at: 'T' }];
+    expect(parseStatus({ ...STATUS_REPLY, conflicts: [{ ...conflict, copies }] })!.conflicts[0]!.copies).toEqual([{ copyPath: 'k.docx', at: 'T' }]);
+  });
 });
 
 describe('parseBrowse: untracked entries', () => {
@@ -268,6 +277,25 @@ describe('taskFolderName', () => {
   });
 
   it('normalizes to NFC', () => expect(named('Zażółć')).toBe(`Zażółć (${ID})`));
+
+  it.each([
+    ['con.txt', `_con.txt (${ID})`],
+    ['COM1.x', `_COM1.x (${ID})`],
+    ['lpt9.', `_lpt9. (${ID})`],
+    ['Nul.txt notatki', `_Nul.txt notatki (${ID})`],
+    ['aux', `aux (${ID})`],
+    ['COM10.txt', `COM10.txt (${ID})`],
+  ])('escapes a reserved device name: %s', (opis, name) => expect(named(opis)).toBe(name));
+
+  it('a reserved name at full length stays within 60 code points', () => {
+    const head = named(`con.${'x'.repeat(100)}`).slice(0, -` (${ID})`.length);
+    expect(head).toBe(`_con.${'x'.repeat(55)}`);
+  });
+
+  it.each([
+    'con.txt', 'COM1.x', 'lpt9.', 'Nul.txt notatki', ' . ~$ ', 'ab. '.repeat(40), 'a:b', 'x\u0007', 'plik.', ' plik',
+    'what?', 'a\\b', '😀'.repeat(80), `${'é'.repeat(59)} `, ' x ', `prn.${'a'.repeat(70)}`,
+  ])('makes a valid Heartwood segment from %j', (opis) => expect(segmentError(named(opis))).toBeNull());
 });
 
 describe('existingTaskFolder', () => {
@@ -322,3 +350,19 @@ describe('hwMessage for adopt and copies', () => {
     ['FORBIDDEN', undefined, 'Nie udało się (FORBIDDEN).'],
   ])('%s', (code, message, text) => expect(hwMessage(code, message)).toBe(text));
 });
+
+/**
+ * Heartwood segment rules (client/src/names.rs `validate_segment`).
+ *
+ * Call: `segmentError(name)`.
+ * Expects: one path segment.
+ * Output: the first broken rule, or `null` for a valid name.
+ */
+function segmentError(seg: string): string | null {
+  if (seg === '') return 'EMPTY_SEGMENT';
+  if (/[<>:"/\\|?*\u0000-\u001f]/.test(seg)) return 'FORBIDDEN_CHAR';
+  if (seg.startsWith(' ')) return 'LEADING_SPACE';
+  if (/[ .]$/.test(seg)) return 'TRAILING_SPACE_OR_DOT';
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/.test(seg.split('.')[0]!.normalize('NFC').toLowerCase())) return 'RESERVED_NAME';
+  return Array.from(seg.normalize('NFC')).length > 255 ? 'SEGMENT_TOO_LONG' : null;
+}

@@ -10,7 +10,7 @@ import { claudeLink, threadLink } from './claude-link.js';
 import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
 import { canLockFiles } from './files-view.js';
 import {
-  checkReply, DISABLED_INFO, existingTaskFolder, heartwoodRoot, filesView, groupBySpace, hwError, inBatches, isConflictCopy, isSpacePath, isUnderRoot,
+  checkReply, DISABLED_INFO, existingTaskFolder, heartwoodRoot, inSpaceFolder, filesView, groupBySpace, hwError, inBatches, isConflictCopy, isSpacePath, isUnderRoot,
   locksBySpace, parseAdopt, parseBrowse, parseStatus, parseVersions, parseWorkFiles, taskFolderName, TASKS_TOPIC, workIdFor, type FilesView,
   type HeartwoodPort, type HwAdopted, type HwBrowse, type HwInfo, type HwReply, type HwRequest, type HwStatus, type HwWorkFiles,
 } from './heartwood.js';
@@ -607,7 +607,7 @@ export class Controller {
    */
   private async workspaceOf(path: string): Promise<string> {
     const status = parseStatus(await this.hwCall({ cmd: 'status' }));
-    const space = status?.spaces.find((s) => path.startsWith(`${s.folder.replace(/\/+$/, '')}/`))?.space;
+    const space = status?.spaces.find((s) => path.startsWith(inSpaceFolder(s.folder, '')))?.space;
     if (!space) throw new AppError('NOT_LOCAL');
     if (!space.startsWith('ws:')) throw new AppError('BAD_REQUEST');
     return space;
