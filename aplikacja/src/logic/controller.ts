@@ -47,6 +47,8 @@ export interface Ports {
   pickFolder(startAt: string): Promise<string | null>;
   /** Opens a URL with the OS (only `claude://` is allowed by scope). */
   openUrl(url: string): Promise<void>;
+  /** Opens a local folder in Finder (scope: the Heartwood root). */
+  openFolder(path: string): Promise<void>;
   /** Writes a diagnostic line (counts and codes only, no task text). */
   log?(line: string): void;
   now?: () => number;
@@ -248,6 +250,11 @@ export class Controller {
       },
       'files.requestRelease': async (p) => {
         await this.fileAction({ cmd: 'request-release', ...spacePathParams(p) });
+        return { ok: true };
+      },
+      'files.reveal': async (p) => this.reveal(treeParams(p)),
+      'task.focus': async (p) => {
+        await this.focusTask(taskIdParam(p));
         return { ok: true };
       },
       'task.lockFiles': async (p) => this.lockFiles(taskIdParam(p)),
@@ -495,6 +502,30 @@ export class Controller {
     const level = parseBrowse(await this.hwCall({ cmd: 'files', ...params }));
     if (!level) throw new AppError('BAD_RESPONSE');
     return level;
+  }
+
+  /**
+   * Opens a folder of a selected space in Finder.
+   *
+   * Call: rpc `files.reveal`.
+   * Expects: params checked by `treeParams` (`folder` in the space,
+   * `''` or missing = the space root).
+   * Output: `{ ok: true }`; the space's local folder comes from a
+   * fresh status, never from the window.
+   * Throws: `NOT_LOCAL` for a space not on this computer, `OUTSIDE`
+   * for a folder outside the Heartwood root, `OPEN_FAILED` when the
+   * OS (or the opener scope) refuses.
+   */
+  private async reveal(params: { space: string; folder?: string }): Promise<{ ok: true }> {
+    const base = (await this.readStatus())?.spaces.find((s) => s.space === params.space)?.folder;
+    if (!base) throw new AppError('NOT_LOCAL');
+    const sub = (params.folder ?? '').replace(/\/$/, '');
+    const path = sub ? `${base}/${sub}` : base;
+    if (!isUnderRoot(path, await this.filesRoot())) throw new AppError('OUTSIDE');
+    await this.ports.openFolder(path).catch(() => {
+      throw new AppError('OPEN_FAILED');
+    });
+    return { ok: true };
   }
 
   /**
@@ -956,7 +987,7 @@ function text(params: unknown, name: string): string {
 }
 
 /** Methods served by `fileHandlers`. */
-type FileMethod = Extract<keyof Methods, `files.${string}` | 'task.lockFiles' | 'task.releaseFiles' | 'task.files'>;
+type FileMethod = Extract<keyof Methods, `files.${string}` | 'task.lockFiles' | 'task.releaseFiles' | 'task.files' | 'task.focus'>;
 
 /**
  * Reads a task id param.

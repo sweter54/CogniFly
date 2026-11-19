@@ -1,75 +1,34 @@
-// "Pliki" screen: Heartwood spaces, conflicts, skipped files and the
-// version history of one file. Paths, names and reasons come from the
-// daemon: they are data and go into the page via textContent only.
+// "Pliki" screen: the space browser, Heartwood spaces, conflicts,
+// skipped files and the version history of one file. Paths, names and
+// reasons come from the daemon: they are data and go into the page via
+// textContent only.
 import { fileErrorText, filesViewModel, parseTopics, spaceStatusText, versionLine, type FilesModel, type SpaceRow } from '../../logic/files-view.js';
 import type { FilesView, HwConflict, HwIssue, HwSkipped, HwVersion } from '../../logic/heartwood.js';
 import { RpcError } from '../../logic/rpc.js';
-import { armed, byId, DAEMON_WAIT_MS, formValues, PICKER_WAIT_MS, prime, setBusy, setStatus, takePrimed, type Call } from '../ui.js';
+import type { InboxView } from '../protocol.js';
+import {
+  armed, button, byId, DAEMON_WAIT_MS, el, formValues, PICKER_WAIT_MS, prime, row, runFileAction, setBusy, setStatus, takePrimed,
+  type Call, type Said,
+} from '../ui.js';
+import { mountTree } from './files-tree.js';
 
 /** Handle returned by `mountFiles`. */
 export interface FilesScreen {
-  /** Draws the files part of a view (skipped when nothing changed). */
-  render(files: FilesView): void;
+  /** Draws a view: lists (skipped when unchanged) and the browser. */
+  render(view: InboxView): void;
   /** Draws and starts refreshing every 15 s (screen shown). */
-  show(files: FilesView): void;
+  show(view: InboxView): void;
   /** Stops refreshing (screen left). */
   hide(): void;
 }
 
-/** Status line text with its kind. */
-type Said = { text: string; kind: 'info' | 'ok' | 'error' };
+/** Where a history points: a local path or a path in a space. */
+type HistoryTarget = { path: string; space?: string };
 
 /** How often the open screen asks for a fresh status. */
 const REFRESH_MS = 15_000;
 /** Question asked when unselecting would delete the local folder. */
 const UNSELECT_QUESTION = 'Usunąć folder z dysku? Pliki zostają na serwerze.';
-
-/**
- * Builds an element with text.
- *
- * Call: `el('span', text, 'muted')`.
- * Expects: a tag name; text is data (set via `textContent`).
- * Output: the element.
- */
-function el<K extends keyof HTMLElementTagNameMap>(tag: K, text: string, cls?: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.textContent = text;
-  if (cls) node.className = cls;
-  return node;
-}
-
-/**
- * Builds one list row from its parts.
- *
- * Call: `row(el('strong', path), el('span', note))`.
- * Expects: nodes in display order.
- * Output: the `<li>`.
- */
-function row(...parts: Node[]): HTMLLIElement {
-  const li = document.createElement('li');
-  li.append(...parts);
-  return li;
-}
-
-/**
- * Runs a file action from a button and shows its outcome.
- *
- * Call: `await runAction(button, action)`.
- * Expects: an action resolving to the text to show.
- * Output: none; the button is disabled meanwhile; errors become
- * `hwMessage` texts.
- */
-async function runAction(button: HTMLButtonElement, action: () => Promise<Said>): Promise<void> {
-  button.disabled = true;
-  try {
-    const said = await action();
-    setStatus(said.text, said.kind);
-  } catch (e) {
-    setStatus(fileErrorText(e), 'error');
-  } finally {
-    button.disabled = false;
-  }
-}
 
 /**
  * Unselects a space; asks before the daemon deletes the folder.
@@ -100,10 +59,9 @@ async function unselect(call: Call, button: HTMLButtonElement, space: string): P
  * Output: folder, space id, sync state and "Odznacz".
  */
 function spaceRow(call: Call, space: SpaceRow): HTMLLIElement {
-  const button = el('button', 'Odznacz', 'secondary');
-  button.type = 'button';
-  button.addEventListener('click', () => void runAction(button, () => unselect(call, button, space.label)));
-  return row(el('strong', space.folder), el('span', space.label, 'muted'), el('span', spaceStatusText(space), 'state'), button);
+  const unsel = button('Odznacz', 'secondary');
+  unsel.addEventListener('click', () => void runFileAction(unsel, () => unselect(call, unsel, space.label)));
+  return row(el('strong', space.folder), el('span', space.label, 'muted'), el('span', spaceStatusText(space), 'state'), unsel);
 }
 
 /**
@@ -203,40 +161,47 @@ function wireSelect(call: Call): void {
 /**
  * Row of one version with "Pobierz kopię" and "Przywróć".
  *
- * Call: `versionRow(call, path, version, reload)`.
- * Expects: the file path; `reload` shows the history again.
- * Output: the `<li>`; restoring asks twice and needs a file lock.
+ * Call: `versionRow(call, target, version, reload)`.
+ * Expects: the file; `reload` shows the history again.
+ * Output: the `<li>`; "Przywróć" (asks twice, needs a file lock)
+ * only for a local path: the daemon restores local files only.
  */
-function versionRow(call: Call, path: string, v: HwVersion, reload: () => Promise<void>): HTMLLIElement {
-  const download = el('button', 'Pobierz kopię', 'secondary');
-  const restore = el('button', 'Przywróć', 'secondary');
-  download.type = restore.type = 'button';
-  download.addEventListener('click', () => void runAction(download, async () => {
-    const { copy } = await call('files.download', { path, version: v.seq }, DAEMON_WAIT_MS);
+function versionRow(call: Call, target: HistoryTarget, v: HwVersion, reload: () => Promise<void>): HTMLLIElement {
+  const download = button('Pobierz kopię', 'secondary');
+  download.addEventListener('click', () => void runFileAction(download, async () => {
+    const { copy } = await call('files.download', { ...target, version: v.seq }, DAEMON_WAIT_MS);
     return { text: `Zapisano kopię: ${copy}`, kind: 'ok' };
   }));
-  armed(restore, `Przywrócić wersję ${v.seq}? Potrzebna blokada pliku.`, () => runAction(restore, async () => {
-    await call('files.restore', { path, version: v.seq }, DAEMON_WAIT_MS);
+  const li = row(el('span', versionLine(v)), download);
+  if (target.space !== undefined) return li;
+  const restore = button('Przywróć', 'secondary');
+  armed(restore, `Przywrócić wersję ${v.seq}? Potrzebna blokada pliku.`, () => runFileAction(restore, async () => {
+    await call('files.restore', { path: target.path, version: v.seq }, DAEMON_WAIT_MS);
     void reload();
     return { text: `Przywrócono wersję ${v.seq}.`, kind: 'ok' };
   }));
-  return row(el('span', versionLine(v)), download, restore);
+  li.append(restore);
+  return li;
 }
 
 /**
  * Loads and draws the history of one file.
  *
- * Call: `await showHistory(call, path)`.
- * Expects: a path under the Heartwood root.
- * Output: none; the newest version first.
+ * Call: `await showHistory(call, { path })` or
+ * `showHistory(call, { space, path })`.
+ * Expects: a path under the Heartwood root, or a path in a space.
+ * Output: none; the newest version first; the title names the
+ * space for a space path.
  * Throws: `RpcError` from `files.history`.
  */
-async function showHistory(call: Call, path: string): Promise<void> {
-  const { versions } = await call('files.history', { path });
-  const reload = () => showHistory(call, path).catch((e) => setStatus(fileErrorText(e), 'error'));
-  byId('history-path').textContent = versions.length ? path : `${path} — brak wersji.`;
+async function showHistory(call: Call, target: HistoryTarget): Promise<void> {
+  const { versions } = await call('files.history', target);
+  const reload = () => showHistory(call, target).catch((e) => setStatus(fileErrorText(e), 'error'));
+  const name = target.space === undefined ? target.path : `${target.space}: ${target.path}`;
+  byId('history-path').textContent = versions.length ? name : `${name} — brak wersji.`;
   const newest = [...versions].sort((a, b) => b.seq - a.seq);
-  byId('files-versions').replaceChildren(...newest.map((v) => versionRow(call, path, v, reload)));
+  byId('files-versions').replaceChildren(...newest.map((v) => versionRow(call, target, v, reload)));
+  byId('history-path').scrollIntoView({ block: 'nearest' });
 }
 
 /**
@@ -248,9 +213,9 @@ async function showHistory(call: Call, path: string): Promise<void> {
  */
 function wireHistory(call: Call): void {
   const pick = byId<HTMLButtonElement>('history-pick');
-  pick.addEventListener('click', () => void runAction(pick, async () => {
+  pick.addEventListener('click', () => void runFileAction(pick, async () => {
     const { path } = await call('files.pickPath', {}, PICKER_WAIT_MS);
-    if (path !== null) await showHistory(call, path);
+    if (path !== null) await showHistory(call, { path });
     return { text: '', kind: 'info' };
   }));
 }
@@ -265,13 +230,17 @@ function wireHistory(call: Call): void {
 export function mountFiles(call: Call): FilesScreen {
   let drawn = '';
   let timer: ReturnType<typeof setInterval> | undefined;
+  const tree = mountTree(call, (space, path) => {
+    showHistory(call, { space, path }).catch((e) => setStatus(fileErrorText(e), 'error'));
+  });
 
   /**
-   * Draws a view when its model changed (keeps open questions).
-   * Call: `render(files)`. Expects: the files part of a view.
+   * Draws the files part when its model changed (keeps open
+   * questions).
+   * Call: `renderFiles(files)`. Expects: the files part of a view.
    * Output: none.
    */
-  function render(files: FilesView): void {
+  function renderFiles(files: FilesView): void {
     const model = filesViewModel(files);
     const key = JSON.stringify(model);
     if (key === drawn) return;
@@ -280,7 +249,17 @@ export function mountFiles(call: Call): FilesScreen {
   }
 
   /**
-   * Asks for a fresh status and draws it.
+   * Draws a view: the lists and the browser.
+   * Call: `render(view)`. Expects: a logged-in view.
+   * Output: none.
+   */
+  function render(view: InboxView): void {
+    renderFiles(view.files);
+    tree.render(view);
+  }
+
+  /**
+   * Asks for a fresh status and folder level and draws them.
    * Call: `refresh(manual)`; `manual` = the user clicked „Odśwież”.
    * Expects: nothing.
    * Output: none; errors are shown only for a manual refresh (the
@@ -289,9 +268,13 @@ export function mountFiles(call: Call): FilesScreen {
    */
   function refresh(manual: boolean): void {
     if (!manual && document.hidden) return;
-    call('files.refresh', {}).then(render).catch((e) => {
+    call('files.refresh', {}).then((files) => {
+      renderFiles(files);
+      tree.setFiles(files);
+    }).catch((e) => {
       if (manual) setStatus(fileErrorText(e), 'error');
     });
+    tree.reload(manual);
   }
 
   wireSelect(call);
@@ -299,8 +282,9 @@ export function mountFiles(call: Call): FilesScreen {
   byId('files-refresh').addEventListener('click', () => refresh(true));
   return {
     render,
-    show(files) {
-      render(files);
+    show(view) {
+      render(view);
+      tree.reload(false);
       clearInterval(timer);
       timer = setInterval(() => refresh(false), REFRESH_MS);
     },

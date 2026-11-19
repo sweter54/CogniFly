@@ -47,6 +47,14 @@
         }
       ]
     },
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        {
+          "path": "$HOME/Heartwood/**"
+        }
+      ]
+    },
     "dialog:allow-open",
     "deep-link:default"
   ]

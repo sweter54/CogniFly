@@ -79,7 +79,7 @@ async function main(): Promise<void> {
   function go(screen: Screen): void {
     current = needsSetup(view) ? 'login' : screen;
     showOnly(current);
-    if (current === 'files') files.show(view.files);
+    if (current === 'files') files.show(view);
     else files.hide();
     if (current === 'inbox') inbox.render(view);
     if (current === 'settings') {
@@ -101,7 +101,7 @@ async function main(): Promise<void> {
     renderHeader(view);
     if (loggedOut) go('login');
     else if (current === 'inbox') inbox.render(view);
-    else if (current === 'files') files.render(view.files);
+    else if (current === 'files') files.render(view);
     else if (current === 'settings') settings.showFolder(view.workFolder);
   }
 

@@ -4,7 +4,7 @@
 import { TASK_ID_PATTERN, type Task } from '@cognifly/wspolne/api';
 import {
   hwMessage, type FilesView, type HwBrowse, type HwBrowseEntry, type HwConflict, type HwEntryState, type HwInfo, type HwIssue,
-  type HwSkipped, type HwState, type HwVersion, type HwWorkFiles, type HwWorkLock, type HwWorkVersion,
+  type HwSkipped, type HwState, type HwVersion, type HwWorkFiles, type HwWorkLock, type HwWorkVersion, workIdFor,
 } from './heartwood.js';
 import { RpcError } from './rpc.js';
 
@@ -76,6 +76,8 @@ export interface TreeRow {
   path: string;
   folder: boolean;
   stateText: string;
+  /** Someone holds a lock on it (shown by "Tylko zablokowane"). */
+  locked: boolean;
   /** The CogniFly task holding the lock, or `null`. */
   taskLink: { taskId: string; title: string } | null;
   actions: TreeAction[];
@@ -90,6 +92,9 @@ export interface TreeModel {
 
 /** A task the browser can link a lock to. */
 export interface TaskRef { id: string; workId: string; title: string }
+
+/** One step of the folder path above the browser. */
+export interface Crumb { label: string; folder: string }
 
 /** Supervisor states with their banner code (`hwMessage`). */
 const STATE_CODES: Partial<Record<HwState, string>> = {
@@ -398,7 +403,7 @@ function isLocalLevel(b: HwBrowse): boolean {
 function treeRow(e: HwBrowseEntry, myTasks: readonly TaskRef[], lockable: boolean): TreeRow {
   return {
     name: e.path.split('/').pop() ?? e.path, path: e.path, folder: e.folder, stateText: entryStateText(e),
-    taskLink: taskLink(e.workId, myTasks), actions: entryActions(e, lockable),
+    locked: e.state === 'locked' || e.state === 'writable' || e.workId !== undefined, taskLink: taskLink(e.workId, myTasks), actions: entryActions(e, lockable),
   };
 }
 
@@ -444,4 +449,79 @@ function entryActions(e: HwBrowseEntry, lockable: boolean): TreeAction[] {
   if (!e.folder) out.push('history');
   if (e.localPath !== null) out.push('open');
   return out;
+}
+
+/**
+ * Rows shown with or without "Tylko zablokowane".
+ *
+ * Call: `visibleRows(model.rows, onlyLocked)`.
+ * Expects: rows of `treeViewModel`.
+ * Output: all rows, or the locked ones plus folders (a folder may
+ * hold locked files deeper down).
+ */
+export function visibleRows(rows: readonly TreeRow[], onlyLocked: boolean): TreeRow[] {
+  return rows.filter((r) => !onlyLocked || r.locked || r.folder);
+}
+
+/**
+ * The folder path of the browser as steps.
+ *
+ * Call: `folderCrumbs(level.space, level.folder)`.
+ * Expects: a space id and a folder in it (`''` = root, a trailing
+ * `/` is allowed).
+ * Output: the space root first, then one step per folder with the
+ * folder to open when clicked.
+ */
+export function folderCrumbs(space: string, folder: string): Crumb[] {
+  const parts = folder.split('/').filter((p) => p !== '');
+  return [
+    { label: spaceName(space), folder: '' },
+    ...parts.map((label, i) => ({ label, folder: parts.slice(0, i + 1).join('/') })),
+  ];
+}
+
+/**
+ * Tasks of the inbox as browser references.
+ *
+ * Call: `taskRefs(view.tasks)`.
+ * Expects: tasks of the inbox.
+ * Output: id, Heartwood work id and title (the description).
+ */
+export function taskRefs(tasks: readonly Task[]): TaskRef[] {
+  return tasks.map((t) => ({ id: t.id, workId: workIdFor(t.id), title: t.opis }));
+}
+
+/**
+ * Tasks offered by "Zablokuj do zadania…".
+ *
+ * Call: `lockableTasks(view.tasks, view.osoba, info.state)`.
+ * Expects: tasks of the inbox, the user's person id, the
+ * supervisor state.
+ * Output: references of the tasks that pass `canLockFiles`.
+ */
+export function lockableTasks(tasks: readonly Task[], me: string | null, state: HwState): TaskRef[] {
+  return taskRefs(tasks.filter((t) => canLockFiles(t, me, state)));
+}
+
+/**
+ * Label of the button that shows a file's versions.
+ *
+ * Call: `versionsLabel(change.count)`.
+ * Expects: a count ≥ 1.
+ * Output: e.g. "1 zapis", "3 zapisy", "5 zapisów".
+ */
+export function versionsLabel(count: number): string {
+  return `${count} ${plural(count, 'zapis', 'zapisy', 'zapisów')}`;
+}
+
+/**
+ * Spaces offered by the browser's space select.
+ *
+ * Call: `spaceChoices(view.files)`.
+ * Expects: the files part of the view.
+ * Output: ids of the spaces selected on this computer (none
+ * without a status).
+ */
+export function spaceChoices(files: FilesView): string[] {
+  return (files.status?.spaces ?? []).map((s) => s.space);
 }

@@ -6,7 +6,8 @@ import { displayOrder, isFinished, selectValue, taskNote } from '../../logic/inb
 import type { HwState } from '../../logic/heartwood.js';
 import type { InboxView } from '../protocol.js';
 import { byId, messageFor, setStatus, type Call } from '../ui.js';
-import { acceptorFormOpen, askAcceptor, closeAcceptorForm, wireAcceptor, wireFiles, wireReject, wireReturned, wireThread, type Outcome } from './task-actions.js';
+import { acceptorFormOpen, askAcceptor, closeAcceptorForm, wireAcceptor, wireReject, wireReturned, wireThread, type Outcome } from './task-actions.js';
+import { wireFiles } from './task-files.js';
 
 /** Polish names of task states. */
 const STATE_NAMES: Record<string, string> = {
@@ -166,7 +167,7 @@ export function mountInbox(call: Call): InboxScreen {
     wireReject(li, task, me, call, act);
     wireAcceptor(li, task, me, call, act);
     wireReturned(li, task, mine, people, call, act);
-    wireFiles(li, task, me, filesState, call, report);
+    wireFiles(li, task.id, filesState, call);
     take.addEventListener('click', () => void act(() => takeTask(call, task.id)));
     state.addEventListener('change', () => {
       if (state.value === 'do_akceptacji') return askAcceptor(li, task, people, call, act, () => (state.value = selectValue(task)));

@@ -1,7 +1,8 @@
 import type { Task } from '@cognifly/wspolne/api';
 import { describe, expect, it } from 'vitest';
 import {
-  canLockFiles, fileErrorText, filesViewModel, parseTopics, spaceStatusText, taskFilesModel, treeViewModel, versionLine,
+  canLockFiles, fileErrorText, filesViewModel, folderCrumbs, lockableTasks, parseTopics, spaceChoices, spaceStatusText, taskFilesModel,
+  taskRefs, treeViewModel, versionLine, versionsLabel, visibleRows,
 } from '../src/logic/files-view.js';
 import {
   DISABLED_INFO, filesView, parseStatus, type HwBrowse, type HwBrowseEntry, type HwInfo, type HwState, type HwVersion, type HwWorkFiles,
@@ -258,4 +259,60 @@ describe('versionLine of a work version', () => {
   it('reads a version from the task files list', () => {
     expect(versionLine(ver('a.txt', 2))).toMatch(/^Wersja 2 · .+ · u1 · zapis$/);
   });
+});
+
+describe('tree filter "Tylko zablokowane"', () => {
+  const m = treeViewModel(browse([
+    entry('T/a.txt', 'free'), entry('T/b.txt', 'writable'), entry('T/c.txt', 'locked'),
+    entry('T/d.txt', 'local_changed', { workId: 'cognifly:zad_0123456789ab' }), entry('T/X', 'free', { folder: true }),
+  ]), TASKS);
+
+  it('marks locked rows', () => expect(m.rows.map((r) => r.locked)).toEqual([false, true, true, true, false]));
+
+  it('keeps every row without the filter', () => expect(visibleRows(m.rows, false)).toEqual(m.rows));
+
+  it('keeps locked rows and folders (to go deeper) with the filter', () => {
+    expect(visibleRows(m.rows, true).map((r) => r.name)).toEqual(['b.txt', 'c.txt', 'd.txt', 'X']);
+  });
+});
+
+describe('folderCrumbs', () => {
+  it('starts at the space root', () => expect(folderCrumbs('ws:w1', '')).toEqual([{ label: 'w1', folder: '' }]));
+
+  it('adds one crumb per folder', () => {
+    expect(folderCrumbs('ws:w1', 'Oferty/2026/')).toEqual([
+      { label: 'w1', folder: '' }, { label: 'Oferty', folder: 'Oferty' }, { label: '2026', folder: 'Oferty/2026' },
+    ]);
+  });
+
+  it('names a private space Prywatne', () => expect(folderCrumbs('user:u1', '')[0]!.label).toBe('Prywatne'));
+});
+
+describe('task refs of the browser', () => {
+  const task = (n: number, stan: Task['stan'], wlasciciel?: string): Task => ({
+    id: `zad_00000000000${n}`, firma: 'pilot', zdarzenieId: 'e', kandydaci: [], stan, utworzono: '', opis: `Zadanie ${n}`,
+    ...(wlasciciel ? { wlasciciel } : {}),
+  });
+  const tasks = [task(1, 'w_trakcie', 'anna'), task(2, 'nowe'), task(3, 'wziete', 'jan')];
+
+  it('maps every task to its work id and title', () => {
+    expect(taskRefs(tasks)[0]).toEqual({ id: 'zad_000000000001', workId: 'cognifly:zad_000000000001', title: 'Zadanie 1' });
+    expect(taskRefs(tasks)).toHaveLength(3);
+  });
+
+  it('offers only tasks the user may lock files for', () => {
+    expect(lockableTasks(tasks, 'anna', 'running').map((t) => t.id)).toEqual(['zad_000000000001']);
+    expect(lockableTasks(tasks, 'anna', 'disabled')).toEqual([]);
+  });
+});
+
+describe('versionsLabel', () => {
+  it.each([[1, '1 zapis'], [3, '3 zapisy'], [5, '5 zapisów'], [12, '12 zapisów'], [24, '24 zapisy']])('%i → %s', (n, text) => {
+    expect(versionsLabel(n)).toBe(text);
+  });
+});
+
+describe('spaceChoices', () => {
+  it('lists the selected spaces of the status', () => expect(spaceChoices(running())).toEqual(['ws:w1', 'prv:michal']));
+  it('is empty without a status', () => expect(spaceChoices(filesView(DISABLED_INFO, null))).toEqual([]));
 });

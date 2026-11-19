@@ -155,6 +155,8 @@ const MESSAGES: Readonly<Record<string, string>> = {
   DISABLED: 'Pliki nie są jeszcze włączone w tej wersji CogniFly.',
   TIMEOUT: 'Heartwood nie odpowiada.',
   OUTSIDE: 'Można wybrać tylko pliki z folderu Heartwood.',
+  NOT_LOCAL: 'Tej przestrzeni nie ma na tym komputerze.',
+  OPEN_FAILED: 'Nie udało się otworzyć folderu w Finderze.',
 };
 
 /**

@@ -74,5 +74,9 @@ export interface Methods {
   /** Locks a path in a space for a task (`folder` = a folder lock). */
   'files.lockFor': { params: { taskId: string; space: string; path: string; folder?: boolean }; result: { ok: true } };
   'files.requestRelease': { params: { space: string; path: string }; result: { ok: true } };
+  /** Opens a folder of a selected space in Finder (`''` = its root). */
+  'files.reveal': { params: { space: string; folder: string }; result: { ok: true } };
+  /** Shows a task in the inbox (like a `cognifly://` link). */
+  'task.focus': { params: { id: string }; result: { ok: true } };
 }
 export type Method = keyof Methods;

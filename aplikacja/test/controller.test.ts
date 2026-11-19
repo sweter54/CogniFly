@@ -99,6 +99,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[] } = {}) {
     render: (v) => void views.push(v),
     showScreen: vi.fn(async () => undefined),
     openUrl: vi.fn(async () => undefined),
+    openFolder: vi.fn(async () => undefined),
     pickFolder: vi.fn(async (): Promise<string | null> => '/Users/m/repo'),
     now: () => NOW,
   };
@@ -660,6 +661,43 @@ describe('Controller', () => {
       hw.startError = null;
       await c.poll();
       expect(c.current().files.counts.conflicts).toBe(2); // retried at the next poll
+    });
+
+    it('files.reveal opens the local folder of a selected space under the root', async () => {
+      const { c, hw, ports } = setup({ inbox: [] });
+      const spaces = [{ space: 'ws:w1', folder: `${ROOT}/pilot/w1`, lastSeq: 1, serverSeq: 1, unsent: 0 }];
+      hw.reply = (req) => (req.cmd === 'status' ? { ...STATUS_REPLY, spaces } : { ok: true });
+      await c.start();
+      const h = c.handlers();
+      expect(await h['files.reveal']!({ space: 'ws:w1', folder: '' })).toEqual({ ok: true });
+      await h['files.reveal']!({ space: 'ws:w1', folder: 'Oferty/2026/' });
+      expect(ports.openFolder).toHaveBeenNthCalledWith(1, `${ROOT}/pilot/w1`);
+      expect(ports.openFolder).toHaveBeenNthCalledWith(2, `${ROOT}/pilot/w1/Oferty/2026`);
+    });
+
+    it('files.reveal refuses bad folders, unselected spaces and paths outside the root', async () => {
+      const { c, hw, ports } = setup({ inbox: [] });
+      const spaces = [{ space: 'ws:w1', folder: `${ROOT}/pilot/w1`, lastSeq: 1, serverSeq: 1, unsent: 0 }, { space: 'ws:x', folder: '/tmp/x', lastSeq: 1, serverSeq: 1, unsent: 0 }];
+      hw.reply = (req) => (req.cmd === 'status' ? { ...STATUS_REPLY, spaces } : { ok: true });
+      await c.start();
+      const h = c.handlers();
+      await expect(h['files.reveal']!({ space: 'ws:w1', folder: '../x' })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(h['files.reveal']!({ space: 'ws:w1', folder: 7 })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(h['files.reveal']!({ space: 'ws:w2', folder: '' })).rejects.toMatchObject({ code: 'NOT_LOCAL' });
+      await expect(h['files.reveal']!({ space: 'ws:x', folder: '' })).rejects.toMatchObject({ code: 'OUTSIDE' });
+      expect(ports.openFolder).not.toHaveBeenCalled();
+      vi.mocked(ports.openFolder).mockRejectedValueOnce('Not allowed to open path');
+      await expect(h['files.reveal']!({ space: 'ws:w1', folder: '' })).rejects.toMatchObject({ code: 'OPEN_FAILED' });
+    });
+
+    it('task.focus shows the task in the inbox and checks the id', async () => {
+      const { ports } = setup({ inbox: [task(1)] });
+      ports.store.setItem('cognifly.config', JSON.stringify({ ...DEFAULT_CONFIG, workFolder: '/Users/m' }));
+      const c = new Controller(ports);
+      await c.start();
+      expect(await c.handlers()['task.focus']!({ id: id(1) })).toEqual({ ok: true });
+      expect(ports.showScreen).toHaveBeenLastCalledWith('inbox', id(1));
+      await expect(c.handlers()['task.focus']!({ id: 'zle' })).rejects.toMatchObject({ code: 'BAD_TASK_ID' });
     });
 
     it('logout stops the daemon and clears the files view', async () => {
