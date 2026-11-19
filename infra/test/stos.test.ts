@@ -343,6 +343,20 @@ describe('stos CogniFly', () => {
     expect(([] as string[]).concat(trig.DependsOn ?? [])).toContain(idT);
   });
 
+  test('reconcile_trigger_runs_after_api_and_identity_rule', () => {
+    const [, trig] = zasoby('Custom::Trigger')[0]!;
+    const zalezy = ([] as string[]).concat(trig.DependsOn ?? []);
+    const id = (typ: string, f: (r: any) => boolean = () => true) =>
+      zasoby(typ).filter(([, r]) => f(r)).map(([i]) => i);
+    const wymagane = [
+      ...id('AWS::Events::Rule', (r) => r.Properties.Name === 'cognifly-test-tozsamosc'),
+      ...id('AWS::ApiGatewayV2::Api'), ...id('AWS::ApiGatewayV2::Authorizer'),
+      ...id('AWS::ApiGatewayV2::Route'), ...id('AWS::ApiGatewayV2::Stage'),
+    ];
+    expect(wymagane.length).toBeGreaterThan(4);
+    for (const w of wymagane) expect(zalezy, w).toContain(w);
+  });
+
   test('reconcile_may_invoke_identity_int_api_only', () => {
     const invoke = zasoby('AWS::IAM::Policy').flatMap(([, p]) =>
       (p.Properties.PolicyDocument.Statement as any[])
@@ -461,7 +475,26 @@ describe('stos z kontekstem heartwood', () => {
 
   test('heartwood_rule_is_on_the_hub', () => {
     const j2 = Template.fromStack(zbuduj({ ...KONTEKST, heartwood: HW })).toJSON();
-    naHubie(j2, 'cognifly-test-heartwood');
+    naHubie(j2, 'cognifly-test-heartwood-hub');
+  });
+
+  test('heartwood_hub_rule_is_a_new_resource_under_a_new_name', () => {
+    // EventBusName change forces replacement; CFN cannot replace a
+    // custom-named resource, so the hub rule gets a new id and name.
+    const j2 = Template.fromStack(zbuduj({ ...KONTEKST, heartwood: HW })).toJSON();
+    const regulyHw = Object.entries<any>(j2.Resources).filter(([, r]) =>
+      r.Type === 'AWS::Events::Rule' && r.Properties.EventPattern?.source?.[0] === 'heartwood');
+    expect(regulyHw).toHaveLength(1);
+    expect(regulyHw[0]![0]).toMatch(/^RegulaHeartwoodHub/);
+    expect(regulyHw[0]![1].Properties.Name).toBe('cognifly-test-heartwood-hub');
+  });
+
+  test('reconcile_trigger_runs_after_heartwood_hub_rule', () => {
+    const j2 = Template.fromStack(zbuduj({ ...KONTEKST, heartwood: HW })).toJSON();
+    const [, trig] = Object.entries<any>(j2.Resources).find(([, r]) => r.Type === 'Custom::Trigger')!;
+    const [idR] = Object.entries<any>(j2.Resources).find(([, r]) =>
+      r.Type === 'AWS::Events::Rule' && r.Properties.Name === 'cognifly-test-heartwood-hub')!;
+    expect(([] as string[]).concat(trig.DependsOn ?? [])).toContain(idR);
   });
 
   test('zły kontekst heartwood -> czytelny błąd', () => {

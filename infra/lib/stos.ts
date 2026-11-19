@@ -251,7 +251,7 @@ export class StosCogniFly extends Stack {
       retentionPeriod: Duration.days(14),
       enforceSSL: true,
     });
-    new Rule(this, 'RegulaTozsamosci', {
+    const regulaTozsamosci = new Rule(this, 'RegulaTozsamosci', {
       ruleName: `${PREFIKS}-tozsamosc`,
       eventBus: hub,
       eventPattern: { source: ['tozsamosc'], detailType: TYPY_TOZSAMOSCI },
@@ -263,7 +263,8 @@ export class StosCogniFly extends Stack {
       schedule: Schedule.rate(Duration.hours(1)),
       targets: [new LambdaFunction(uzgodnij, { retryAttempts: 2 })],
     });
-    new Trigger(this, 'UzgodnijPoWdrozeniu', {
+    // Runs as late as possible: more dependencies are added after the API.
+    const wyzwalacz = new Trigger(this, 'UzgodnijPoWdrozeniu', {
       handler: uzgodnij,
       executeAfter: [tabela],
       timeout: Duration.minutes(5),
@@ -277,6 +278,7 @@ export class StosCogniFly extends Stack {
     // Funkcje i kolejka Heartwood trafiają niżej do pętli alarmów.
     const funkcjeHeartwood: Record<string, NodejsFunction> = {};
     const kolejkiHeartwood: Record<string, Queue> = {};
+    const regulyHeartwood: Rule[] = [];
     if (heartwood) {
       const env = { HEARTWOOD_INT_URL: heartwood.intUrl, COGNIFLY_TABELA: NAZWA_TABELI };
       const praca = wspolne('HeartwoodPraca', 'heartwood/strumien.ts', env);
@@ -302,12 +304,14 @@ export class StosCogniFly extends Stack {
         reportBatchItemFailures: true, retryAttempts: 10, bisectBatchOnError: true,
         onFailure: new SqsDlq(dlqHeartwood),
       }));
-      new Rule(this, 'RegulaHeartwood', {
-        ruleName: `${PREFIKS}-heartwood`,
+      // New id and name: moving the rule to the hub replaces it, and
+      // CloudFormation cannot replace a custom-named resource in place.
+      regulyHeartwood.push(new Rule(this, 'RegulaHeartwoodHub', {
+        ruleName: `${PREFIKS}-heartwood-hub`,
         eventBus: hub,
         eventPattern: { source: ['heartwood'], detailType: TYPY_HEARTWOOD },
         targets: [new LambdaFunction(zdarzenia, { deadLetterQueue: dlqHeartwood, retryAttempts: 2 })],
-      });
+      }));
     }
 
     // --- Reguła szyny -> przetwarzanie ---
@@ -397,6 +401,9 @@ export class StosCogniFly extends Stack {
     ] as const) {
       httpApi.addRoutes({ path: sciezka, methods: [metoda], integration: apiIntegracja, authorizer: autoryzator });
     }
+    // Reconcile only once the new API, authorizer and hub rules exist:
+    // its writes are the last step of the deploy.
+    wyzwalacz.executeAfter(httpApi, regulaTozsamosci, ...regulyHeartwood);
 
     // --- Alarmy ---
     const alarmy = new Topic(this, 'Alarmy', { topicName: `${PREFIKS}-alarmy` });
