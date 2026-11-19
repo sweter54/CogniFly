@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { emitTo } from '@tauri-apps/api/event';
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link';
-import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { fetch as httpFetch } from '@tauri-apps/plugin-http';
 import { openUrl as openWithOs, revealItemInDir } from '@tauri-apps/plugin-opener';
 import { isPermissionGranted, onAction, requestPermission, sendNotification } from '@tauri-apps/plugin-notification';
@@ -117,7 +116,7 @@ export async function revealFolder(path: string): Promise<void> {
 }
 
 /**
- * Shows the macOS folder picker.
+ * Shows the macOS folder picker over the main window.
  *
  * Call: as the controller's `pickFolder` port.
  * Expects: a start folder or `''` (then the OS default).
@@ -125,15 +124,13 @@ export async function revealFolder(path: string): Promise<void> {
  * grants no file access to the app (no fs plugin is registered).
  */
 export async function pickFolder(startAt: string): Promise<string | null> {
-  const chosen = await openDialog({
-    directory: true, multiple: false, title: 'Wybierz folder pracy dla Claude',
-    ...(startAt ? { defaultPath: startAt } : {}),
-  });
-  return typeof chosen === 'string' ? chosen : null;
+  return invoke<string | null>('pick_folder', { start: startAt, title: 'Wybierz folder pracy dla Claude' });
 }
 
 /**
- * Shows the macOS picker for files under the Heartwood root.
+ * Shows the macOS picker for files under the Heartwood root, over
+ * the main window (a panel of the hidden background window can stay
+ * invisible).
  *
  * Call: as `HeartwoodPort.pickFiles`.
  * Expects: the root folder (the dialog starts there).
@@ -141,9 +138,7 @@ export async function pickFolder(startAt: string): Promise<string | null> {
  * controller still checks that each lies under the root.
  */
 async function pickFiles(root: string): Promise<string[]> {
-  const chosen = await openDialog({ multiple: true, directory: false, title: 'Wybierz pliki', defaultPath: root });
-  if (Array.isArray(chosen)) return chosen;
-  return typeof chosen === 'string' ? [chosen] : [];
+  return invoke<string[]>('pick_files', { root });
 }
 
 /**

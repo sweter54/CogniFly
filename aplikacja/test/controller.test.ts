@@ -775,7 +775,7 @@ describe('Controller', () => {
         const { c, hw } = await adoptSetup();
         const paths = [`${W1}/luzem.txt`, `${W1}/Oferty/nowy.docx`];
         const r = await c.handlers()['files.adopt']!({ paths, taskId: mine.id });
-        const taskFolder = `Oferta Acme2026 (${mine.id})`;
+        const taskFolder = `Oferta Acme-2026 (${mine.id})`;
         expect(daemonCalls(hw)).toEqual([
           { cmd: 'files', space: 'ws:w1', folder: 'Zadania' },
           { cmd: 'adopt', paths, workId: `cognifly:${mine.id}`, taskFolder },
@@ -801,7 +801,7 @@ describe('Controller', () => {
       it('adopt without a Zadania topic yet uses the new name', async () => {
         const { c, hw } = await adoptSetup({ ok: false, code: 'NOT_FOUND', message: 'Nie ma tematu.' });
         await c.handlers()['files.adopt']!({ paths: [`${W1}/luzem.txt`], taskId: mine.id });
-        expect(daemonCalls(hw)[1]).toMatchObject({ cmd: 'adopt', taskFolder: `Oferta Acme2026 (${mine.id})` });
+        expect(daemonCalls(hw)[1]).toMatchObject({ cmd: 'adopt', taskFolder: `Oferta Acme-2026 (${mine.id})` });
       });
 
       it('adopt refuses bad paths before any daemon call', async () => {

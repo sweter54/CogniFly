@@ -9,6 +9,7 @@
 //! daemon supervision and its socket API are in `heartwood/`.
 
 pub mod heartwood;
+mod picker;
 pub mod vault;
 
 /// First CLI argument that switches the binary to token-printing mode.
@@ -53,6 +54,7 @@ fn set_in_dock<R: Runtime>(app: &AppHandle<R>, visible: bool) {
 /// window adds the Dock icon and Cmd+Tab entry.
 fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
     if window.label() == BACKGROUND_WINDOW {
+        keep_background(window, event);
         return;
     }
     match event {
@@ -63,6 +65,26 @@ fn on_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
         }
         WindowEvent::Focused(true) if window.label() == MAIN_WINDOW => {
             set_in_dock(window.app_handle(), true);
+        }
+        _ => {}
+    }
+}
+
+/// Keeps the hidden background window alive and out of sight.
+///
+/// Call: from `on_window_event` for the background window.
+/// Expects: the background window and its event.
+/// Output: a close request is refused and the window hidden again
+/// (closing it would stop polling, notifications and file sync);
+/// if it ever becomes visible, it is hidden at once.
+fn keep_background<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
+    match event {
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            let _ = window.hide();
+        }
+        WindowEvent::Focused(true) => {
+            let _ = window.hide();
         }
         _ => {}
     }
@@ -135,6 +157,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
+            picker::pick_files,
+            picker::pick_folder,
             vault::vault_read,
             vault::vault_write,
             vault::vault_delete,

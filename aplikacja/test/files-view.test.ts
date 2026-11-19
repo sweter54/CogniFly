@@ -156,7 +156,7 @@ describe('taskFilesModel', () => {
 
   it('labels locks with the workspace and marks folders', () => {
     const m = taskFilesModel(work({ locks: [lock('Oferty/a.docx'), lock('Oferty', true)] }), 'u1');
-    expect(m.locks.map((r) => r.label)).toEqual(['w1/Oferty/a.docx', 'w1/Oferty/ (folder)']);
+    expect(m.locks.map((r) => r.label)).toEqual(['w1/Oferty/a.docx', 'w1/Oferty/ — cały folder (wszystkie pliki w środku)']);
     expect(m.locks[0]).toMatchObject({ who: 'u1', space: 'ws:w1', path: 'Oferty/a.docx' });
     expect(m.locks[0]!.when).not.toBe('');
   });

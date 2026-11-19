@@ -63,9 +63,12 @@ export interface ConflictRow {
   copies: CopyRow[];
 }
 
+/** Suffix of a folder lock: every file inside is locked. */
+const FOLDER_LOCK = '/ — cały folder (wszystkie pliki w środku)';
+
 /** One lock row of "Pliki zadania". */
 export interface LockRow {
-  /** `<ws>/<path>`, or `<ws>/<path>/ (folder)` for a folder lock. */
+  /** `<ws>/<path>`, or `<ws>/<path>/ — cały folder` for a folder lock. */
   label: string;
   who: string;
   when: string;
@@ -365,10 +368,11 @@ export function taskFilesModel(w: HwWorkFiles | null, me: string | null): TaskFi
  *
  * Call: `w.locks.map(lockRow)`.
  * Expects: a parsed lock.
- * Output: the row; a folder lock ends with `/ (folder)`.
+ * Output: the row; a folder lock ends with `/ — cały folder` (all
+ * files inside are locked).
  */
 function lockRow(l: HwWorkLock): LockRow {
-  const label = `${spacePath(l.space, l.path)}${l.folder ? '/ (folder)' : ''}`;
+  const label = `${spacePath(l.space, l.path)}${l.folder ? FOLDER_LOCK : ''}`;
   return { label, who: l.by, when: whenText(l.at), space: l.space, path: l.path };
 }
 
