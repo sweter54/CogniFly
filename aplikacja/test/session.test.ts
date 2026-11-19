@@ -69,7 +69,7 @@ describe('SessionManager', () => {
     expect(vault.value()).not.toBeNull();
   });
 
-  it.each(['NotAuthorizedException', 'UserNotFoundException'])('logs out on %s', async (code) => {
+  it.each(['NotAuthorizedException', 'UserNotFoundException', 'UserLambdaValidationException'])('logs out on %s', async (code) => {
     const { manager, vault } = setup(session(NOW), vi.fn(async () => { throw new CognitoError(code); }));
     await expect(manager.accessToken()).rejects.toBeInstanceOf(LoginRequiredError);
     expect(vault.value()).toBeNull();

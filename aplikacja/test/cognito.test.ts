@@ -23,9 +23,26 @@ describe('startEmailLogin', () => {
     });
   });
 
-  it('rejects other challenges', async () => {
+  it('treats another challenge as an unknown account (hidden by the pool)', async () => {
     const { c } = ctx([{ status: 200, body: { ChallengeName: 'PASSWORD', Session: 'S' } }]);
-    await expect(startEmailLogin(c, 'a@b.pl')).rejects.toEqual(new CognitoError('UNEXPECTED_CHALLENGE'));
+    await expect(startEmailLogin(c, 'a@b.pl')).rejects.toMatchObject({ code: 'NO_ACCOUNT', detail: 'PASSWORD' });
+  });
+
+  it('maps a refusal of the pre-authentication trigger to NO_ACCOUNT', async () => {
+    const { c } = ctx([cognitoError('UserLambdaValidationException')]);
+    await expect(startEmailLogin(c, 'a@b.pl')).rejects.toMatchObject({
+      code: 'NO_ACCOUNT', detail: 'UserLambdaValidationException',
+    });
+  });
+
+  it('maps an unknown user to NO_ACCOUNT', async () => {
+    const { c } = ctx([cognitoError('UserNotFoundException')]);
+    await expect(startEmailLogin(c, 'a@b.pl')).rejects.toMatchObject({ code: 'NO_ACCOUNT' });
+  });
+
+  it('keeps other Cognito errors', async () => {
+    const { c } = ctx([cognitoError('TooManyRequestsException')]);
+    await expect(startEmailLogin(c, 'a@b.pl')).rejects.toEqual(new CognitoError('TooManyRequestsException'));
   });
 
   it('rejects an address without @ before any request', async () => {
@@ -37,6 +54,13 @@ describe('startEmailLogin', () => {
 
 describe('confirmEmailCode', () => {
   const pending = { email: 'a@b.pl', session: 'S1' };
+
+  it('maps a refusal of the token trigger to NO_ACCOUNT', async () => {
+    const { c } = ctx([cognitoError('UserLambdaValidationException')]);
+    await expect(confirmEmailCode(c, pending, '123456')).rejects.toMatchObject({
+      code: 'NO_ACCOUNT', detail: 'UserLambdaValidationException',
+    });
+  });
 
   it('returns tokens with expiry from ExpiresIn', async () => {
     const { c, calls } = ctx([{ status: 200, body: { AuthenticationResult: { AccessToken: 'A', RefreshToken: 'R', ExpiresIn: 600 } } }]);
