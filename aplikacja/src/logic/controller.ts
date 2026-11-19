@@ -9,7 +9,7 @@ import { isSafeFolder, loadConfig, saveChoices, type AppConfig, type UserChoices
 import { claudeLink, threadLink } from './claude-link.js';
 import { AppError, CognitoError, errorCode, LoginRequiredError } from './errors.js';
 import {
-  checkReply, DISABLED_INFO, filesView, groupBySpace, hwError, inBatches, isSpacePath, isUnderRoot, locksBySpace, parseBrowse, parseStatus,
+  checkReply, DISABLED_INFO, heartwoodRoot, filesView, groupBySpace, hwError, inBatches, isSpacePath, isUnderRoot, locksBySpace, parseBrowse, parseStatus,
   parseVersions, parseWorkFiles, workIdFor, type FilesView, type HeartwoodPort, type HwBrowse, type HwInfo, type HwReply,
   type HwRequest, type HwStatus, type HwWorkFiles,
 } from './heartwood.js';
@@ -23,7 +23,7 @@ import type { KeyValueStore } from './storage.js';
 export const POLL_INTERVAL_MS = 60_000;
 
 /** Start refusals that will not change until the app changes. */
-const FINAL_START_CODES: readonly string[] = ['DISABLED', 'NOT_INSTALLED'];
+const FINAL_START_CODES: readonly string[] = ['DISABLED', 'NOT_INSTALLED', 'BAD_ROOT', 'ROOT_TOO_LONG'];
 /** Longest accepted space or topic name (the daemon checks more). */
 const MAX_NAME = 200;
 /** Most `work-files` pages read for one task (100 versions each). */
@@ -64,7 +64,7 @@ export class Controller {
   private view: InboxView;
   /** Companies of the logged-in person (from `GET /ja`); null = not loaded. */
   private companies: Membership[] | null = null;
-  /** Company the daemon was started for; null = not started. */
+  /** Company + root the daemon was started for; null = not started. */
   private filesOrg: string | null = null;
 
   /**
@@ -306,12 +306,12 @@ export class Controller {
    * Call: `await this.syncFiles(epoch)` at the end of each poll.
    * Expects: the epoch the poll started with.
    * Output: none (never throws); nothing before the company is known
-   * (`GET /ja`); the daemon is (re)started when the company differs
-   * from the one it runs for.
+   * (`GET /ja`) or the work folder is chosen; the daemon is
+   * (re)started when the company or the work folder changed.
    */
   private async syncFiles(epoch: number): Promise<void> {
-    if (!this.companies || !this.isCurrent(epoch)) return;
-    if (this.filesOrg !== this.config.company) await this.startFiles(epoch);
+    if (!this.companies || !this.config.workFolder || !this.isCurrent(epoch)) return;
+    if (this.filesOrg !== this.filesKey()) await this.startFiles(epoch);
     await this.refreshFiles(epoch);
   }
 
@@ -329,9 +329,10 @@ export class Controller {
    */
   private async startFiles(epoch: number): Promise<void> {
     const org = this.config.company;
+    const key = this.filesKey();
     let code: string | null = null;
     try {
-      await this.ports.heartwood.start(this.config.heartwoodUrl, this.config.heartwoodWsUrl, org);
+      await this.ports.heartwood.start(this.config.heartwoodUrl, this.config.heartwoodWsUrl, org, heartwoodRoot(this.config.workFolder));
     } catch (e) {
       code = errorCode(hwError(e));
       this.ports.log?.(`heartwood start: ${code}`);
@@ -340,8 +341,19 @@ export class Controller {
       if (code === null) await this.stopDaemon();
       return;
     }
-    if (!this.isCurrent(epoch) || org !== this.config.company) return;
-    if (code === null || FINAL_START_CODES.includes(code)) this.filesOrg = org;
+    if (!this.isCurrent(epoch) || key !== this.filesKey()) return;
+    if (code === null || FINAL_START_CODES.includes(code)) this.filesOrg = key;
+  }
+
+  /**
+   * What the daemon must run for: company and sync root.
+   *
+   * Call: `this.filesKey()` in `syncFiles` / `startFiles`.
+   * Expects: nothing.
+   * Output: `<company>` + newline + `<work folder>/Pliki`.
+   */
+  private filesKey(): string {
+    return `${this.config.company}\n${heartwoodRoot(this.config.workFolder)}`;
   }
 
   /**

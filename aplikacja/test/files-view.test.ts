@@ -5,7 +5,7 @@ import {
   taskRefs, treeViewModel, versionLine, versionsLabel, visibleRows,
 } from '../src/logic/files-view.js';
 import {
-  DISABLED_INFO, filesView, parseStatus, type HwBrowse, type HwBrowseEntry, type HwInfo, type HwState, type HwVersion, type HwWorkFiles,
+  DISABLED_INFO, filesView, hwMessage, parseStatus, type HwBrowse, type HwBrowseEntry, type HwInfo, type HwState, type HwVersion, type HwWorkFiles,
   type HwWorkLock, type HwWorkVersion,
 } from '../src/logic/heartwood.js';
 import { RpcError } from '../src/logic/rpc.js';
@@ -322,4 +322,11 @@ describe('versionsLabel', () => {
 describe('spaceChoices', () => {
   it('lists the selected spaces of the status', () => expect(spaceChoices(running())).toEqual(['ws:w1', 'prv:michal']));
   it('is empty without a status', () => expect(spaceChoices(filesView(DISABLED_INFO, null))).toEqual([]));
+});
+
+describe('folder refusals', () => {
+  it('shows why the daemon did not start for the chosen folder', () => {
+    const files = { info: { state: 'disabled' as const, root: '', restarts: 0, lastError: 'ROOT_TOO_LONG' }, status: null, counts: { conflicts: 0, unsent: 0 } };
+    expect(filesViewModel(files).banner).toBe(hwMessage('ROOT_TOO_LONG'));
+  });
 });
