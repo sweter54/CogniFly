@@ -300,9 +300,9 @@ mod tests {
             eprintln!("skipped: COGNIFLY_HEARTWOOD_CONFIG is not set");
             return;
         }
-        let config = crate::heartwood::config::resolve("", "", "", std::path::Path::new("")).unwrap();
+        let config = crate::heartwood::config::resolve("", "", "", "", std::path::Path::new("")).unwrap();
         let sup = Supervisor::default();
-        let launch = crate::heartwood::prepare("", "", "", "").unwrap();
+        let launch = crate::heartwood::prepare("", "", "", "", "").unwrap();
         sup.start(launch).await;
         let up = crate::heartwood::testutil::wait_until(
             Duration::from_secs(20),

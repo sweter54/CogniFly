@@ -378,7 +378,7 @@ describe('Controller', () => {
       hw.state = 'disabled';
       hw.startError = 'DISABLED';
       const v = await c.start();
-      expect(ports.heartwood.start).toHaveBeenCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, 'pilot', '/Users/m/repo/Pliki');
+      expect(ports.heartwood.start).toHaveBeenCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, DEFAULT_CONFIG.identityUrl, 'pilot', '/Users/m/repo/Pliki');
       expect(v.tasks).toHaveLength(1);
       expect(v.files.info.state).toBe('disabled');
       expect(v.files.status).toBeNull();
@@ -398,7 +398,7 @@ describe('Controller', () => {
       await c.start();
       await c.handlers()['config.setWorkFolder']!({ path: '/Users/m/inne' });
       await c.poll();
-      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, 'pilot', '/Users/m/inne/Pliki');
+      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, DEFAULT_CONFIG.identityUrl, 'pilot', '/Users/m/inne/Pliki');
       expect(ports.heartwood.start).toHaveBeenCalledTimes(2);
     });
 
@@ -416,7 +416,7 @@ describe('Controller', () => {
       await c.start();
       await c.handlers()['config.setCompany']!({ company: 'acme' });
       await c.poll();
-      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, 'acme', '/Users/m/repo/Pliki');
+      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, DEFAULT_CONFIG.identityUrl, 'acme', '/Users/m/repo/Pliki');
     });
 
     it('lock refuses paths outside root without calling the daemon', async () => {
@@ -689,7 +689,7 @@ describe('Controller', () => {
       await c.handlers()['config.setCompany']!({ company: 'acme' });
       await c.poll();
       expect(ports.heartwood.stop).toHaveBeenCalledTimes(1);
-      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, 'acme', '/Users/m/repo/Pliki');
+      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, DEFAULT_CONFIG.identityUrl, 'acme', '/Users/m/repo/Pliki');
       expect(c.current().files).toMatchObject({ status: null, counts: { conflicts: 0, unsent: 0 } });
       hw.startError = null;
       await c.poll();

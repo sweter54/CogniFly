@@ -16,6 +16,8 @@ export interface AppConfig {
   heartwoodUrl: string;
   /** Heartwood WebSocket (wss; `''` = files disabled, D10). */
   heartwoodWsUrl: string;
+  /** Platforma Identity API for the access check (https; `''` = off). */
+  identityUrl: string;
 }
 
 /** Built-in connection (pilot: test account, eu-central-1). */
@@ -28,6 +30,8 @@ export const DEFAULT_CONFIG: Readonly<AppConfig> = Object.freeze({
   // Heartwood test (stack heartwood-test, Heartwood repo); same Platforma pool.
   heartwoodUrl: 'https://eohqtq0t3j.execute-api.eu-central-1.amazonaws.com',
   heartwoodWsUrl: 'wss://s0ulscfugh.execute-api.eu-central-1.amazonaws.com/prod',
+  // Platforma Identity API (test stage): the daemon checks access there.
+  identityUrl: 'https://wrnzaptvv6.execute-api.eu-central-1.amazonaws.com',
 });
 
 const STORE_KEY = 'cognifly.config';
@@ -48,7 +52,7 @@ export type ConfigCheck =
  * Output: `{ ok: true, config }` with URLs stripped of trailing
  * slashes, or `{ ok: false, field }` naming the first invalid field.
  * Rules: API URL must be https without credentials/query/fragment;
- * Heartwood URLs empty or likewise (https, and wss for the socket);
+ * Heartwood and Identity URLs empty or likewise (https, and wss for the socket);
  * client id alphanumeric; region like `eu-central-1`; company
  * lowercase letters, digits and dashes (may be empty); work folder
  * empty or a safe absolute path (see `isSafeFolder`).
@@ -62,6 +66,7 @@ export function validateConfig(input: unknown): ConfigCheck {
     workFolder: trimmedField(input, 'workFolder').replace(/(.)\/+$/, '$1'),
     heartwoodUrl: trimmedField(input, 'heartwoodUrl').replace(/\/+$/, ''),
     heartwoodWsUrl: trimmedField(input, 'heartwoodWsUrl').replace(/\/+$/, ''),
+    identityUrl: trimmedField(input, 'identityUrl').replace(/\/+$/, ''),
   };
   if (!isSafeHttpsUrl(config.apiUrl)) return { ok: false, field: 'apiUrl' };
   if (!CLIENT_ID.test(config.clientId)) return { ok: false, field: 'clientId' };
@@ -70,6 +75,7 @@ export function validateConfig(input: unknown): ConfigCheck {
   if (config.workFolder && !isSafeFolder(config.workFolder)) return { ok: false, field: 'workFolder' };
   if (config.heartwoodUrl && !isSafeHttpsUrl(config.heartwoodUrl)) return { ok: false, field: 'heartwoodUrl' };
   if (config.heartwoodWsUrl && !isSafeUrl(config.heartwoodWsUrl, 'wss:')) return { ok: false, field: 'heartwoodWsUrl' };
+  if (config.identityUrl && !isSafeHttpsUrl(config.identityUrl)) return { ok: false, field: 'identityUrl' };
   return { ok: true, config };
 }
 

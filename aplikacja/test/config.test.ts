@@ -12,6 +12,7 @@ describe('config', () => {
       workFolder: '',
       heartwoodUrl: 'https://eohqtq0t3j.execute-api.eu-central-1.amazonaws.com',
       heartwoodWsUrl: 'wss://s0ulscfugh.execute-api.eu-central-1.amazonaws.com/prod',
+      identityUrl: 'https://wrnzaptvv6.execute-api.eu-central-1.amazonaws.com',
     });
   });
 
@@ -29,6 +30,12 @@ describe('config', () => {
     expect(r).toEqual({ ok: true, config: { ...DEFAULT_CONFIG, heartwoodUrl: 'https://hw.example.com', heartwoodWsUrl: 'wss://ws.example.com' } });
   });
 
+  it('accepts an empty Identity address and strips its trailing slash', () => {
+    expect(validateConfig({ ...DEFAULT_CONFIG, identityUrl: '' }).ok).toBe(true);
+    const r = validateConfig({ ...DEFAULT_CONFIG, identityUrl: 'https://id.example.com/' });
+    expect(r).toEqual({ ok: true, config: { ...DEFAULT_CONFIG, identityUrl: 'https://id.example.com' } });
+  });
+
   it('trims values and strips trailing slashes', () => {
     const r = validateConfig({ ...DEFAULT_CONFIG, apiUrl: ' https://a.example.com/// ', company: ' pilot ' });
     expect(r).toEqual({ ok: true, config: { ...DEFAULT_CONFIG, apiUrl: 'https://a.example.com' } });
@@ -39,6 +46,7 @@ describe('config', () => {
     ['apiUrl', 'https://user:pw@a.example.com'],
     ['apiUrl', 'https://a.example.com/?q=1'],
     ['heartwoodUrl', 'http://hw.example.com'],
+    ['identityUrl', 'http://id.example.com'],
     ['heartwoodWsUrl', 'ws://hw.example.com'],
     ['clientId', 'abc-def'],
     ['region', 'Frankfurt'],
