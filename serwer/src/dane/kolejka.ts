@@ -424,3 +424,27 @@ export async function skrzynka(firma: string, osoba: string, stany?: StanZadania
     .filter((z) => !stany || stany.includes(z.stan))
     .sort((a, b) => (a.utworzono < b.utworzono ? 1 : -1));
 }
+
+const STANY_OTWARTE: StanZadania[] = ['wziete', 'w_trakcie', 'do_akceptacji'];
+
+/**
+ * Lists a company's open tasks (taken, in progress, awaiting acceptance).
+ *
+ * Call: `await otwarteZadania(firma)`.
+ * Expects: a company id; reads the whole `FIRMA#<f>#ZAD` partition.
+ * Output: tasks in those states, in key order; throws on DynamoDB errors.
+ */
+export async function otwarteZadania(firma: string): Promise<Zadanie[]> {
+  const wynik: Zadanie[] = [];
+  let start: Record<string, unknown> | undefined;
+  do {
+    const r = await klient().send(new QueryCommand({
+      TableName: nazwaTabeli(), KeyConditionExpression: 'pk = :p',
+      ExpressionAttributeValues: { ':p': pkZad(firma) }, ConsistentRead: true,
+      ExclusiveStartKey: start,
+    }));
+    for (const it of r.Items ?? []) wynik.push(zRekordu(it));
+    start = r.LastEvaluatedKey;
+  } while (start);
+  return wynik.filter((z) => STANY_OTWARTE.includes(z.stan));
+}

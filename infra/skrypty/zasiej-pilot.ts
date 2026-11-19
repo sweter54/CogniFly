@@ -2,7 +2,9 @@
  * Zasiew środowiska pilotażowego (firma `pilot`) — Task 8, krok 7.
  *
  * DOMYŚLNIE DRY-RUN: bez `--wykonaj` skrypt tylko wypisuje plan i nie woła AWS.
- * Z `--wykonaj` woła Cognito, Secrets Manager i DynamoDB (konto testowe, eu-central-1).
+ * Z `--wykonaj` woła Secrets Manager i DynamoDB (konto testowe, eu-central-1).
+ * Osoby (sub, rola) NIE są tu tworzone: przychodzą z Tożsamości (Tożsamość / Platforma);
+ * e-maile i osobaId służą tylko jako klucze kontaktów, Discorda i loginów GitHub.
  *
  * Wartości wrażliwe (adres webhooka Discorda, sekret GitHuba) podawaj ZMIENNYMI ŚRODOWISKOWYMI (ZASIEJ_DISCORD_*,
  * ZASIEJ_SEKRET_GITHUB), nie flagami: flagi lądują w historii powłoki i w liście procesów.
@@ -12,21 +14,17 @@
  *   --email-szymon / ZASIEJ_EMAIL_SZYMON        (opcjonalny)
  *   --osoba-michal / ZASIEJ_OSOBA_MICHAL        osobaId Michała (domyślnie `michal`)
  *   --osoba-szymon / ZASIEJ_OSOBA_SZYMON        osobaId Szymona (domyślnie `szymon`)
- *   --pula / COGNIFLY_PULA                      id puli Cognito (wyjście stosu PulaCognito)
  *   --discord-michal / ZASIEJ_DISCORD_MICHAL    adres webhooka Discorda Michała (opcjonalny)
  *   --github-michal / ZASIEJ_GITHUB_MICHAL      login GitHub Michała (opcjonalny; przekazanie zadań po code review)
  *   --discord-szymon / ZASIEJ_DISCORD_SZYMON    adres webhooka Discorda Szymona (opcjonalny)
  *   --sekret-github / ZASIEJ_SEKRET_GITHUB      sekret webhooka GitHuba (domyślnie: istniejący sekret zostaje, brakujący = losowe 32 bajty hex)
  *   --wykonaj                                   faktycznie wykonaj zapisy
  *
- * Uruchomienie: npx tsx infra/skrypty/zasiej-pilot.ts --email-michal ... --pula ... [--wykonaj]
+ * Uruchomienie: npx tsx infra/skrypty/zasiej-pilot.ts --email-michal ... [--wykonaj]
  */
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { randomBytes } from 'node:crypto';
-import {
-  AdminCreateUserCommand, AdminGetUserCommand, CognitoIdentityProviderClient, UserNotFoundException,
-} from '@aws-sdk/client-cognito-identity-provider';
 import {
   CreateSecretCommand, DescribeSecretCommand, PutSecretValueCommand, ResourceExistsException, ResourceNotFoundException, SecretsManagerClient,
 } from '@aws-sdk/client-secrets-manager';
@@ -55,7 +53,6 @@ export function przeczytajOpcje(argv: string[], env: NodeJS.ProcessEnv) {
     options: {
       'email-michal': { type: 'string' }, 'email-szymon': { type: 'string' },
       'osoba-michal': { type: 'string' }, 'osoba-szymon': { type: 'string' },
-      pula: { type: 'string' },
       'discord-michal': { type: 'string' }, 'discord-szymon': { type: 'string' },
       'github-michal': { type: 'string' }, 'github-szymon': { type: 'string' },
       'sekret-github': { type: 'string' },
@@ -79,7 +76,6 @@ export function przeczytajOpcje(argv: string[], env: NodeJS.ProcessEnv) {
   }
   return {
     osoby, wykonaj: values.wykonaj === true,
-    pula: values.pula ?? env.COGNIFLY_PULA,
     sekretGithub: values['sekret-github'] ?? env.ZASIEJ_SEKRET_GITHUB,
   };
 }
@@ -111,35 +107,13 @@ async function zapiszSekret(
   }
 }
 
-async function subUzytkownika(cog: Pick<CognitoIdentityProviderClient, 'send'>, pula: string, email: string): Promise<string> {
-  const odczytaj = async () => {
-    const r = await cog.send(new AdminGetUserCommand({ UserPoolId: pula, Username: email }));
-    const sub = r.UserAttributes?.find((a) => a.Name === 'sub')?.Value;
-    if (!sub) throw new Error('Cognito nie zwróciło atrybutu sub.');
-    return sub;
-  };
-  try {
-    return await odczytaj(); // idempotencja: istniejący użytkownik jest używany ponownie
-  } catch (e) {
-    if (!(e instanceof UserNotFoundException)) throw e;
-  }
-  await cog.send(new AdminCreateUserCommand({
-    UserPoolId: pula, Username: email, MessageAction: 'SUPPRESS',
-    UserAttributes: [{ Name: 'email', Value: email }, { Name: 'email_verified', Value: 'true' }],
-  }));
-  return odczytaj();
-}
-
 export interface Dane {
-  zapiszTozsamosc(sub: string, firma: string, osobaId: string): Promise<void>;
-  zapiszOsobe(firma: string, osoba: string, o: { email: string; rola: 'admin' | 'czlonek'; sub?: string }): Promise<void>;
   zapiszKontakt(firma: string, osoba: string, k: { email?: string; discordWebhookRef?: string }): Promise<void>;
   zapiszRegule(r: Regula): Promise<void>;
   kontaktOsoby(firma: string, osoba: string): Promise<{ email?: string; discordWebhookRef?: string }>;
   zapiszLoginGithub(firma: string, login: string, osoba: string): Promise<void>;
 }
 export interface Zaleznosci {
-  cog: Pick<CognitoIdentityProviderClient, 'send'>;
   sm: Pick<SecretsManagerClient, 'send'>;
   dane: Dane;
 }
@@ -147,16 +121,16 @@ export interface Zaleznosci {
 export async function zasiej(
   opcje: ReturnType<typeof przeczytajOpcje>, log: (s: string) => void = console.log, zal?: Zaleznosci,
 ): Promise<void> {
-  const { osoby, wykonaj, pula } = opcje;
+  const { osoby, wykonaj } = opcje;
   const michal = osoby[0]!;
   const regula = regulaPilota(michal.osobaId);
   const tryb = wykonaj ? 'WYKONANIE' : 'DRY-RUN (nic nie jest zapisywane; dodaj --wykonaj)';
   log(`Zasiew firmy "${FIRMA}": ${tryb}`);
 
   if (!wykonaj) {
+    log('- Osoby (sub, rola) przychodzą z Tożsamości (Platforma); ten skrypt ich nie tworzy ani nie woła Cognito');
     for (const o of osoby) {
-      log(`- Cognito: użytkownik ${o.email} (email_verified, bez hasła, bez wiadomości) -> sub -> tożsamość ${FIRMA}/${o.osobaId}`);
-      log(`- DynamoDB: OSOBA#${o.osobaId} (${o === michal ? 'admin' : 'czlonek'}), KONTAKT#${o.osobaId}${o.discord ? ` z discordWebhookRef=${sekretDiscord(o.osobaId)}` : ' (tylko e-mail)'}${o.github ? `, GITHUB#${o.github.toLowerCase()}` : ''}`);
+      log(`- DynamoDB: KONTAKT#${o.osobaId}${o.discord ? ` z discordWebhookRef=${sekretDiscord(o.osobaId)}` : ' (tylko e-mail)'}${o.github ? `, GITHUB#${o.github.toLowerCase()}` : ''}`);
       if (o.discord) log(`- Secrets Manager: ${sekretDiscord(o.osobaId)} (adres webhooka Discorda; wartość nie jest wypisywana)`);
     }
     log(`- Secrets Manager: ${SEKRET_GITHUB} (${opcje.sekretGithub ? 'podany sekret' : 'istniejący zostaje, brakujący dostanie losowe 32 bajty hex'}; wartość nie jest wypisywana)`);
@@ -164,22 +138,17 @@ export async function zasiej(
     return;
   }
 
-  if (!pula) throw new Error('Brak id puli Cognito (--pula albo COGNIFLY_PULA; wyjście stosu PulaCognito).');
   if (!zal) {
     // Import dynamiczny: moduły serwera czytają COGNIFLY_TABELA / region z env dopiero przy użyciu.
     const dane = await import('../../serwer/src/dane/konfiguracja.js');
     zal = {
-      cog: new CognitoIdentityProviderClient({ region: REGION }),
       sm: new SecretsManagerClient({ region: REGION }),
       dane,
     };
   }
-  const { cog, sm, dane } = zal;
+  const { sm, dane } = zal;
 
   for (const o of osoby) {
-    const sub = await subUzytkownika(cog, pula, o.email);
-    await dane.zapiszTozsamosc(sub, FIRMA, o.osobaId);
-    await dane.zapiszOsobe(FIRMA, o.osobaId, { email: o.email, rola: o === michal ? 'admin' : 'czlonek', sub });
     // Kontakt scalamy z istniejącym: ponowny przebieg bez --discord-* nie może zgubić discordWebhookRef.
     const istniejacy = await dane.kontaktOsoby(FIRMA, o.osobaId);
     let discordWebhookRef = istniejacy.discordWebhookRef;
@@ -192,7 +161,7 @@ export async function zasiej(
       await dane.zapiszLoginGithub(FIRMA, o.github, o.osobaId);
       log(`osoba ${o.osobaId}: login GitHub ${o.github}`);
     }
-    log(`osoba ${o.osobaId}: użytkownik Cognito, tożsamość, osoba i kontakt zapisane`);
+    log(`osoba ${o.osobaId}: kontakt zapisany`);
   }
 
   log(`sekret ${SEKRET_GITHUB}: ${await zapiszSekret(sm, SEKRET_GITHUB, opcje.sekretGithub)} (wartość nie jest wypisywana)`);

@@ -1,26 +1,28 @@
 /**
- * Feeds Heartwood's registry from CogniFly's people (decision D6):
- * one org per company, one shared workspace `wspolne`, topics from a flag;
- * members get `write`, company admins get `admin`.
+ * Feeds Heartwood's registry from CogniFly's people (Platform pool):
+ * one shared workspace `wspolne`, topics from a flag; members get
+ * `write`, company admins get `admin`; open tasks are re-sent as work
+ * state with the new Cognito `sub`. Orgs and people are NOT created here:
+ * they arrive from Identity (Tozsamosc) and its events.
  *
  * DRY RUN BY DEFAULT: without `--wykonaj` it only prints the steps (it
- * reads the company's people from DynamoDB, read-only, and calls neither
- * Cognito nor Heartwood).
+ * reads the company's people and open tasks from DynamoDB, read-only,
+ * and does not call Heartwood).
  *
  *   --firma <id>             company id (required)
- *   --pula <id>              Cognito user pool id (required)
  *   --int-url <url>          Heartwood API base url (required)
  *   --tematy A,B             topics (default `Dokumenty`)
  *                            `Zadania` is always added
  *   --region <r>             SigV4 region of the API (default eu-central-1)
- *   --wykonaj                really call Cognito, DynamoDB and Heartwood
+ *   --wykonaj                really call Heartwood (DynamoDB stays read-only)
  *
- * Run: npx tsx infra/skrypty/zasil-heartwood.ts --firma pilot --pula <id> \
+ * Run: npx tsx infra/skrypty/zasil-heartwood.ts --firma pilot \
  *        --int-url <url> [--tematy Dokumenty,Oferty] [--wykonaj]
  */
 import { parseArgs } from 'node:util';
 import { pathToFileURL } from 'node:url';
-import { AdminGetUserCommand, CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
+import type { Task } from '@cognifly/wspolne/api';
+import { workIdOf, workStateOf } from '../../serwer/src/heartwood/praca.js';
 
 type Right = 'none' | 'read' | 'write' | 'admin';
 type Rola = 'admin' | 'czlonek';
@@ -39,17 +41,15 @@ const TEMAT_ZADAN = 'Zadania';
 
 /** One step of the feeding plan. */
 export type Krok =
-  | { typ: 'org'; org: string; nazwa: string }
-  | { typ: 'szukajSub'; osoba: string; email: string; rola: Rola }
-  | { typ: 'osoba'; org: string; osoba: string; sub?: string; isAdmin: boolean }
   | { typ: 'przestrzen'; org: string; ws: string; nazwa: string }
   | { typ: 'temat'; org: string; ws: string; temat: string }
-  | { typ: 'prawo'; org: string; ws: string; osoba: string; right: Right };
+  | { typ: 'prawo'; org: string; ws: string; sub: string; osoba: string; right: Right }
+  | { typ: 'pominieta'; osoba: string }
+  | { typ: 'praca'; org: string; workId: string; writer: string | null; closed: false };
 
 /** The part of the Heartwood client the script needs. */
 export interface Klient {
-  putOrg(org: string, name: string): Promise<void>;
-  putPerson(org: string, sub: string, isAdmin: boolean): Promise<void>;
+  putWork(org: string, workId: string, s: { writer: string | null; closed: boolean }): Promise<void>;
   putWorkspace(org: string, ws: string, name: string): Promise<void>;
   putTopic(org: string, ws: string, topic: string): Promise<void>;
   putGrant(org: string, ws: string, sub: string, right: Right): Promise<void>;
@@ -59,33 +59,35 @@ export interface Klient {
 export interface Zaleznosci {
   client: Klient;
   osoby(firma: string): Promise<OsobaRejestru[]>;
-  szukajSub(email: string): Promise<string>;
-  zapiszSub(osoba: string, email: string, rola: Rola, sub: string): Promise<void>;
+  zadania(firma: string): Promise<Task[]>;
 }
 
 /**
  * Plans the registry feed (pure).
  *
- * Call: `planZasilenia(osoby, { firma, tematy })`.
- * Expects: people of the company (`sub` optional), topic names.
- * Output: steps in order: org, per person [lookup, person], workspace,
- *   topics (`Zadania` is always added), grants (`admin` for
- *   admins, `write` otherwise).
+ * Call: `planZasilenia(osoby, zadania, { firma, tematy })`.
+ * Expects: people of the company (`sub` optional), open tasks, topics.
+ * Output: steps in order: workspace, topics (`Zadania` always added),
+ *   grants (`admin` for admins, `write` otherwise; people without `sub`
+ *   give one `pominieta` step instead), work state of open tasks with
+ *   `writer` = the person's `sub` (`null` when missing).
  */
-export function planZasilenia(osoby: OsobaRejestru[], o: OpcjePlanu): Krok[] {
+export function planZasilenia(osoby: OsobaRejestru[], zadania: Task[], o: OpcjePlanu): Krok[] {
   const org = o.firma;
-  const ludzie = osoby.flatMap((p): Krok[] => [
-    ...(p.sub ? [] : [{ typ: 'szukajSub' as const, osoba: p.osoba, email: p.email, rola: p.rola }]),
-    { typ: 'osoba', org, osoba: p.osoba, ...(p.sub ? { sub: p.sub } : {}), isAdmin: p.rola === 'admin' },
-  ]);
+  const suby = new Map(osoby.map((p) => [p.osoba, p.sub]));
+  const prawa = osoby.map((p): Krok => p.sub
+    ? { typ: 'prawo', org, ws: WS, sub: p.sub, osoba: p.osoba, right: p.rola === 'admin' ? 'admin' : 'write' }
+    : { typ: 'pominieta', osoba: p.osoba });
   return [
-    { typ: 'org', org, nazwa: org },
-    ...ludzie,
     { typ: 'przestrzen', org, ws: WS, nazwa: WS_NAZWA },
     ...[...new Set([...o.tematy, TEMAT_ZADAN])].map((temat): Krok => ({ typ: 'temat', org, ws: WS, temat })),
-    ...osoby.map((p): Krok => ({
-      typ: 'prawo', org, ws: WS, osoba: p.osoba, right: p.rola === 'admin' ? 'admin' : 'write',
-    })),
+    ...prawa,
+    ...zadania.flatMap((z): Krok[] => {
+      const st = workStateOf(z);
+      if (!st || st.closed) return [];
+      const writer = (st.writer && suby.get(st.writer)) || null;
+      return [{ typ: 'praca', org, workId: workIdOf(z.id), writer, closed: false }];
+    }),
   ];
 }
 
@@ -98,12 +100,11 @@ export function planZasilenia(osoby: OsobaRejestru[], o: OpcjePlanu): Krok[] {
  */
 export function opisz(k: Krok): string {
   switch (k.typ) {
-    case 'org': return `Heartwood: organizacja ${k.org} ("${k.nazwa}")`;
-    case 'szukajSub': return `Cognito: sub użytkownika ${k.email} -> zapis do OSOBA#${k.osoba}`;
-    case 'osoba': return `Heartwood: osoba ${k.osoba}${k.sub ? '' : ' (sub z Cognito)'}, isAdmin=${k.isAdmin}`;
     case 'przestrzen': return `Heartwood: przestrzeń ${k.ws} ("${k.nazwa}")`;
     case 'temat': return `Heartwood: temat ${k.temat} w ${k.ws}`;
     case 'prawo': return `Heartwood: prawo ${k.right} dla ${k.osoba} w ${k.ws}`;
+    case 'pominieta': return `Pominięto ${k.osoba}: brak sub z Tożsamości`;
+    case 'praca': return `Heartwood: praca ${k.workId}, pisze ${k.writer ? 'osoba z sub' : 'nikt (brak sub)'}`;
   }
 }
 
@@ -111,51 +112,39 @@ export function opisz(k: Krok): string {
  * Runs the steps against the injected dependencies.
  *
  * Call: `await wykonaj(kroki, deps, log)`.
- * Expects: steps from `planZasilenia` (lookup precedes its person step).
+ * Expects: steps from `planZasilenia`.
  * Output: resolves when all calls succeeded; throws on the first failure.
+ *   A `pominieta` step only logs.
  */
 export async function wykonaj(
   kroki: Krok[], d: Zaleznosci, log: (s: string) => void = () => {},
 ): Promise<void> {
-  const suby = new Map<string, string>();
-  const sub = (osoba: string, jawny?: string) => {
-    const s = jawny ?? suby.get(osoba);
-    if (!s) throw new Error(`Brak sub dla osoby ${osoba}.`);
-    return s;
-  };
   for (const k of kroki) {
-    if (k.typ === 'org') await d.client.putOrg(k.org, k.nazwa);
-    else if (k.typ === 'szukajSub') {
-      const s = await d.szukajSub(k.email);
-      await d.zapiszSub(k.osoba, k.email, k.rola, s);
-      suby.set(k.osoba, s);
-    } else if (k.typ === 'osoba') {
-      if (k.sub) suby.set(k.osoba, k.sub);
-      await d.client.putPerson(k.org, sub(k.osoba, k.sub), k.isAdmin);
-    } else if (k.typ === 'przestrzen') await d.client.putWorkspace(k.org, k.ws, k.nazwa);
+    if (k.typ === 'przestrzen') await d.client.putWorkspace(k.org, k.ws, k.nazwa);
     else if (k.typ === 'temat') await d.client.putTopic(k.org, k.ws, k.temat);
-    else await d.client.putGrant(k.org, k.ws, sub(k.osoba), k.right);
-    log(`ok: ${opisz(k)}`);
+    else if (k.typ === 'prawo') await d.client.putGrant(k.org, k.ws, k.sub, k.right);
+    else if (k.typ === 'praca') await d.client.putWork(k.org, k.workId, { writer: k.writer, closed: k.closed });
+    log(k.typ === 'pominieta' ? opisz(k) : `ok: ${opisz(k)}`);
   }
 }
 
 /** Parsed command line. */
 export interface Opcje {
-  firma: string; pula: string; intUrl: string; tematy: string[]; region: string; wykonaj: boolean;
+  firma: string; intUrl: string; tematy: string[]; region: string; wykonaj: boolean;
 }
 
 /**
  * Parses the command line.
  *
  * Call: `przeczytajOpcje(process.argv.slice(2), process.env)`.
- * Expects: `--firma`, `--pula` (or `COGNIFLY_PULA`), `--int-url`.
+ * Expects: `--firma`, `--int-url`.
  * Output: the options; throws a Polish error when a required one is missing.
  */
 export function przeczytajOpcje(argv: string[], env: NodeJS.ProcessEnv): Opcje {
   const { values } = parseArgs({
     args: argv,
     options: {
-      firma: { type: 'string' }, pula: { type: 'string' }, 'int-url': { type: 'string' },
+      firma: { type: 'string' }, 'int-url': { type: 'string' },
       tematy: { type: 'string' }, region: { type: 'string' },
       wykonaj: { type: 'boolean', default: false },
     },
@@ -167,7 +156,6 @@ export function przeczytajOpcje(argv: string[], env: NodeJS.ProcessEnv): Opcje {
   const tematy = (values.tematy ?? 'Dokumenty').split(',').map((t) => t.trim()).filter(Boolean);
   return {
     firma: wymagany(values.firma, '--firma'),
-    pula: wymagany(values.pula ?? env.COGNIFLY_PULA, '--pula'),
     intUrl: wymagany(values['int-url'], '--int-url'),
     tematy: tematy.length > 0 ? tematy : ['Dokumenty'],
     region: values.region ?? REGION,
@@ -176,23 +164,7 @@ export function przeczytajOpcje(argv: string[], env: NodeJS.ProcessEnv): Opcje {
 }
 
 /**
- * Looks up a Cognito user's `sub` by e-mail (read-only, never creates).
- *
- * Call: `await subZCognito(cog, pula, email)`.
- * Expects: an existing user in the pool.
- * Output: the `sub`; throws when the user or attribute is missing.
- */
-export async function subZCognito(
-  cog: Pick<CognitoIdentityProviderClient, 'send'>, pula: string, email: string,
-): Promise<string> {
-  const r = await cog.send(new AdminGetUserCommand({ UserPoolId: pula, Username: email }));
-  const sub = r.UserAttributes?.find((a) => a.Name === 'sub')?.Value;
-  if (!sub) throw new Error(`Cognito nie zwróciło atrybutu sub dla ${email}.`);
-  return sub;
-}
-
-/**
- * Builds the real dependencies (AWS clients, DynamoDB, Heartwood).
+ * Builds the real dependencies (DynamoDB reads, Heartwood).
  *
  * Call: `await zaleznosciAws(opcje)`.
  * Expects: AWS credentials in the environment.
@@ -201,13 +173,12 @@ export async function subZCognito(
 async function zaleznosciAws(o: Opcje): Promise<Zaleznosci> {
   // Dynamic imports: server modules read env (table, region) lazily.
   const dane = await import('../../serwer/src/dane/konfiguracja.js');
+  const { otwarteZadania } = await import('../../serwer/src/dane/kolejka.js');
   const { intClient } = await import('../../serwer/src/heartwood/klient.js');
-  const cog = new CognitoIdentityProviderClient({ region: REGION });
   return {
     client: intClient({ url: o.intUrl, region: o.region }),
     osoby: dane.rejestrOsob,
-    szukajSub: (email) => subZCognito(cog, o.pula, email),
-    zapiszSub: (osoba, email, rola, sub) => dane.zapiszOsobe(o.firma, osoba, { email, rola, sub }),
+    zadania: otwarteZadania,
   };
 }
 
@@ -223,7 +194,7 @@ export async function zasil(
 ): Promise<void> {
   log(`Zasilenie rejestru Heartwood, firma "${o.firma}": ${o.wykonaj ? 'WYKONANIE' : 'DRY-RUN (dodaj --wykonaj)'}`);
   const d = zal ?? await zaleznosciAws(o);
-  const kroki = planZasilenia(await d.osoby(o.firma), { firma: o.firma, tematy: o.tematy });
+  const kroki = planZasilenia(await d.osoby(o.firma), await d.zadania(o.firma), { firma: o.firma, tematy: o.tematy });
   if (!o.wykonaj) {
     for (const k of kroki) log(`- ${opisz(k)}`);
     return;

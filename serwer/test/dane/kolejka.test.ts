@@ -1,6 +1,6 @@
 import { beforeAll, afterAll, describe, expect, test } from 'vitest';
 import { ustawTabeleTestowa } from './pomocnik.js';
-import { utworzZadanie, wez, ustawStan, skrzynka, pobierzZadanie, oznaczEskalowane } from '../../src/dane/kolejka.js';
+import { utworzZadanie, wez, ustawStan, skrzynka, pobierzZadanie, oznaczEskalowane, otwarteZadania, doAkceptacji } from '../../src/dane/kolejka.js';
 
 const tabela = ustawTabeleTestowa('cognifly-test-kolejka');
 beforeAll(() => tabela.utworz());
@@ -59,5 +59,23 @@ describe('kolejka', () => {
     expect((await wez('f4', zad.id, 'ania')).ok).toBe(true);
     expect(await oznaczEskalowane('f4', zad.id)).toBe(false);
     expect(await pobierzZadanie('f4', 'zad_ffffffffffff')).toBeNull();
+  });
+});
+
+describe('otwarteZadania', () => {
+  test('otwarteZadania_returns_only_open_states', async () => {
+    const nowe = await utworzZadanie('fo', zdId, ['ania']);
+    const wziete = await utworzZadanie('fo', zdId, ['ania']);
+    const trakcie = await utworzZadanie('fo', zdId, ['ania']);
+    const akcept = await utworzZadanie('fo', zdId, ['ania']);
+    const zrobione = await utworzZadanie('fo', zdId, ['ania']);
+    await utworzZadanie('inna-fo', zdId, ['ania']);
+    for (const z of [wziete, trakcie, akcept, zrobione]) await wez('fo', z.id, 'ania');
+    await ustawStan('fo', trakcie.id, 'ania', 'w_trakcie');
+    await doAkceptacji('fo', akcept.id, 'ania', 'bartek');
+    await ustawStan('fo', zrobione.id, 'ania', 'zrobione');
+    const ids = (await otwarteZadania('fo')).map((z) => z.id).sort();
+    expect(ids).toEqual([wziete.id, trakcie.id, akcept.id].sort());
+    expect(ids).not.toContain(nowe.id);
   });
 });
