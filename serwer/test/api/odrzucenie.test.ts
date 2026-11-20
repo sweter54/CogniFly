@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { ustawTabeleTestowa } from '../dane/pomocnik.js';
+import { claimsFor } from './claims.js';
 
 // No GitHub token: review requests are accepted without checking the PR.
 vi.mock('../../src/dostarczenia/github.js', async (orig) => ({
@@ -26,7 +27,7 @@ async function wywolaj(routeKey: string, o: { sub?: string; body?: unknown; id?:
   const r = await handler({
     routeKey, headers: {}, queryStringParameters: {}, pathParameters: o.id ? { id: o.id } : {},
     body: o.body === undefined ? null : typeof o.body === 'string' ? o.body : JSON.stringify(o.body),
-    requestContext: { authorizer: { jwt: { claims: { sub: `sub-${o.sub ?? 'michal'}` } } } },
+    requestContext: { authorizer: { jwt: { claims: claimsFor(`sub-${o.sub ?? 'michal'}`) } } },
   });
   return { status: r.statusCode, body: JSON.parse(r.body) as Record<string, any> };
 }

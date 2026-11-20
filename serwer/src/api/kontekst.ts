@@ -28,9 +28,39 @@ export function subZTokenu(event: ZdarzenieApi): string {
   return sub;
 }
 
-/** Firmy osoby z tokenu (firma → osobaId); nieznana osoba → 403. */
+/** Outcome of checking the CogniFly licence claim of a token. */
+export type LicenceState = 'OK' | 'BRAK_LICENCJI' | 'LICENCJA_WYGASLA';
+
+/** Name of the licence claim; `COGNIFLY_LICENCE_CLAIM`, read at call time. */
+function licenceClaimName(): string {
+  return process.env.COGNIFLY_LICENCE_CLAIM || 'lic_cognifly';
+}
+
+/**
+ * Checks the licence claim (ISO 8601 instant = start of the day after the
+ * licence ends). Valid only while `now < Date.parse(claim)`. A missing or
+ * unparsable claim means no licence. Pure: `now` is injected (epoch ms).
+ */
+export function licenceState(claims: Record<string, unknown> | undefined, now: number): LicenceState {
+  const raw = claims?.[licenceClaimName()];
+  const until = typeof raw === 'string' && raw !== '' ? Date.parse(raw) : NaN;
+  if (Number.isNaN(until)) return 'BRAK_LICENCJI';
+  return now < until ? 'OK' : 'LICENCJA_WYGASLA';
+}
+
+/** Throws 403 `BRAK_LICENCJI` / `LICENCJA_WYGASLA` unless the token is licensed. */
+function wymagajLicencji(event: ZdarzenieApi): void {
+  const stan = licenceState(event.requestContext?.authorizer?.jwt?.claims, Date.now());
+  if (stan !== 'OK') throw new HttpBlad(403, stan);
+}
+
+/**
+ * Firmy osoby z tokenu (firma → osobaId). Najpierw sprawdza licencję z
+ * claimu (przed odczytem rejestru); nieznana osoba → 403.
+ */
 export async function firmyZTokenu(event: ZdarzenieApi): Promise<{ sub: string; firmy: Record<string, string> }> {
   const sub = subZTokenu(event);
+  wymagajLicencji(event);
   const firmy = await tozsamosc(sub);
   if (!firmy) throw new HttpBlad(403, 'BRAK_DOSTEPU');
   return { sub, firmy };
