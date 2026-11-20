@@ -281,10 +281,10 @@ describe('serwer MCP', () => {
     await klient.close();
   });
 
-  it('.mcp.json uruchamia serwer z katalogu wtyczki; wersja 0.7.0', () => {
+  it('.mcp.json uruchamia serwer z katalogu wtyczki; wersja 0.8.0', () => {
     const mcp = JSON.parse(readFileSync(join(WTYCZKA, '.mcp.json'), 'utf8'));
     expect(mcp.mcpServers['cognifly-zadania']).toEqual({ command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/mcp/dist/zadania.mjs'] });
-    expect(JSON.parse(readFileSync(join(WTYCZKA, '.claude-plugin', 'plugin.json'), 'utf8')).version).toBe('0.7.0');
+    expect(JSON.parse(readFileSync(join(WTYCZKA, '.claude-plugin', 'plugin.json'), 'utf8')).version).toBe('0.8.0');
   });
 });
 
@@ -348,7 +348,7 @@ describe('pakiet mcp/dist/zadania.mjs (wtyczka bez node_modules)', () => {
       p.on('error', zle);
       p.stdin.write(wiadomosci.map((m) => JSON.stringify(m)).join('\n') + '\n');
     });
-    expect(odpowiedzi[0].result.serverInfo).toEqual({ name: 'cognifly-zadania', version: '0.7.0' });
+    expect(odpowiedzi[0].result.serverInfo).toEqual({ name: 'cognifly-zadania', version: '0.8.0' });
     expect(odpowiedzi[1].result).toEqual({ content: [{ type: 'text', text: 'Zaloguj się: cognifly zaloguj' }], isError: true });
   }, 15_000);
 });

@@ -19,8 +19,10 @@ function serwer(handler) {
       const wpis = { method: req.method, url: req.url, headers: req.headers, body: b ? JSON.parse(b) : undefined };
       log.push(wpis);
       const r = handler(wpis) ?? { status: 404, body: {} };
-      res.writeHead(r.status, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(r.body));
+      setTimeout(() => {
+        res.writeHead(r.status, { 'content-type': 'application/json' });
+        res.end(JSON.stringify(r.body));
+      }, r.opoznienie ?? 0);
     });
   });
   return new Promise((ok) => s.listen(0, '127.0.0.1', () => ok({ s, log, url: `http://127.0.0.1:${s.address().port}` })));
@@ -624,6 +626,13 @@ describe('dostęp (Platforma Identity)', () => {
     await cli(['skrzynka'], envT);
     expect(ident.log).toHaveLength(3);
     expect(JSON.parse(readFileSync(dostepPlik(), 'utf8')).sub).toBe('sub-innej');
+  });
+
+  it('wolna_tozsamosc_nie_zabiera_czasu_api (podsumowanie nadal się drukuje)', async () => {
+    identHandler = () => ({ status: 200, opoznienie: 900, body: { active: false, reason: 'NOT_MEMBER' } });
+    apiHandler = () => ({ status: 200, body: { linia: 'Czeka 5 zadan' } });
+    expect((await cli(['podsumowanie'], envT)).json).toEqual({ stan: 'OK', linia: 'Czeka 5 zadan' });
+    expect(existsSync(dostepPlik())).toBe(false);
   });
 
   it('brak_adresu_tozsamosci_nie_sprawdza', async () => {

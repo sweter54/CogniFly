@@ -58,6 +58,9 @@ function subZTokenu(token) {
   } catch { return null; }
 }
 
+/** Own time budget of the Identity check, in ms. */
+const BUDZET_TOZSAMOSCI_MS = 500;
+
 /**
  * Stored answer for this account, if still valid.
  *
@@ -137,10 +140,13 @@ export function odmowaDostepu(kat, powod) {
  *
  * Call: `await wymagajDostepu(ctx, sesja)` before a work command.
  * Expects: a context from `kontekst()` and the current session.
+ * The Identity call has its own 500 ms budget: when it runs out the
+ * access counts as active, leaving the rest of the signal to the API.
  * Output: none when access is active (or not checked).
  * Throws: `Stan('BRAK_DOSTEPU_FIRMY', {powod, komunikat})`.
  */
 export async function wymagajDostepu(ctx, sesja) {
-  const d = await sprawdzDostep({ kat: ctx.kat, konf: ctx.konf, sesja, signal: ctx.signal });
+  const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(BUDZET_TOZSAMOSCI_MS)]);
+  const d = await sprawdzDostep({ kat: ctx.kat, konf: ctx.konf, sesja, signal });
   if (!d.aktywny) throw odmowaDostepu(ctx.kat, d.powod);
 }

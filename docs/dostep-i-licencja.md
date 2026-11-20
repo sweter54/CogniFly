@@ -61,44 +61,71 @@ ponowienie żądania.
 ## Wdrożenie
 
 Najpierw PR scalony do `main` (za zgodą Michała). Zestaw `<C>` jak w
-`docs/przepiecie-na-platforme.md`. Zmienia się tylko kod Lambdy API.
+`docs/przepiecie-na-platforme.md`. Zmienia się tylko kod Lambdy API. Każdy
+blok poleceń uruchamiaj z katalogu głównego repo (podkatalogi są jawne:
+`(cd infra && ...)`).
 
 ### 1. API
+
+Przed wdrożeniem sprawdź, czy token pilota niesie claim licencji (drukuje
+tylko `lic_cognifly` i `org`, nigdy token):
+
+```bash
+python3 - <<'PY'
+import base64, json, os
+t = json.load(open(os.path.expanduser('~/.cognifly/sesja.json')))['accessToken']
+p = t.split('.')[1]
+c = json.loads(base64.urlsafe_b64decode(p + '=' * (-len(p) % 4)))
+print('lic_cognifly:', c.get('lic_cognifly'))
+print('org:', c.get('org'))
+PY
+```
+
+Oczekiwane: `lic_cognifly` to przyszły znacznik ISO (pilot:
+`2028-01-01T00:00:00+01:00`). Gdy brakuje — **zatrzymaj się, nie wdrażaj**.
 
 Podgląd zmian (tylko Lambda API):
 
 ```bash
-cd infra && npx cdk diff cognifly-test <C>
+(cd infra && npx cdk diff cognifly-test <C>)
 ```
 
 **ZAPYTAJ MICHAŁA**, czy wdrażać. Po zgodzie:
 
 ```bash
-cd infra && npx cdk deploy cognifly-test <C>
+(cd infra && npx cdk deploy cognifly-test <C>)
 ```
+
+Wycofanie: wdróż poprzedni commit `main` stosu (`git checkout <poprzedni
+commit>` i to samo `cdk deploy` co wyżej).
 
 ### 2. Aplikacja
 
 **ZAPYTAJ MICHAŁA.** Zbuduj wersję release z `main`:
 
 ```bash
-cd aplikacja && npx tauri build --bundles app
+(cd aplikacja && npx tauri build --bundles app)
 ```
 
-Zamknij działającą aplikację i podmień ją (z katalogu `aplikacja`):
+Zamknij działającą aplikację, podmień ją i uruchom nową:
 
 ```bash
-ditto src-tauri/target/release/bundle/macos/CogniFly.app /Applications/CogniFly.app
+rm -rf /Applications/CogniFly.app
+ditto aplikacja/src-tauri/target/release/bundle/macos/CogniFly.app /Applications/CogniFly.app
 ```
 
-Zamknij starą aplikację i uruchom nową.
+Jeśli API odmówiło z powodu licencji, a Tożsamość jest niedostępna,
+aplikacja pozostaje wstrzymana do czasu odpowiedzi Tożsamości.
 
 ### 3. Wtyczka
 
-**ZAPYTAJ MICHAŁA.** Pobierz kod:
+**ZAPYTAJ MICHAŁA.** Claude Code uruchamia zainstalowaną kopię z cache, więc
+samo `git pull` nie wystarcza. Po kolei:
 
 ```bash
-git -C "$HOME/Library/Application Support/CogniFly/repo" pull
+git -C "$HOME/Library/Application Support/CogniFly/repo" pull --ff-only origin main
+claude plugin marketplace update cognifly
+claude plugin update cognifly@cognifly
 ```
 
 Zapisz konfigurację z adresem Tożsamości:
@@ -107,7 +134,10 @@ Zapisz konfigurację z adresem Tożsamości:
 node "$HOME/Library/Application Support/CogniFly/repo/wtyczka/cli/cognifly.mjs" konfiguruj --adres-api https://td5k44easl.execute-api.eu-central-1.amazonaws.com --klient 130crcifqe1l4uggfap3p7kiml --region eu-central-1 --firma pilot --adres-tozsamosci https://wrnzaptvv6.execute-api.eu-central-1.amazonaws.com
 ```
 
-Adres Tożsamości musi zaczynać się od `https://`.
+Adres Tożsamości musi zaczynać się od `https://`. Na końcu uruchom nową sesję
+Claude (albo `/reload-plugins`).
+
+Narzędzia MCP wtyczki nie sprawdzają dostępu z góry; polegają na odmowie API.
 
 ## Test na żywo
 

@@ -21709,6 +21709,7 @@ function subZTokenu(token) {
     return null;
   }
 }
+var BUDZET_TOZSAMOSCI_MS = 500;
 function zPamieci(kat, sub) {
   const z = czytaj(kat, PLIK);
   const wiek = Date.now() - Number(z?.czas);
@@ -21746,7 +21747,8 @@ function odmowaDostepu(kat, powod) {
   return new Stan("BRAK_DOSTEPU_FIRMY", { powod, komunikat: komunikatDostepu(powod) });
 }
 async function wymagajDostepu(ctx, sesja) {
-  const d = await sprawdzDostep({ kat: ctx.kat, konf: ctx.konf, sesja, signal: ctx.signal });
+  const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(BUDZET_TOZSAMOSCI_MS)]);
+  const d = await sprawdzDostep({ kat: ctx.kat, konf: ctx.konf, sesja, signal });
   if (!d.aktywny) throw odmowaDostepu(ctx.kat, d.powod);
 }
 
