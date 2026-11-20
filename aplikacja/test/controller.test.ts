@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { accessMessage, ACCESS_EVERY_MS } from '../src/logic/access.js';
 import { DEFAULT_CONFIG } from '../src/logic/config.js';
 import { Controller, waitingCount, type Ports } from '../src/logic/controller.js';
 import { errorCode, errorDetail, NetworkError } from '../src/logic/errors.js';
@@ -69,23 +70,41 @@ function fakeHeartwood() {
 
 /** Fake backend: routes by URL; `inbox` is mutable between polls. */
 function setup(opts: { session?: string | null; inbox?: unknown[]; workFolder?: string } = {}) {
-  const state = { inbox: opts.inbox ?? [], offline: false, cognito: [] as unknown[], firmy: [{ firma: 'pilot', osoba: 'michal' }] };
+  const state = {
+    inbox: opts.inbox ?? [], offline: false, cognito: [] as unknown[], firmy: [{ firma: 'pilot', osoba: 'michal' }],
+    /** Answer of Identity `GET /access`; an Error makes it fail like the network. */
+    access: { active: true } as unknown, now: NOW, inboxError: null as unknown,
+    /** Access token the API accepts despite `inboxError` (a fresh claim). */
+    licensedToken: null as string | null, refreshes: 0, accessGate: Promise.resolve() as Promise<void>,
+  };
+  /** API licence refusal for a request, while `inboxError` is set. */
+  const refused = (init: RequestInit) => state.inboxError
+    && (init.headers as Record<string, string>).Authorization !== `Bearer ${state.licensedToken}`;
   const fetch: FetchFn = vi.fn(async (url: string, init: RequestInit) => {
     if (state.offline) throw new TypeError('offline');
     if (url.startsWith('https://cognito-idp')) {
       state.cognito.push(JSON.parse(String(init.body)));
+      if ((JSON.parse(String(init.body)) as { AuthFlow?: string }).AuthFlow === 'REFRESH_TOKEN_AUTH') {
+        state.refreshes += 1;
+        return json(200, { AuthenticationResult: { AccessToken: `A${state.refreshes + 1}`, ExpiresIn: 3600 } });
+      }
       const target = (init.headers as Record<string, string>)['X-Amz-Target'];
       if (target?.endsWith('InitiateAuth')) return json(200, { ChallengeName: 'EMAIL_OTP', Session: 'S' });
       const code = (JSON.parse(String(init.body)) as { ChallengeResponses: { EMAIL_OTP_CODE: string } }).ChallengeResponses.EMAIL_OTP_CODE;
       if (code !== '123456') return json(400, { __type: 'CodeMismatchException' });
       return json(200, { AuthenticationResult: { AccessToken: 'A', RefreshToken: 'R', ExpiresIn: 3600 } });
     }
+    if (url.startsWith(`${DEFAULT_CONFIG.identityUrl}/access`)) {
+      await state.accessGate;
+      if (state.access instanceof Error) throw state.access;
+      return json(200, state.access);
+    }
     if (url.endsWith('/ja')) return json(200, { firmy: state.firmy });
     if (url.endsWith('/osoby')) return json(200, { osoby: [{ osoba: 'ania' }, { osoba: 'michal' }] });
     if (url.endsWith('/recenzje')) return json(200, { zadanie: task(9) });
-    if (url.endsWith('/skrzynka')) return json(200, { zadania: state.inbox });
+    if (url.endsWith('/skrzynka')) return refused(init) ? json(403, state.inboxError) : json(200, { zadania: state.inbox });
     if (url.endsWith('/biore')) return json(409, { kod: 'ZAJETE', wlasciciel: 'szymon' });
-    if (/\/(odrzuc|usun|przekaz|akceptuj|do-poprawy|stan)$/.test(url)) return json(200, { zadanie: task(1, 'odrzucone') });
+    if (/\/(odrzuc|usun|przekaz|akceptuj|do-poprawy|stan)$/.test(url)) return refused(init) ? json(403, state.inboxError) : json(200, { zadanie: task(1, 'odrzucone') });
     return json(404, { kod: 'NIE_ZNALEZIONO' });
   });
   const views: InboxView[] = [];
@@ -101,7 +120,7 @@ function setup(opts: { session?: string | null; inbox?: unknown[]; workFolder?: 
     openUrl: vi.fn(async () => undefined),
     revealFolder: vi.fn(async () => undefined),
     pickFolder: vi.fn(async (): Promise<string | null> => '/Users/m/repo'),
-    now: () => NOW,
+    now: () => state.now,
   };
   if (opts.workFolder) ports.store.setItem('cognifly.config', JSON.stringify({ ...DEFAULT_CONFIG, workFolder: opts.workFolder }));
   return { c: new Controller(ports), ports, state, views, hw };
@@ -880,6 +899,194 @@ describe('Controller', () => {
       await c.handlers()['session.logout']!({});
       expect(ports.heartwood.stop).toHaveBeenCalled();
       expect(c.current().files.status).toBeNull();
+    });
+  });
+
+  describe('access check (Identity)', () => {
+    /** Paths of all requests so far, in order (Identity and API). */
+    const paths = (ports: Ports) => vi.mocked(ports.fetch).mock.calls.map(([u]) => new URL(String(u)).pathname);
+    const accessCalls = (ports: Ports) => paths(ports).filter((p) => p === '/access').length;
+    const inboxCalls = (ports: Ports) => paths(ports).filter((p) => p.endsWith('/skrzynka')).length;
+
+    it('start_checks_access_before_poll', async () => {
+      const { c, ports } = setup({ inbox: [task(1)] });
+      await c.start();
+      const calls = vi.mocked(ports.fetch).mock.calls;
+      expect(String(calls[0]![0])).toBe(`${DEFAULT_CONFIG.identityUrl}/access?product=cognifly`);
+      expect((calls[0]![1].headers as Record<string, string>).Authorization).toBe('Bearer A');
+      expect(paths(ports).slice(1)).toEqual(['/ja', '/skrzynka']);
+      expect(c.current().blocked).toBeNull();
+    });
+
+    it('access_checked_every_five_minutes', async () => {
+      const { c, ports, state } = setup({ inbox: [] });
+      await c.start();
+      state.now += ACCESS_EVERY_MS - 1;
+      await c.poll();
+      expect(accessCalls(ports)).toBe(1);
+      state.now += 1;
+      await c.poll();
+      expect(accessCalls(ports)).toBe(2);
+    });
+
+    it('licence_expired_blocks_polling_and_shows_reason', async () => {
+      const { c, ports, state } = setup({ inbox: [task(1)], workFolder: '/Users/m/repo' });
+      await c.start();
+      state.access = { active: false, reason: 'LICENCE_EXPIRED' };
+      state.now += ACCESS_EVERY_MS;
+      const v = await c.poll();
+      expect(v).toMatchObject({ loggedIn: true, blocked: accessMessage('LICENCE_EXPIRED') });
+      expect(v.tasks).toHaveLength(1);
+      expect(inboxCalls(ports)).toBe(1);
+      const h = c.handlers();
+      const actions: [keyof typeof h, unknown][] = [
+        ['inbox.take', { id: id(1) }], ['inbox.setState', { id: id(1), state: 'zrobione' }], ['task.accept', { id: id(1) }],
+        ['task.sendBack', { id: id(1), reason: 'x' }], ['task.reject', { id: id(1), reason: 'x' }], ['task.remove', { id: id(1) }],
+        ['task.handOver', { id: id(1), person: 'ania' }], ['review.request', { repo: 'o/r', pr: 1, reviewers: ['ania'] }],
+        ['task.openInClaude', { id: id(1) }],
+      ];
+      const before = vi.mocked(ports.fetch).mock.calls.length;
+      for (const [m, p] of actions) await expect(h[m]!(p)).rejects.toMatchObject({ code: 'BLOCKED' });
+      expect(vi.mocked(ports.fetch).mock.calls.length).toBe(before);
+      expect(ports.openUrl).not.toHaveBeenCalled();
+    });
+
+    it('not_member_logs_out', async () => {
+      const { c, ports, state } = setup({ inbox: [task(1)] });
+      state.access = { active: false, reason: 'NOT_MEMBER' };
+      const v = await c.start();
+      expect(v).toMatchObject({ loggedIn: false, tasks: [], blocked: accessMessage('NOT_MEMBER') });
+      expect(await ports.vault.read()).toBeNull();
+      expect(ports.showScreen).toHaveBeenLastCalledWith('login');
+      expect(inboxCalls(ports)).toBe(0);
+      state.access = { active: true };
+      const h = c.handlers();
+      await h['login.sendCode']!({ email: 'm@x.pl' });
+      await h['login.confirm']!({ code: '123456' });
+      await c.poll();
+      expect(c.current()).toMatchObject({ loggedIn: true, blocked: null });
+      expect(accessCalls(ports)).toBe(2);
+    });
+
+    it('access_network_error_does_not_block', async () => {
+      const { c, ports, state } = setup({ inbox: [task(1)] });
+      state.access = new TypeError('offline');
+      const v = await c.start();
+      expect(v).toMatchObject({ loggedIn: true, blocked: null });
+      expect(v.tasks).toHaveLength(1);
+      await c.poll();
+      expect(accessCalls(ports)).toBe(2);
+    });
+
+    it('active_again_unblocks_and_polls', async () => {
+      const { c, ports, state } = setup({ inbox: [task(1)] });
+      state.access = { active: false, reason: 'NO_LICENCE' };
+      expect((await c.start()).blocked).toBe(accessMessage('NO_LICENCE'));
+      expect(inboxCalls(ports)).toBe(0);
+      state.access = { active: true };
+      const v = await c.poll();
+      expect(v.blocked).toBeNull();
+      expect(v.tasks).toHaveLength(1);
+      expect(inboxCalls(ports)).toBe(1);
+    });
+
+    it('api_licence_error_forces_access_check', async () => {
+      const { c, ports, state } = setup({ inbox: [task(1)] });
+      await c.start();
+      state.inboxError = { kod: 'LICENCJA_WYGASLA' };
+      state.access = { active: false, reason: 'LICENCE_EXPIRED' };
+      const v = await c.poll();
+      expect(accessCalls(ports)).toBe(2);
+      expect(v).toMatchObject({ blocked: accessMessage('LICENCE_EXPIRED'), offline: false });
+    });
+
+    it('concurrent checks share one request', async () => {
+      const { c, ports, state } = setup({ inbox: [] });
+      await c.start();
+      state.now += ACCESS_EVERY_MS;
+      await Promise.all([c.checkAccessIfDue(), c.checkAccessIfDue(true), c.poll()]);
+      expect(accessCalls(ports)).toBe(2);
+    });
+
+    it('restored_licence_refreshes_token_and_retries', async () => {
+      const { c, ports, state } = setup({ inbox: [task(1)] });
+      await c.start();
+      state.inboxError = { kod: 'BRAK_LICENCJI' };
+      state.licensedToken = 'A2';
+      state.inbox = [task(1), task(2)];
+      const v = await c.poll();
+      expect(state.refreshes).toBe(1);
+      expect(v).toMatchObject({ offline: false, blocked: null });
+      expect(v.tasks).toHaveLength(2);
+      expect(accessCalls(ports)).toBe(2);
+    });
+
+    it('still_refused_after_refresh_blocks_with_licence_text', async () => {
+      const { c, state } = setup({ inbox: [task(1)] });
+      await c.start();
+      state.inboxError = { kod: 'LICENCJA_WYGASLA' };
+      const v = await c.poll();
+      expect(state.refreshes).toBe(1);
+      expect(v).toMatchObject({ offline: false, blocked: accessMessage('LICENCE_EXPIRED') });
+      expect(v.tasks).toHaveLength(1);
+    });
+
+    it('task action refused for licence refreshes the token and retries once', async () => {
+      const { c, state } = setup({ inbox: [task(1)] });
+      await c.start();
+      state.inboxError = { kod: 'BRAK_LICENCJI' };
+      state.licensedToken = 'A2';
+      expect(await c.handlers()['task.remove']!({ id: id(1) })).toEqual({ ok: true });
+      expect(state.refreshes).toBe(1);
+      state.licensedToken = 'nikt';
+      await expect(c.handlers()['task.remove']!({ id: id(1) })).rejects.toMatchObject({ code: 'BRAK_LICENCJI' });
+      expect(state.refreshes).toBe(2);
+      expect(c.current().blocked).toBe(accessMessage('NO_LICENCE'));
+    });
+
+    it('unblocking refreshes the token before fetching the inbox', async () => {
+      const { c, ports, state } = setup({ inbox: [task(1)] });
+      state.access = { active: false, reason: 'NO_LICENCE' };
+      await c.start();
+      state.access = { active: true };
+      await c.poll();
+      expect(state.refreshes).toBe(1);
+      const inbox = vi.mocked(ports.fetch).mock.calls.find(([u]) => String(u).endsWith('/skrzynka'))!;
+      expect((inbox[1].headers as Record<string, string>).Authorization).toBe('Bearer A2');
+    });
+
+    it('blocking clears offline', async () => {
+      const { c, state } = setup({ inbox: [] });
+      state.access = new TypeError('offline');
+      state.offline = true;
+      await c.start();
+      expect(c.current().offline).toBe(true);
+      state.offline = false;
+      state.access = { active: false, reason: 'ORG_SUSPENDED' };
+      expect(await c.poll()).toMatchObject({ offline: false, blocked: accessMessage('ORG_SUSPENDED') });
+    });
+
+    it('a new session does not reuse an access check of the old one', async () => {
+      const { c, ports, state } = setup({ inbox: [] });
+      await c.start();
+      let open!: () => void;
+      state.accessGate = new Promise((r) => { open = r; });
+      const old = c.checkAccessIfDue(true);
+      await c.logout();
+      const h = c.handlers();
+      await h['login.sendCode']!({ email: 'm@x.pl' });
+      await h['login.confirm']!({ code: '123456' });
+      const fresh = c.poll();
+      open();
+      await Promise.all([old, fresh]);
+      expect(accessCalls(ports)).toBe(3);
+    });
+
+    it('no access check when logged out', async () => {
+      const { c, ports } = setup({ session: null });
+      await c.start();
+      await c.checkAccessIfDue(true);
+      expect(ports.fetch).not.toHaveBeenCalled();
     });
   });
 });

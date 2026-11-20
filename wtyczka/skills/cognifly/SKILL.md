@@ -42,7 +42,7 @@ node "${CLAUDE_PLUGIN_ROOT}/cli/cognifly.mjs" <polecenie> [opcje]
 | poproś o code review swojego PR | `zglos-cr --repo <repo> --pr <nr> --recenzenci <osoba1,osoba2>` (tylko po zgodzie) |
 | zmiana stanu zadania | `stan zad_<id> <w_trakcie\|do_akceptacji\|zrobione> [--postep <tekst>]` (tylko po zgodzie) |
 | logowanie | `zaloguj --email <adres>`, potem `kod --kod <kod>` |
-| konfiguracja (jednorazowo) | `konfiguruj --adres-api <AdresApi> --klient <KlientCognifly> [--region eu-central-1] [--firma <id>]` — zapisuje `~/.cognifly/konfiguracja.json` (bez sekretów); wartości bierz z wyjść stosu (`KlientCognifly` = klient `cognifly` puli Platformy) |
+| konfiguracja (jednorazowo) | `konfiguruj --adres-api <AdresApi> --klient <KlientCognifly> [--region eu-central-1] [--firma <id>] [--adres-tozsamosci <https://adres Platformy Identity>]` — zapisuje `~/.cognifly/konfiguracja.json` (bez sekretów); wartości bierz z wyjść stosu (`KlientCognifly` = klient `cognifly` puli Platformy); bez `--adres-tozsamosci` wtyczka nie sprawdza dostępu firmy |
 | wylogowanie | `wyloguj` |
 | podsumowanie (używa go hook) | `podsumowanie` |
 
@@ -131,6 +131,7 @@ kto pisze w danym pliku albo do którego zadania pasuje dany plik.
 - `ZAJETE` — ktoś już je ma (`wlasciciel`). Poinformuj, nie ponawiaj.
 - `WYMAGA_LOGOWANIA` — brak lub wygasła sesja. Zaproponuj logowanie (poniżej).
 - `BRAK_DOSTEPU` — brak uprawnień. Poinformuj, nie obchodź.
+- `BRAK_DOSTEPU_FIRMY` — Platforma Identity odmawia dostępu do CogniFly (pola `powod`, `komunikat`; np. firma bez licencji lub zawieszona). Pokaż `komunikat` dosłownie, nie ponawiaj i nie obchodź; przy `TOKEN_REVOKED`, `ACCOUNT_DISABLED` i `NOT_MEMBER` sesja jest już usunięta — zaproponuj ponowne logowanie tylko przy `TOKEN_REVOKED`.
 - `NIE_ZNALEZIONO` — nie ma takiego zadania (sprawdź identyfikator `zad_…`).
 - `ZLY_PRZEDZIAL` — niepoprawny zakres dat. Popraw i zapytaj ponownie.
 - `ZLY_STAN` — niedozwolony stan; dozwolone: `w_trakcie`, `do_akceptacji`, `zrobione`.

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest';
 import { ustawTabeleTestowa } from '../dane/pomocnik.js';
+import { claimsFor } from './claims.js';
 
 // GitHub replaced by an in-memory map; token toggled per test.
 const github = vi.hoisted(() => ({ prs: new Map<string, unknown>(), token: 'tok' as string | null }));
@@ -35,7 +36,7 @@ beforeEach(() => {
 async function wywolaj(routeKey: string, o: { sub?: string; body?: string; id?: string } = {}) {
   const r = await handler({
     routeKey, headers: {}, queryStringParameters: {}, pathParameters: o.id ? { id: o.id } : {}, body: o.body ?? null,
-    requestContext: { authorizer: { jwt: { claims: { sub: o.sub ?? 'sub-michal' } } } },
+    requestContext: { authorizer: { jwt: { claims: claimsFor(o.sub ?? 'sub-michal') } } },
   });
   return { status: r.statusCode, body: JSON.parse(r.body) as Record<string, any> };
 }

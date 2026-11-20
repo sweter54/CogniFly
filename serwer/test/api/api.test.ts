@@ -6,6 +6,7 @@ import { zapiszZdarzenie } from '../../src/dane/historia.js';
 import { utworzZadanie, wez } from '../../src/dane/kolejka.js';
 import { handler } from '../../src/api/index.js';
 import { formaZadan, liniaPodsumowania } from '../../src/api/skrzynka.js';
+import { claimsFor } from './claims.js';
 
 const tabela = ustawTabeleTestowa('cognifly-test-api');
 beforeAll(async () => {
@@ -27,7 +28,7 @@ async function wywolaj(routeKey: string, o: Opcje = {}) {
     queryStringParameters: o.q ?? {},
     pathParameters: o.id ? { id: o.id } : {},
     body: o.body ?? null,
-    requestContext: { authorizer: { jwt: { claims: sub === null ? {} : { sub } } } },
+    requestContext: { authorizer: { jwt: { claims: sub === null ? {} : claimsFor(sub) } } },
   });
   return { status: r.statusCode, headers: r.headers, body: JSON.parse(r.body) as Record<string, any> };
 }

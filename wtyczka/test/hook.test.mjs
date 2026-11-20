@@ -97,6 +97,37 @@ describe('hook startu sesji', () => {
     expect((await hook())).toMatchObject({ out: '', err: '', code: 0 });
   });
 
+  it('hook_pokazuje_powod_odmowy (jedna linia z komunikatem zamiast podsumowania)', async () => {
+    const komunikat = 'Brak dostępu do CogniFly: firma nie ma licencji na CogniFly.';
+    stubJson({ stan: 'BRAK_DOSTEPU_FIRMY', powod: 'NO_LICENCE', komunikat, linia: 'nie powinno być widać' });
+    const r = await hook();
+    expect(r).toMatchObject({ out: PREFIKS + komunikat + '\n', err: '', code: 0 });
+    stubJson({ stan: 'BRAK_DOSTEPU_FIRMY', powod: 'NO_LICENCE', komunikat: { a: 1 } });
+    expect((await hook()).out).toBe('');
+  });
+
+  it('prawdziwe CLI wobec mock Tożsamości: nieaktywny dostęp -> powód, API nie wołane', async () => {
+    let wywolaniaApi = 0;
+    const s = createServer((req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      if (req.url.startsWith('/access')) res.end(JSON.stringify({ active: false, reason: 'ORG_SUSPENDED' }));
+      else { wywolaniaApi++; res.end(JSON.stringify({ linia: 'podsumowanie' })); }
+    });
+    await new Promise((ok) => s.listen(0, '127.0.0.1', ok));
+    try {
+      const kat = join(tmp, 'kat'); mkdirSync(kat, { mode: 0o700 });
+      writeFileSync(join(kat, 'sesja.json'), JSON.stringify({ accessToken: 'A', idToken: 'I', refreshToken: 'R', wygasa: Date.now() + 3_600_000, klient: 'k' }), { mode: 0o600 });
+      writeFileSync(join(tmp, 'konf.json'), JSON.stringify({ klientCognito: 'k', region: 'eu-central-1', firmaDomyslna: 'f' }));
+      const adres = `http://127.0.0.1:${s.address().port}`;
+      const r = await hook({
+        CLAUDE_PLUGIN_ROOT: KORZEN, COGNIFLY_KATALOG: kat, COGNIFLY_KONFIGURACJA: join(tmp, 'konf.json'),
+        COGNIFLY_ADRES_API: adres, COGNIFLY_ADRES_TOZSAMOSCI: adres,
+      });
+      expect(r.out).toBe(PREFIKS + 'Brak dostępu do CogniFly: firma jest zawieszona.\n');
+      expect(wywolaniaApi).toBe(0);
+    } finally { s.close(); }
+  });
+
   it('linia nie-tekstowa -> brak wyjścia', async () => {
     stubJson({ stan: 'OK', linia: { a: 1 } });
     expect((await hook()).out).toBe('');

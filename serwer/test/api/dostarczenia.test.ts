@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest';
 import { ustawTabeleTestowa } from '../dane/pomocnik.js';
+import { claimsFor } from './claims.js';
 
 const github = vi.hoisted(() => ({ prs: new Map<string, unknown>() }));
 vi.mock('../../src/dostarczenia/github.js', async (orig) => ({
@@ -29,7 +30,7 @@ afterAll(() => tabela.usun());
 async function wywolaj(routeKey: string, o: { sub?: string; body?: string; q?: Record<string, string> } = {}) {
   const r = await handler({
     routeKey, headers: {}, queryStringParameters: o.q ?? {}, pathParameters: {}, body: o.body ?? null,
-    requestContext: { authorizer: { jwt: { claims: { sub: o.sub ?? 'sub-michal' } } } },
+    requestContext: { authorizer: { jwt: { claims: claimsFor(o.sub ?? 'sub-michal') } } },
   });
   return { status: r.statusCode, body: JSON.parse(r.body) as Record<string, any> };
 }

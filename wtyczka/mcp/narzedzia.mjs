@@ -31,12 +31,14 @@ const KOMUNIKATY = {
  *
  * Call: `wynikBledu(e)` in a tool's catch.
  * Expects: any thrown value; `Stan` carries the state.
- * Output: an MCP tool result with one Polish text.
+ * Output: an MCP tool result with one Polish text (for
+ * `BRAK_DOSTEPU_FIRMY` the reason text from the CLI modules).
  */
 function wynikBledu(e) {
   const stan = e instanceof Stan ? e.stan : 'NIEOCZEKIWANY';
   const kod = e instanceof Stan && e.dane?.kod ? e.dane.kod : stan;
-  const tekst = KOMUNIKATY[stan] ?? `Błąd CogniFly (kod: ${kod}).`;
+  const komunikat = stan === 'BRAK_DOSTEPU_FIRMY' ? e.dane?.komunikat : undefined;
+  const tekst = komunikat ?? KOMUNIKATY[stan] ?? `Błąd CogniFly (kod: ${kod}).`;
   return { content: [{ type: 'text', text: tekst }], isError: true };
 }
 

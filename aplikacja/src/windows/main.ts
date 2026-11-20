@@ -19,12 +19,29 @@ const SCREENS: Screen[] = ['login', 'inbox', 'files', 'settings'];
  *
  * Call: `renderHeader(view)` on every view change.
  * Expects: main.html header markup.
- * Output: none; nav and logout show only when logged in.
+ * Output: none; nav and logout show only when logged in; the
+ * banner shows why work is stopped (logged in only).
  */
 function renderHeader(view: InboxView): void {
   byId('nav').hidden = needsSetup(view);
   byId('logout').hidden = !view.loggedIn;
   byId('who').textContent = view.loggedIn ? (view.email ?? '') : '';
+  const banner = byId('blocked');
+  banner.textContent = view.loggedIn ? (view.blocked ?? '') : '';
+  banner.hidden = !view.loggedIn || !view.blocked;
+}
+
+/**
+ * Shows on the login screen why the session was ended.
+ *
+ * Call: `showLogoutReason(view)` when the login screen is shown or
+ * the reason changes.
+ * Expects: a view.
+ * Output: none; the reason goes to the status line as an error
+ * when logged out with a reason, else nothing changes.
+ */
+function showLogoutReason(view: InboxView): void {
+  if (!view.loggedIn && view.blocked) setStatus(view.blocked, 'error');
 }
 
 /**
@@ -88,20 +105,25 @@ async function main(): Promise<void> {
       settings.showFolder(view.workFolder);
       settings.load().catch((e) => setStatus(messageFor(e), 'error'));
     }
-    if (current === 'login' && !view.loggedIn) login.reset();
-    else if (current === 'login' && !view.workFolder) login.showFolder();
+    if (current === 'login' && !view.loggedIn) {
+      login.reset();
+      showLogoutReason(view);
+    } else if (current === 'login' && !view.workFolder) login.showFolder();
   }
 
   /**
    * Applies a new view from the background window.
    * Call: on `INBOX_EVENT`. Expects: a view.
-   * Output: none; leaves the inbox when the session ended.
+   * Output: none; leaves the inbox when the session ended; a new
+   * logout reason is shown on the login screen.
    */
   function apply(next: InboxView): void {
     const loggedOut = view.loggedIn && !next.loggedIn;
+    const newReason = next.blocked !== view.blocked;
     view = next;
     renderHeader(view);
     if (loggedOut) go('login');
+    else if (current === 'login' && newReason) showLogoutReason(view);
     else if (current === 'inbox') inbox.render(view);
     else if (current === 'files') files.render(view);
     else if (current === 'settings') settings.showFolder(view.workFolder);

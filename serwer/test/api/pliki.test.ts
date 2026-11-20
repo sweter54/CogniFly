@@ -6,6 +6,7 @@ import { jestUczestnikiem } from '../../src/api/zadania.js';
 import { pliki } from '../../src/api/pliki.js';
 import { handler } from '../../src/api/index.js';
 import type { IntClient, WorkFilesResponse } from '../../src/heartwood/klient.js';
+import { claimsFor } from './claims.js';
 
 const tabela = ustawTabeleTestowa('cognifly-test-api-pliki');
 let id = '';
@@ -91,7 +92,7 @@ describe('GET /zadania/{id}/pliki', () => {
     await doAkceptacji('f1', z.id, 'ania', 'celina');
     const get = (sub: string) => handler({
       routeKey: 'GET /zadania/{id}', headers: {}, pathParameters: { id: z.id },
-      requestContext: { authorizer: { jwt: { claims: { sub } } } },
+      requestContext: { authorizer: { jwt: { claims: claimsFor(sub) } } },
     });
     expect((await get('sub-celina')).statusCode).toBe(200);
     expect((await get('sub-obcy')).statusCode).toBe(403);
@@ -113,7 +114,7 @@ describe('GET /zadania/{id}/pliki', () => {
   test('routed through the handler: 503 without HEARTWOOD_INT_URL', async () => {
     const r = await handler({
       routeKey: 'GET /zadania/{id}/pliki', headers: {}, pathParameters: { id },
-      requestContext: { authorizer: { jwt: { claims: { sub: 'sub-ania' } } } },
+      requestContext: { authorizer: { jwt: { claims: claimsFor('sub-ania') } } },
     });
     expect(r.statusCode).toBe(503);
     expect(JSON.parse(r.body)).toEqual({ kod: 'PLIKI_WYLACZONE' });

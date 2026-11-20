@@ -2,6 +2,7 @@
 // typed rpc calls, Polish messages for error codes and DOM utilities.
 // Text from the network is always set via `textContent`.
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+import { licenceMessage } from '../logic/access.js';
 import { fileErrorText } from '../logic/files-view.js';
 import { onRender, requestHighlight, type Highlight } from '../logic/highlight.js';
 import { rpcClient, RpcError } from '../logic/rpc.js';
@@ -59,6 +60,9 @@ const MESSAGES: Record<string, string> = {
   PR_ZAMKNIETY: 'Ten PR jest już zamknięty.',
   NO_WORK_FOLDER: 'Najpierw wybierz folder pracy.',
   BAD_FOLDER: 'Tego folderu nie można użyć. Wybierz folder na tym Macu (pełna ścieżka).',
+  BLOCKED: 'Praca w CogniFly jest wstrzymana — zobacz komunikat na górze.',
+  BRAK_LICENCJI: licenceMessage('BRAK_LICENCJI'),
+  LICENCJA_WYGASLA: licenceMessage('LICENCJA_WYGASLA'),
 };
 
 /**

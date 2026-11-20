@@ -167,10 +167,11 @@ function runAction(actions: TrayActions, action: AttentionAction): void {
  *
  * Call: `trayState(view)`.
  * Expects: a view.
- * Output: session, offline flag, waiting tasks and file counts.
+ * Output: session, offline flag, waiting tasks, file counts and
+ * the reason work is stopped.
  */
 function trayState(view: InboxView): TrayState {
-  return { loggedIn: view.loggedIn, offline: view.offline, waiting: waitingCount(view), ...view.files.counts };
+  return { loggedIn: view.loggedIn, offline: view.offline, waiting: waitingCount(view), ...view.files.counts, blocked: view.blocked };
 }
 
 /**

@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Stan, katalog, czytaj, zapisz, usun, punktCognito, odswiez, zaloguj, kod, wyloguj } from './sesja.mjs';
+import { KODY_LICENCJI, odmowaDostepu, wymagajDostepu, zapomnijDostep } from './dostep.mjs';
 
 const DOBA = 86_400_000;
 const STANY = ['w_trakcie', 'do_akceptacji', 'zrobione'];
@@ -18,8 +19,8 @@ export function wczytajKonfiguracje(env = process.env) {
   let k = {};
   try { k = JSON.parse(readFileSync(env.COGNIFLY_KONFIGURACJA || DOMYSLNA_KONF, 'utf8')); } catch {}
   const pole = (v) => (typeof v === 'string' ? v.trim() : '');
-  const wtyczki = { adresApi: pole(k.adresApi), region: pole(k.region), klientCognito: pole(k.klientCognito), firmaDomyslna: pole(k.firmaDomyslna) };
-  const zEnv = { adresApi: pole(env.COGNIFLY_ADRES_API), region: pole(env.COGNIFLY_REGION), klientCognito: pole(env.COGNIFLY_KLIENT), firmaDomyslna: pole(env.COGNIFLY_FIRMA) };
+  const wtyczki = { adresApi: pole(k.adresApi), region: pole(k.region), klientCognito: pole(k.klientCognito), firmaDomyslna: pole(k.firmaDomyslna), adresTozsamosci: pole(k.adresTozsamosci) };
+  const zEnv = { adresApi: pole(env.COGNIFLY_ADRES_API), region: pole(env.COGNIFLY_REGION), klientCognito: pole(env.COGNIFLY_KLIENT), firmaDomyslna: pole(env.COGNIFLY_FIRMA), adresTozsamosci: pole(env.COGNIFLY_ADRES_TOZSAMOSCI) };
   let u = {};
   if (Object.keys(wtyczki).some((n) => !zEnv[n] && !wtyczki[n])) {
     const z = czytaj(katalog(env), 'konfiguracja.json');
@@ -30,16 +31,38 @@ export function wczytajKonfiguracje(env = process.env) {
     region: pole(env.COGNIFLY_REGION) || wtyczki.region || pole(u.region) || 'eu-central-1',
     klientCognito: pole(env.COGNIFLY_KLIENT) || wtyczki.klientCognito || pole(u.klientCognito),
     firmaDomyslna: pole(env.COGNIFLY_FIRMA) || wtyczki.firmaDomyslna || pole(u.firmaDomyslna),
+    adresTozsamosci: zEnv.adresTozsamosci || wtyczki.adresTozsamosci || pole(u.adresTozsamosci),
   };
 }
 
+/** Accepted shape of the API address. */
+const ADRES = /^https?:\/\/[^\s]+$/;
+
+/** Identity address: https only (a bearer token is sent there). */
+const ADRES_TOZSAMOSCI = /^https:\/\/[^\s]+$/;
+
+/**
+ * Saves the user's configuration to `<katalog>/konfiguracja.json`.
+ *
+ * Call: `konfiguruj(kat, opcje)` for `cognifly konfiguruj`.
+ * Expects: `--adres-api`, `--klient`, optional `--region`, `--firma`
+ * and `--adres-tozsamosci` (Identity, https only; empty or missing
+ * → the plugin does not check access).
+ * Output: `{stan: 'KONFIGURACJA_ZAPISANA'}`.
+ * Throws: `Stan('BLAD', {kod: 'ZLE_PARAMETRY_KONFIGURACJI'})`.
+ */
 function konfiguruj(kat, opcje) {
   const adres = opcje['adres-api'], klient = opcje.klient, region = opcje.region ?? 'eu-central-1', firma = opcje.firma ?? '';
-  if (typeof adres !== 'string' || !/^https?:\/\/[^\s]+$/.test(adres) || typeof klient !== 'string' || !/^[A-Za-z0-9]{1,128}$/.test(klient)
-    || !/^[a-z]{2}(-[a-z]+)+-\d$/.test(region) || !/^[a-z0-9-]{0,40}$/.test(firma)) {
+  const tozsamosc = opcje['adres-tozsamosci'] ?? '';
+  if (typeof adres !== 'string' || !ADRES.test(adres) || typeof klient !== 'string' || !/^[A-Za-z0-9]{1,128}$/.test(klient)
+    || !/^[a-z]{2}(-[a-z]+)+-\d$/.test(region) || !/^[a-z0-9-]{0,40}$/.test(firma)
+    || typeof tozsamosc !== 'string' || (tozsamosc !== '' && !ADRES_TOZSAMOSCI.test(tozsamosc))) {
     throw new Stan('BLAD', { kod: 'ZLE_PARAMETRY_KONFIGURACJI' });
   }
-  zapisz(kat, 'konfiguracja.json', { adresApi: adres.replace(/\/+$/, ''), region, klientCognito: klient, firmaDomyslna: firma });
+  zapisz(kat, 'konfiguracja.json', {
+    adresApi: adres.replace(/\/+$/, ''), region, klientCognito: klient, firmaDomyslna: firma,
+    ...(tozsamosc ? { adresTozsamosci: tozsamosc.replace(/\/+$/, '') } : {}),
+  });
   return { stan: 'KONFIGURACJA_ZAPISANA' };
 }
 
@@ -94,34 +117,83 @@ async function wywolaj(url, metoda, sesja, firma, body, signal) {
 }
 
 /**
+ * Loads the stored session, refreshing the token when it is close
+ * to expiry.
+ *
+ * Call: `const { sesja, odswiezono } = await sesjaAktualna(ctx)`.
+ * Expects: a context from `kontekst()`.
+ * Output: the session with a usable ACCESS token and whether it was
+ * refreshed now.
+ * Throws: `Stan('WYMAGA_LOGOWANIA')` (also for a session of another
+ * Cognito client, whose file is deleted), `Stan('BLAD_SIECI')`, ...
+ */
+export async function sesjaAktualna(ctx) {
+  const sesja = czytaj(ctx.kat, 'sesja.json');
+  if (!sesja || !sesja.accessToken || !sesja.refreshToken) throw new Stan('WYMAGA_LOGOWANIA');
+  if (sesja.klient !== ctx.konf.klientCognito) {
+    usun(ctx.kat, 'sesja.json');
+    throw new Stan('WYMAGA_LOGOWANIA');
+  }
+  if (sesja.wygasa - Date.now() > 60_000) return { sesja, odswiezono: false };
+  return { sesja: await odswiez({ ...daneOdswiezenia(ctx), sesja }), odswiezono: true };
+}
+
+/** Arguments of `odswiez` taken from a call context. */
+const daneOdswiezenia = (ctx) => ({ kat: ctx.kat, konf: ctx.konf, endpoint: ctx.endpoint, signal: ctx.signal });
+
+/** Tells whether an API answer is a 403 licence refusal. */
+const odmowaLicencji = (r) => r.status === 403 && Object.hasOwn(KODY_LICENCJI, r.json?.kod ?? '');
+
+/**
+ * Handles a 403 licence refusal of the API: the stored access
+ * answer is dropped and Identity asked again; when it says active
+ * (or is not configured / unreachable), the token is refreshed once
+ * (its licence claim may be stale) and the call repeated once.
+ *
+ * Call: `await poOdmowieLicencji(ctx, wyslij, sesja, r, odswiezono)`.
+ * Expects: `wyslij(sesja)` repeating the call; the refused answer.
+ * Output: the answer of the repeated call.
+ * Throws: `Stan('BRAK_DOSTEPU_FIRMY', {powod, komunikat})` when
+ * refused again or Identity says inactive; `WYMAGA_LOGOWANIA`.
+ */
+async function poOdmowieLicencji(ctx, wyslij, sesja, r, odswiezono) {
+  zapomnijDostep(ctx.kat);
+  await wymagajDostepu(ctx, sesja);
+  if (odswiezono) throw odmowaDostepu(ctx.kat, KODY_LICENCJI[r.json.kod]);
+  const r2 = await wyslij(await odswiez({ ...daneOdswiezenia(ctx), sesja }));
+  if (r2.status === 401) throw new Stan('WYMAGA_LOGOWANIA');
+  if (odmowaLicencji(r2)) {
+    zapomnijDostep(ctx.kat);
+    throw odmowaDostepu(ctx.kat, KODY_LICENCJI[r2.json.kod]);
+  }
+  return r2;
+}
+
+/**
  * Calls the CogniFly API with the stored session.
  *
  * Call: `await zSesja(ctx, 'GET', '/skrzynka')`.
  * Expects: a context from `kontekst()`; a path starting with `/`.
  * Output: `{status, json}`; the token is refreshed when it is close
- * to expiry or on a 401 (at most once).
- * Throws: `Stan('WYMAGA_LOGOWANIA')` (also for a session of another
- * Cognito client, whose file is deleted), `Stan('BLAD_SIECI')`, ...
+ * to expiry or on a 401 (at most once); a 403 licence refusal is
+ * handled by `poOdmowieLicencji`.
+ * Throws: `Stan('WYMAGA_LOGOWANIA')`, `Stan('BLAD_SIECI')`,
+ * `Stan('BRAK_DOSTEPU_FIRMY', {powod, komunikat})`, ...
  */
 export async function zSesja(ctx, metoda, sciezka, body) {
-  const sesja0 = czytaj(ctx.kat, 'sesja.json');
-  if (!sesja0 || !sesja0.accessToken || !sesja0.refreshToken) throw new Stan('WYMAGA_LOGOWANIA');
-  if (sesja0.klient !== ctx.konf.klientCognito) {
-    usun(ctx.kat, 'sesja.json');
-    throw new Stan('WYMAGA_LOGOWANIA');
-  }
-  let sesja = sesja0, odswiezono = false;
-  const dane = { kat: ctx.kat, konf: ctx.konf, endpoint: ctx.endpoint, signal: ctx.signal };
-  if (!(sesja.wygasa - Date.now() > 60_000)) { sesja = await odswiez({ ...dane, sesja }); odswiezono = true; }
+  let { sesja, odswiezono } = await sesjaAktualna(ctx);
   const url = ctx.konf.adresApi.replace(/\/+$/, '') + sciezka;
   const firma = ctx.opcje.firma || ctx.konf.firmaDomyslna;
-  let r = await wywolaj(url, metoda, sesja, firma, body, ctx.signal);
+  const wyslij = (s) => wywolaj(url, metoda, s, firma, body, ctx.signal);
+  let r = await wyslij(sesja);
   if (r.status === 401) {
     if (odswiezono) throw new Stan('WYMAGA_LOGOWANIA');
-    sesja = await odswiez({ ...dane, sesja });
-    r = await wywolaj(url, metoda, sesja, firma, body, ctx.signal);
+    sesja = await odswiez({ ...daneOdswiezenia(ctx), sesja });
+    odswiezono = true;
+    r = await wyslij(sesja);
     if (r.status === 401) throw new Stan('WYMAGA_LOGOWANIA');
   }
+  if (odmowaLicencji(r)) return poOdmowieLicencji(ctx, wyslij, sesja, r, odswiezono);
   return r;
 }
 
@@ -208,6 +280,9 @@ export function kontekst(env, opcje, signal) {
   return { kat: katalog(env), konf, endpoint: punktCognito(konf, env), signal, opcje };
 }
 
+/** Work commands: they run only with an active access (Identity). */
+const PRACA = ['skrzynka', 'zadanie', 'biore', 'stan', 'przekaz', 'odrzuc', 'usun', 'akceptuj', 'do-poprawy', 'zglos-cr', 'podsumowanie', 'zdarzenia'];
+
 const blad = (r) => ({ stan: 'BLAD', kod: typeof r.json?.kod === 'string' ? r.json.kod : `HTTP_${r.status}` });
 
 export async function wykonaj(argv, env = process.env) {
@@ -215,7 +290,7 @@ export async function wykonaj(argv, env = process.env) {
   const polecenie = poz[0];
   const kat = katalog(env);
   try {
-    if (polecenie === 'wyloguj') return wyloguj(kat);
+    if (polecenie === 'wyloguj') { zapomnijDostep(kat); return wyloguj(kat); }
     if (polecenie === 'konfiguruj') return konfiguruj(kat, opcje);
     const komendy = ['zaloguj', 'kod', 'zdarzenia', 'skrzynka', 'zadanie', 'biore', 'stan', 'przekaz', 'odrzuc', 'usun', 'akceptuj', 'do-poprawy', 'ocena-dostarczenia', 'dostarczenie', 'osoby', 'zglos-cr', 'podsumowanie'];
     if (!komendy.includes(polecenie)) throw new Stan('BLAD', { kod: 'NIEZNANE_POLECENIE' });
@@ -252,6 +327,7 @@ export async function wykonaj(argv, env = process.env) {
     }
 
     const ctx = kontekst(env, opcje, AbortSignal.timeout(polecenie === 'podsumowanie' ? 1200 : 10_000));
+    if (PRACA.includes(polecenie)) await wymagajDostepu(ctx, (await sesjaAktualna(ctx)).sesja);
 
     switch (polecenie) {
       case 'zaloguj': return await zaloguj({ ...ctx, email: opcje.email });
