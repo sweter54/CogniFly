@@ -35,16 +35,19 @@ export function wczytajKonfiguracje(env = process.env) {
   };
 }
 
-/** Accepted shape of the API and Identity addresses. */
+/** Accepted shape of the API address. */
 const ADRES = /^https?:\/\/[^\s]+$/;
+
+/** Identity address: https only (a bearer token is sent there). */
+const ADRES_TOZSAMOSCI = /^https:\/\/[^\s]+$/;
 
 /**
  * Saves the user's configuration to `<katalog>/konfiguracja.json`.
  *
  * Call: `konfiguruj(kat, opcje)` for `cognifly konfiguruj`.
  * Expects: `--adres-api`, `--klient`, optional `--region`, `--firma`
- * and `--adres-tozsamosci` (Identity; empty or missing → the
- * plugin does not check access).
+ * and `--adres-tozsamosci` (Identity, https only; empty or missing
+ * → the plugin does not check access).
  * Output: `{stan: 'KONFIGURACJA_ZAPISANA'}`.
  * Throws: `Stan('BLAD', {kod: 'ZLE_PARAMETRY_KONFIGURACJI'})`.
  */
@@ -53,7 +56,7 @@ function konfiguruj(kat, opcje) {
   const tozsamosc = opcje['adres-tozsamosci'] ?? '';
   if (typeof adres !== 'string' || !ADRES.test(adres) || typeof klient !== 'string' || !/^[A-Za-z0-9]{1,128}$/.test(klient)
     || !/^[a-z]{2}(-[a-z]+)+-\d$/.test(region) || !/^[a-z0-9-]{0,40}$/.test(firma)
-    || typeof tozsamosc !== 'string' || (tozsamosc !== '' && !ADRES.test(tozsamosc))) {
+    || typeof tozsamosc !== 'string' || (tozsamosc !== '' && !ADRES_TOZSAMOSCI.test(tozsamosc))) {
     throw new Stan('BLAD', { kod: 'ZLE_PARAMETRY_KONFIGURACJI' });
   }
   zapisz(kat, 'konfiguracja.json', {

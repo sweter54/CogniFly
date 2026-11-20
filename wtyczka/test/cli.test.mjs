@@ -332,6 +332,7 @@ describe('konfiguracja', () => {
     expect(JSON.parse(readFileSync(p, 'utf8'))).toEqual({ adresApi: 'https://a.example.com', region: 'eu-central-1', klientCognito: 'abc123', firmaDomyslna: '', adresTozsamosci: 'https://id.example.com' });
     expect(wczytajKonfiguracje({ COGNIFLY_KONFIGURACJA: konf, COGNIFLY_KATALOG: kat }).adresTozsamosci).toBe('https://id.example.com');
     expect((await cli([...baza, '--adres-tozsamosci', 'nie adres'], bezEnv)).json).toEqual({ stan: 'BLAD', kod: 'ZLE_PARAMETRY_KONFIGURACJI' });
+    expect((await cli([...baza, '--adres-tozsamosci', 'http://id.example.com'], bezEnv)).json).toEqual({ stan: 'BLAD', kod: 'ZLE_PARAMETRY_KONFIGURACJI' });
     expect(JSON.parse(readFileSync(p, 'utf8')).adresTozsamosci).toBe('https://id.example.com');
     expect((await cli(baza, bezEnv)).json.stan).toBe('KONFIGURACJA_ZAPISANA');
     expect(JSON.parse(readFileSync(p, 'utf8'))).not.toHaveProperty('adresTozsamosci');

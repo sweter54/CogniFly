@@ -42,7 +42,7 @@ node "${CLAUDE_PLUGIN_ROOT}/cli/cognifly.mjs" <polecenie> [opcje]
 | poproś o code review swojego PR | `zglos-cr --repo <repo> --pr <nr> --recenzenci <osoba1,osoba2>` (tylko po zgodzie) |
 | zmiana stanu zadania | `stan zad_<id> <w_trakcie\|do_akceptacji\|zrobione> [--postep <tekst>]` (tylko po zgodzie) |
 | logowanie | `zaloguj --email <adres>`, potem `kod --kod <kod>` |
-| konfiguracja (jednorazowo) | `konfiguruj --adres-api <AdresApi> --klient <KlientCognifly> [--region eu-central-1] [--firma <id>] [--adres-tozsamosci <adres Platformy Identity>]` — zapisuje `~/.cognifly/konfiguracja.json` (bez sekretów); wartości bierz z wyjść stosu (`KlientCognifly` = klient `cognifly` puli Platformy); bez `--adres-tozsamosci` wtyczka nie sprawdza dostępu firmy |
+| konfiguracja (jednorazowo) | `konfiguruj --adres-api <AdresApi> --klient <KlientCognifly> [--region eu-central-1] [--firma <id>] [--adres-tozsamosci <https://adres Platformy Identity>]` — zapisuje `~/.cognifly/konfiguracja.json` (bez sekretów); wartości bierz z wyjść stosu (`KlientCognifly` = klient `cognifly` puli Platformy); bez `--adres-tozsamosci` wtyczka nie sprawdza dostępu firmy |
 | wylogowanie | `wyloguj` |
 | podsumowanie (używa go hook) | `podsumowanie` |
 
