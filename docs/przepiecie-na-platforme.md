@@ -247,10 +247,11 @@ planu.
 
 ## Zostaje na później
 
-- Sprawdzanie dostępu `GET /access` w aplikacji i demonie.
-- Licencja `lic_cognifly` (zdarzenia `org.*` są dziś pomijane).
+- Zrobione: sprawdzanie dostępu `GET /access` i licencja `lic_cognifly` w API,
+  aplikacji i wtyczce (patrz `docs/dostep-i-licencja.md`). Zdarzenia `org.*`
+  są nadal pomijane.
 - Usunięcie starej puli i jej klienta ze stosu (osobne sprzątanie po udanym
   oknie).
 - Zdarzenia między produktami z polem `org`.
 - Zdarzenia Tożsamości z firm, które nie używają CogniFly, też tworzą rekordy
-  w rejestrze; dostęp odetnie dopiero `lic_cognifly` / `GET /access`.
+  w rejestrze; dostęp odetnie dopiero `lic_cognifly` / `GET /access` (już działa).

@@ -71,14 +71,15 @@ aws cloudformation delete-stack --stack-name cognifly-test --region eu-central-1
 
 ## 5. Konfiguracja wtyczki z wyjść stosu
 
-Logowanie idzie przez pulę Platformy. Wtyczka potrzebuje czterech wartości. Wpisz je jednym poleceniem (zapisze `~/.cognifly/konfiguracja.json`, bez sekretów):
+Logowanie idzie przez pulę Platformy. Wtyczka potrzebuje czterech wartości (plus opcjonalnie adres Tożsamości). Wpisz je jednym poleceniem (zapisze `~/.cognifly/konfiguracja.json`, bez sekretów):
 
 ```
 node wtyczka/cli/cognifly.mjs konfiguruj \
-  --adres-api <AdresApi> --klient <KlientCognifly> --region <Region> --firma pilot
+  --adres-api <AdresApi> --klient <KlientCognifly> --region <Region> --firma pilot \
+  --adres-tozsamosci <https://adres-tozsamosci>
 ```
 
-Mapowanie: `AdresApi` -> `--adres-api`, `KlientCognifly` -> `--klient`, `Region` -> `--region` (domyślnie `eu-central-1`), firma -> `--firma`. Alternatywnie zmienne środowiskowe `COGNIFLY_ADRES_API`, `COGNIFLY_KLIENT`, `COGNIFLY_REGION`, `COGNIFLY_FIRMA`.
+Mapowanie: `AdresApi` -> `--adres-api`, `KlientCognifly` -> `--klient`, `Region` -> `--region` (domyślnie `eu-central-1`), firma -> `--firma`. `--adres-tozsamosci` jest opcjonalne (adres musi być `https://`). Z nim wtyczka sprawdza dostęp i licencję firmy przed pracą; bez niego niczego nie sprawdza (patrz `docs/dostep-i-licencja.md`). Alternatywnie zmienne środowiskowe `COGNIFLY_ADRES_API`, `COGNIFLY_KLIENT`, `COGNIFLY_REGION`, `COGNIFLY_FIRMA`.
 
 Wtyczka odrzuca zapisaną sesję innego klienta, więc po zmianie `--klient` zaloguj się od nowa kodem z maila (`zaloguj --email ...`, `kod --kod ...`). Osoby nie tworzysz w żadnej puli: konto zakłada Tożsamość, a rejestr osób CogniFly jest jej kopią.
 
