@@ -85,11 +85,10 @@ cd infra && npx cdk deploy cognifly-test <C>
 cd aplikacja && npx tauri build --bundles app
 ```
 
-Podmień aplikację (ścieżkę `<bundle>` wypisze budowanie, zwykle
-`aplikacja/src-tauri/target/release/bundle/macos/CogniFly.app`):
+Zamknij działającą aplikację i podmień ją (z katalogu `aplikacja`):
 
 ```bash
-ditto <bundle> /Applications/CogniFly.app
+ditto src-tauri/target/release/bundle/macos/CogniFly.app /Applications/CogniFly.app
 ```
 
 Zamknij starą aplikację i uruchom nową.
