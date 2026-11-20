@@ -310,9 +310,9 @@ describe('konfiguracja', () => {
   it('wczytajKonfiguracje: region domyślny eu-central-1, env nadpisuje wszystkie cztery pola', () => {
     pusta();
     const env = { COGNIFLY_KONFIGURACJA: konf, COGNIFLY_KATALOG: kat };
-    expect(wczytajKonfiguracje(env)).toEqual({ adresApi: '', region: 'eu-central-1', klientCognito: '', firmaDomyslna: '' });
-    expect(wczytajKonfiguracje({ ...env, COGNIFLY_ADRES_API: 'http://a', COGNIFLY_REGION: 'eu-west-1', COGNIFLY_KLIENT: 'K', COGNIFLY_FIRMA: 'f' }))
-      .toEqual({ adresApi: 'http://a', region: 'eu-west-1', klientCognito: 'K', firmaDomyslna: 'f' });
+    expect(wczytajKonfiguracje(env)).toEqual({ adresApi: '', region: 'eu-central-1', klientCognito: '', firmaDomyslna: '', adresTozsamosci: '' });
+    expect(wczytajKonfiguracje({ ...env, COGNIFLY_ADRES_API: 'http://a', COGNIFLY_REGION: 'eu-west-1', COGNIFLY_KLIENT: 'K', COGNIFLY_FIRMA: 'f', COGNIFLY_ADRES_TOZSAMOSCI: 'https://id' }))
+      .toEqual({ adresApi: 'http://a', region: 'eu-west-1', klientCognito: 'K', firmaDomyslna: 'f', adresTozsamosci: 'https://id' });
   });
   it('konfiguruj zapisuje plik 600 i zwraca KONFIGURACJA_ZAPISANA', async () => {
     pusta();
@@ -323,6 +323,18 @@ describe('konfiguracja', () => {
     expect(JSON.parse(readFileSync(p, 'utf8'))).toEqual({ adresApi: 'https://x.execute-api.eu-central-1.amazonaws.com', region: 'eu-central-1', klientCognito: 'abc123', firmaDomyslna: 'pilot' });
     // kolejne polecenie widzi zapisane wartości
     expect((await cli(['skrzynka'], bezEnv)).json.stan).toBe('WYMAGA_LOGOWANIA');
+  });
+  it('konfiguruj_zapisuje_adres_tozsamosci (opcjonalny, sprawdzany jak adres API)', async () => {
+    pusta();
+    const baza = ['konfiguruj', '--adres-api', 'https://a.example.com', '--klient', 'abc123'];
+    expect((await cli([...baza, '--adres-tozsamosci', 'https://id.example.com/'], bezEnv)).json).toEqual({ stan: 'KONFIGURACJA_ZAPISANA' });
+    const p = join(kat, 'konfiguracja.json');
+    expect(JSON.parse(readFileSync(p, 'utf8'))).toEqual({ adresApi: 'https://a.example.com', region: 'eu-central-1', klientCognito: 'abc123', firmaDomyslna: '', adresTozsamosci: 'https://id.example.com' });
+    expect(wczytajKonfiguracje({ COGNIFLY_KONFIGURACJA: konf, COGNIFLY_KATALOG: kat }).adresTozsamosci).toBe('https://id.example.com');
+    expect((await cli([...baza, '--adres-tozsamosci', 'nie adres'], bezEnv)).json).toEqual({ stan: 'BLAD', kod: 'ZLE_PARAMETRY_KONFIGURACJI' });
+    expect(JSON.parse(readFileSync(p, 'utf8')).adresTozsamosci).toBe('https://id.example.com');
+    expect((await cli(baza, bezEnv)).json.stan).toBe('KONFIGURACJA_ZAPISANA');
+    expect(JSON.parse(readFileSync(p, 'utf8'))).not.toHaveProperty('adresTozsamosci');
   });
   it('konfiguruj bez wymaganych lub ze złymi parametrami -> BLAD, nic nie zapisane', async () => {
     for (const a of [['konfiguruj'], ['konfiguruj', '--adres-api', 'x', '--klient', 'k'], ['konfiguruj', '--adres-api', 'https://a', '--klient', 'k', '--region', 'zly region']]) {
@@ -561,5 +573,153 @@ describe('polecenia', () => {
   it('nieznane polecenie -> BLAD, JSON na stdout', async () => {
     const r = await cli(['cos']);
     expect(r.json.stan).toBe('BLAD');
+  });
+});
+
+describe('dostęp (Platforma Identity)', () => {
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const jwt = (sub, n = 1) => `${b64({ alg: 'none' })}.${b64({ sub, n })}.podpis`;
+  const A1 = jwt('sub-ani'), A2 = jwt('sub-ani', 2);
+  const dostepPlik = () => join(kat, 'dostep.json');
+  const KOMUNIKAT = 'Brak dostępu do CogniFly: licencja firmy na CogniFly wygasła.';
+  let ident, identHandler, envT;
+  beforeEach(async () => {
+    mkdirSync(kat, { mode: 0o700 });
+    zapiszSesje(Date.now() + 3_600_000, A1);
+    identHandler = () => ({ status: 200, body: { active: true, sub: 'sub-ani' } });
+    ident = await serwer((r) => identHandler(r));
+    envT = { COGNIFLY_ADRES_TOZSAMOSCI: ident.url };
+    apiHandler = () => ({ status: 200, body: { zadania: [] } });
+  });
+  afterEach(() => ident.s.close());
+
+  it('dostep_wysyla_token_dostepu_i_produkt', async () => {
+    expect((await cli(['skrzynka'], envT)).json).toEqual({ stan: 'OK', zadania: [] });
+    expect(ident.log).toHaveLength(1);
+    expect(ident.log[0]).toMatchObject({ method: 'GET', url: '/access?product=cognifly' });
+    expect(ident.log[0].headers.authorization).toBe(`Bearer ${A1}`);
+    expect(statSync(dostepPlik()).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(readFileSync(dostepPlik(), 'utf8'))).toMatchObject({ sub: 'sub-ani', aktywny: true });
+  });
+
+  it('dostep_odswieza_bliski_wygasniecia_token_przed_sprawdzeniem', async () => {
+    zapiszSesje(Date.now() + 10_000, A1);
+    cogHandler = () => ({ status: 200, body: { AuthenticationResult: { AccessToken: A2, IdToken: 'ID2', ExpiresIn: 3600 } } });
+    expect((await cli(['skrzynka'], envT)).json.stan).toBe('OK');
+    expect(cog.log).toHaveLength(1);
+    expect(ident.log[0].headers.authorization).toBe(`Bearer ${A2}`);
+    expect(api.log[0].headers.authorization).toBe(`Bearer ${A2}`);
+  });
+
+  it('dostep_w_pamieci_przez_5_minut (tylko dla tego samego sub)', async () => {
+    await cli(['skrzynka'], envT);
+    await cli(['podsumowanie'], envT);
+    expect(ident.log).toHaveLength(1);
+    const zapis = JSON.parse(readFileSync(dostepPlik(), 'utf8'));
+    writeFileSync(dostepPlik(), JSON.stringify({ ...zapis, czas: Date.now() - 301_000 }), { mode: 0o600 });
+    await cli(['skrzynka'], envT);
+    expect(ident.log).toHaveLength(2);
+    zapiszSesje(Date.now() + 3_600_000, jwt('sub-innej'));
+    await cli(['skrzynka'], envT);
+    expect(ident.log).toHaveLength(3);
+    expect(JSON.parse(readFileSync(dostepPlik(), 'utf8')).sub).toBe('sub-innej');
+  });
+
+  it('brak_adresu_tozsamosci_nie_sprawdza', async () => {
+    expect((await cli(['skrzynka'])).json.stan).toBe('OK');
+    expect(ident.log).toHaveLength(0);
+    expect(existsSync(dostepPlik())).toBe(false);
+  });
+
+  it('blad_sieci_nie_blokuje (ani odpowiedź inna niż 200 / zła treść; bez zapisu)', async () => {
+    expect((await cli(['skrzynka'], { COGNIFLY_ADRES_TOZSAMOSCI: 'http://127.0.0.1:1' })).json.stan).toBe('OK');
+    for (const odp of [{ status: 500, body: {} }, { status: 401, body: { active: false, reason: 'NOT_MEMBER' } }, { status: 200, body: { active: 'nie' } }]) {
+      identHandler = () => odp;
+      expect((await cli(['skrzynka'], envT)).json.stan).toBe('OK');
+    }
+    expect(existsSync(dostepPlik())).toBe(false);
+    expect(existsSync(sesjaPlik())).toBe(true);
+  });
+
+  it('licencja_wygasla_blokuje_skrzynke (sesja zostaje, API nie wołane)', async () => {
+    identHandler = () => ({ status: 200, body: { active: false, reason: 'LICENCE_EXPIRED' } });
+    expect((await cli(['skrzynka'], envT)).json).toEqual({ stan: 'BRAK_DOSTEPU_FIRMY', powod: 'LICENCE_EXPIRED', komunikat: KOMUNIKAT });
+    expect(api.log).toHaveLength(0);
+    expect(existsSync(sesjaPlik())).toBe(true);
+    expect(JSON.parse(readFileSync(dostepPlik(), 'utf8'))).toMatchObject({ sub: 'sub-ani', aktywny: false, powod: 'LICENCE_EXPIRED' });
+    expect((await cli(['biore', 'zad_0123456789ab'], envT)).json.stan).toBe('BRAK_DOSTEPU_FIRMY');
+    expect(ident.log).toHaveLength(1);
+    expect(api.log).toHaveLength(0);
+  });
+
+  it('nieznany lub dziwny powód -> tekst „odmowa dostępu (<kod>)”', async () => {
+    identHandler = () => ({ status: 200, body: { active: false, reason: 'NOWY_POWOD' } });
+    expect((await cli(['skrzynka'], envT)).json.komunikat).toBe('Brak dostępu do CogniFly: odmowa dostępu (NOWY_POWOD).');
+    rmSync(dostepPlik());
+    identHandler = () => ({ status: 200, body: { active: false, reason: 'zły <b>' } });
+    expect((await cli(['skrzynka'], envT)).json).toMatchObject({ powod: 'UNKNOWN', komunikat: 'Brak dostępu do CogniFly: odmowa dostępu (UNKNOWN).' });
+  });
+
+  it('not_member_usuwa_sesje (także TOKEN_REVOKED i ACCOUNT_DISABLED); bez pamięci odmowy', async () => {
+    for (const [reason, tekst] of [['NOT_MEMBER', 'nie należysz już do firmy.'], ['TOKEN_REVOKED', 'sesja wygasła lub została unieważniona — zaloguj się ponownie.'], ['ACCOUNT_DISABLED', 'konto jest wyłączone.']]) {
+      zapiszSesje(Date.now() + 3_600_000, A1);
+      identHandler = () => ({ status: 200, body: { active: false, reason } });
+      expect((await cli(['skrzynka'], envT)).json).toEqual({ stan: 'BRAK_DOSTEPU_FIRMY', powod: reason, komunikat: `Brak dostępu do CogniFly: ${tekst}` });
+      expect(existsSync(sesjaPlik())).toBe(false);
+      expect(existsSync(dostepPlik())).toBe(false);
+    }
+    expect(api.log).toHaveLength(0);
+  });
+
+  it('polecenia spoza pracy (osoby, wyloguj) nie pytają Tożsamości; wyloguj czyści dostep.json', async () => {
+    apiHandler = () => ({ status: 200, body: { osoby: [] } });
+    expect((await cli(['osoby'], envT)).json.stan).toBe('OK');
+    expect(ident.log).toHaveLength(0);
+    await cli(['skrzynka'], envT);
+    expect(existsSync(dostepPlik())).toBe(true);
+    await cli(['wyloguj'], envT);
+    expect(existsSync(dostepPlik())).toBe(false);
+  });
+
+  it('403 BRAK_LICENCJI z API przy aktywnym dostępie -> odświeżenie tokenu i jedno ponowienie', async () => {
+    cogHandler = () => ({ status: 200, body: { AuthenticationResult: { AccessToken: A2, ExpiresIn: 3600 } } });
+    apiHandler = (r) => (r.headers.authorization === `Bearer ${A1}` ? { status: 403, body: { kod: 'BRAK_LICENCJI' } } : { status: 200, body: { zadania: [] } });
+    await cli(['skrzynka'], envT); // ident 1 (przed), API 403, ident 2 (po unieważnieniu), refresh, API 200
+    expect(ident.log).toHaveLength(2);
+    expect(cog.log).toHaveLength(1);
+    expect(api.log.map((x) => x.headers.authorization)).toEqual([`Bearer ${A1}`, `Bearer ${A2}`]);
+  });
+
+  it('403 LICENCJA_WYGASLA mimo odświeżenia -> BRAK_DOSTEPU_FIRMY, dostep.json unieważniony', async () => {
+    cogHandler = () => ({ status: 200, body: { AuthenticationResult: { AccessToken: A2, ExpiresIn: 3600 } } });
+    apiHandler = () => ({ status: 403, body: { kod: 'LICENCJA_WYGASLA' } });
+    expect((await cli(['skrzynka'], envT)).json).toEqual({ stan: 'BRAK_DOSTEPU_FIRMY', powod: 'LICENCE_EXPIRED', komunikat: KOMUNIKAT });
+    expect(api.log).toHaveLength(2);
+    expect(cog.log).toHaveLength(1);
+    expect(existsSync(dostepPlik())).toBe(false);
+    expect(existsSync(sesjaPlik())).toBe(true);
+    // bez adresu Tożsamości: też jedno odświeżenie i ponowienie
+    api.log.length = 0; cog.log.length = 0;
+    zapiszSesje(Date.now() + 3_600_000, A1);
+    apiHandler = () => ({ status: 403, body: { kod: 'BRAK_LICENCJI' } });
+    expect((await cli(['osoby'])).json).toMatchObject({ stan: 'BRAK_DOSTEPU_FIRMY', powod: 'NO_LICENCE', komunikat: 'Brak dostępu do CogniFly: firma nie ma licencji na CogniFly.' });
+    expect(api.log).toHaveLength(2);
+    expect(cog.log).toHaveLength(1);
+  });
+
+  it('403 BRAK_LICENCJI, a Tożsamość po unieważnieniu mówi „nieaktywny” -> powód z Tożsamości, bez odświeżania', async () => {
+    let n = 0;
+    identHandler = () => (++n === 1 ? { status: 200, body: { active: true } } : { status: 200, body: { active: false, reason: 'ORG_SUSPENDED' } });
+    apiHandler = () => ({ status: 403, body: { kod: 'BRAK_LICENCJI' } });
+    expect((await cli(['skrzynka'], envT)).json).toEqual({ stan: 'BRAK_DOSTEPU_FIRMY', powod: 'ORG_SUSPENDED', komunikat: 'Brak dostępu do CogniFly: firma jest zawieszona.' });
+    expect(cog.log).toHaveLength(0);
+    expect(api.log).toHaveLength(1);
+  });
+
+  it('zwykłe 403 bez kodu licencji -> BRAK_DOSTEPU jak dotąd, bez ponawiania', async () => {
+    apiHandler = () => ({ status: 403, body: {} });
+    expect((await cli(['skrzynka'], envT)).json).toEqual({ stan: 'BRAK_DOSTEPU' });
+    expect(api.log).toHaveLength(1);
+    expect(ident.log).toHaveLength(1);
   });
 });

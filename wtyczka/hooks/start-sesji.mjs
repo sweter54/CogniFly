@@ -31,14 +31,26 @@ function pobierz() {
   });
 }
 
+/**
+ * Text to show for the CLI answer.
+ *
+ * Call: `tekstZOdpowiedzi(JSON.parse(surowe))`.
+ * Expects: the parsed answer of `cognifly podsumowanie`.
+ * Output: the summary line (`OK`), the refusal reason when access
+ * to CogniFly is inactive (`BRAK_DOSTEPU_FIRMY`), else null.
+ */
+function tekstZOdpowiedzi(j) {
+  if (j?.stan === 'OK' && typeof j.linia === 'string') return j.linia;
+  if (j?.stan === 'BRAK_DOSTEPU_FIRMY' && typeof j.komunikat === 'string') return j.komunikat;
+  return null;
+}
+
 try {
   const surowe = await pobierz();
   if (surowe) {
-    const j = JSON.parse(surowe);
-    if (j && j.stan === 'OK' && typeof j.linia === 'string') {
-      const linia = czysc(j.linia);
-      if (linia) process.stdout.write(PREFIKS + linia + '\n');
-    }
+    const tekst = tekstZOdpowiedzi(JSON.parse(surowe));
+    const linia = tekst === null ? '' : czysc(tekst);
+    if (linia) process.stdout.write(PREFIKS + linia + '\n');
   }
 } catch {}
 process.exit(0);

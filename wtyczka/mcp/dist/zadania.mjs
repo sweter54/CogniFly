@@ -21682,6 +21682,75 @@ async function odswiez({ kat, konf, endpoint, sesja, signal }) {
 // cli/lib/api.mjs
 import { readFileSync as readFileSync2 } from "node:fs";
 import { fileURLToPath } from "node:url";
+
+// cli/lib/dostep.mjs
+var PLIK = "dostep.json";
+var WAZNOSC_MS = 3e5;
+var POWODY_WYLOGOWANIA = ["TOKEN_REVOKED", "ACCOUNT_DISABLED", "NOT_MEMBER"];
+var KODY_LICENCJI = { BRAK_LICENCJI: "NO_LICENCE", LICENCJA_WYGASLA: "LICENCE_EXPIRED" };
+var WZOR_POWODU = /^[A-Z][A-Z0-9_]{0,63}$/;
+var PREFIKS = "Brak dost\u0119pu do CogniFly: ";
+var TEKSTY = {
+  TOKEN_REVOKED: "sesja wygas\u0142a lub zosta\u0142a uniewa\u017Cniona \u2014 zaloguj si\u0119 ponownie.",
+  ACCOUNT_DISABLED: "konto jest wy\u0142\u0105czone.",
+  NOT_MEMBER: "nie nale\u017Cysz ju\u017C do firmy.",
+  ORG_SUSPENDED: "firma jest zawieszona.",
+  NO_LICENCE: "firma nie ma licencji na CogniFly.",
+  LICENCE_EXPIRED: "licencja firmy na CogniFly wygas\u0142a."
+};
+function komunikatDostepu(powod) {
+  return PREFIKS + (Object.hasOwn(TEKSTY, powod) ? TEKSTY[powod] : `odmowa dost\u0119pu (${powod}).`);
+}
+function subZTokenu(token) {
+  try {
+    const sub = JSON.parse(Buffer.from(String(token).split(".")[1], "base64url").toString("utf8")).sub;
+    return typeof sub === "string" && sub ? sub : null;
+  } catch {
+    return null;
+  }
+}
+function zPamieci(kat, sub) {
+  const z = czytaj(kat, PLIK);
+  const wiek = Date.now() - Number(z?.czas);
+  if (!sub || z?.sub !== sub || typeof z.aktywny !== "boolean" || !(wiek >= 0 && wiek < WAZNOSC_MS)) return null;
+  if (z.aktywny) return { aktywny: true };
+  return { aktywny: false, powod: WZOR_POWODU.test(z.powod ?? "") ? z.powod : "UNKNOWN" };
+}
+function zapomnijDostep(kat) {
+  usun(kat, PLIK);
+}
+async function sprawdzDostep({ kat, konf, sesja, signal }) {
+  const adres = String(konf?.adresTozsamosci ?? "").replace(/\/+$/, "");
+  if (!adres) return { aktywny: true };
+  const sub = subZTokenu(sesja.accessToken);
+  const pamiec = zPamieci(kat, sub);
+  if (pamiec) return pamiec;
+  let json;
+  try {
+    const r = await fetch(`${adres}/access?product=cognifly`, { headers: { Authorization: `Bearer ${sesja.accessToken}` }, signal });
+    if (r.status !== 200) return { aktywny: true };
+    json = await r.json();
+  } catch {
+    return { aktywny: true };
+  }
+  if (typeof json?.active !== "boolean") return { aktywny: true };
+  const wynik = json.active ? { aktywny: true } : { aktywny: false, powod: WZOR_POWODU.test(json.reason ?? "") ? json.reason : "UNKNOWN" };
+  if (sub) zapisz(kat, PLIK, { sub, ...wynik, czas: Date.now() });
+  return wynik;
+}
+function odmowaDostepu(kat, powod) {
+  if (POWODY_WYLOGOWANIA.includes(powod)) {
+    usun(kat, "sesja.json");
+    zapomnijDostep(kat);
+  }
+  return new Stan("BRAK_DOSTEPU_FIRMY", { powod, komunikat: komunikatDostepu(powod) });
+}
+async function wymagajDostepu(ctx, sesja) {
+  const d = await sprawdzDostep({ kat: ctx.kat, konf: ctx.konf, sesja, signal: ctx.signal });
+  if (!d.aktywny) throw odmowaDostepu(ctx.kat, d.powod);
+}
+
+// cli/lib/api.mjs
 var ID_ZADANIA = /^zad_([0-9a-f]{12}|[0-9a-f]{24})$/;
 var DOMYSLNA_KONF = fileURLToPath(new URL("../../konfiguracja.json", import.meta.url));
 function wczytajKonfiguracje(env = process.env) {
@@ -21691,8 +21760,8 @@ function wczytajKonfiguracje(env = process.env) {
   } catch {
   }
   const pole = (v) => typeof v === "string" ? v.trim() : "";
-  const wtyczki = { adresApi: pole(k.adresApi), region: pole(k.region), klientCognito: pole(k.klientCognito), firmaDomyslna: pole(k.firmaDomyslna) };
-  const zEnv = { adresApi: pole(env.COGNIFLY_ADRES_API), region: pole(env.COGNIFLY_REGION), klientCognito: pole(env.COGNIFLY_KLIENT), firmaDomyslna: pole(env.COGNIFLY_FIRMA) };
+  const wtyczki = { adresApi: pole(k.adresApi), region: pole(k.region), klientCognito: pole(k.klientCognito), firmaDomyslna: pole(k.firmaDomyslna), adresTozsamosci: pole(k.adresTozsamosci) };
+  const zEnv = { adresApi: pole(env.COGNIFLY_ADRES_API), region: pole(env.COGNIFLY_REGION), klientCognito: pole(env.COGNIFLY_KLIENT), firmaDomyslna: pole(env.COGNIFLY_FIRMA), adresTozsamosci: pole(env.COGNIFLY_ADRES_TOZSAMOSCI) };
   let u = {};
   if (Object.keys(wtyczki).some((n) => !zEnv[n] && !wtyczki[n])) {
     const z = czytaj(katalog(env), "konfiguracja.json");
@@ -21702,7 +21771,8 @@ function wczytajKonfiguracje(env = process.env) {
     adresApi: pole(env.COGNIFLY_ADRES_API) || wtyczki.adresApi || pole(u.adresApi),
     region: pole(env.COGNIFLY_REGION) || wtyczki.region || pole(u.region) || "eu-central-1",
     klientCognito: pole(env.COGNIFLY_KLIENT) || wtyczki.klientCognito || pole(u.klientCognito),
-    firmaDomyslna: pole(env.COGNIFLY_FIRMA) || wtyczki.firmaDomyslna || pole(u.firmaDomyslna)
+    firmaDomyslna: pole(env.COGNIFLY_FIRMA) || wtyczki.firmaDomyslna || pole(u.firmaDomyslna),
+    adresTozsamosci: zEnv.adresTozsamosci || wtyczki.adresTozsamosci || pole(u.adresTozsamosci)
   };
 }
 async function wywolaj(url, metoda, sesja, firma, body, signal) {
@@ -21723,28 +21793,44 @@ async function wywolaj(url, metoda, sesja, firma, body, signal) {
   }
   return { status: r.status, json };
 }
-async function zSesja(ctx, metoda, sciezka, body) {
-  const sesja0 = czytaj(ctx.kat, "sesja.json");
-  if (!sesja0 || !sesja0.accessToken || !sesja0.refreshToken) throw new Stan("WYMAGA_LOGOWANIA");
-  if (sesja0.klient !== ctx.konf.klientCognito) {
+async function sesjaAktualna(ctx) {
+  const sesja = czytaj(ctx.kat, "sesja.json");
+  if (!sesja || !sesja.accessToken || !sesja.refreshToken) throw new Stan("WYMAGA_LOGOWANIA");
+  if (sesja.klient !== ctx.konf.klientCognito) {
     usun(ctx.kat, "sesja.json");
     throw new Stan("WYMAGA_LOGOWANIA");
   }
-  let sesja = sesja0, odswiezono = false;
-  const dane = { kat: ctx.kat, konf: ctx.konf, endpoint: ctx.endpoint, signal: ctx.signal };
-  if (!(sesja.wygasa - Date.now() > 6e4)) {
-    sesja = await odswiez({ ...dane, sesja });
-    odswiezono = true;
+  if (sesja.wygasa - Date.now() > 6e4) return { sesja, odswiezono: false };
+  return { sesja: await odswiez({ ...daneOdswiezenia(ctx), sesja }), odswiezono: true };
+}
+var daneOdswiezenia = (ctx) => ({ kat: ctx.kat, konf: ctx.konf, endpoint: ctx.endpoint, signal: ctx.signal });
+var odmowaLicencji = (r) => r.status === 403 && Object.hasOwn(KODY_LICENCJI, r.json?.kod ?? "");
+async function poOdmowieLicencji(ctx, wyslij, sesja, r, odswiezono) {
+  zapomnijDostep(ctx.kat);
+  await wymagajDostepu(ctx, sesja);
+  if (odswiezono) throw odmowaDostepu(ctx.kat, KODY_LICENCJI[r.json.kod]);
+  const r2 = await wyslij(await odswiez({ ...daneOdswiezenia(ctx), sesja }));
+  if (r2.status === 401) throw new Stan("WYMAGA_LOGOWANIA");
+  if (odmowaLicencji(r2)) {
+    zapomnijDostep(ctx.kat);
+    throw odmowaDostepu(ctx.kat, KODY_LICENCJI[r2.json.kod]);
   }
+  return r2;
+}
+async function zSesja(ctx, metoda, sciezka, body) {
+  let { sesja, odswiezono } = await sesjaAktualna(ctx);
   const url = ctx.konf.adresApi.replace(/\/+$/, "") + sciezka;
   const firma = ctx.opcje.firma || ctx.konf.firmaDomyslna;
-  let r = await wywolaj(url, metoda, sesja, firma, body, ctx.signal);
+  const wyslij = (s) => wywolaj(url, metoda, s, firma, body, ctx.signal);
+  let r = await wyslij(sesja);
   if (r.status === 401) {
     if (odswiezono) throw new Stan("WYMAGA_LOGOWANIA");
-    sesja = await odswiez({ ...dane, sesja });
-    r = await wywolaj(url, metoda, sesja, firma, body, ctx.signal);
+    sesja = await odswiez({ ...daneOdswiezenia(ctx), sesja });
+    odswiezono = true;
+    r = await wyslij(sesja);
     if (r.status === 401) throw new Stan("WYMAGA_LOGOWANIA");
   }
+  if (odmowaLicencji(r)) return poOdmowieLicencji(ctx, wyslij, sesja, r, odswiezono);
   return r;
 }
 function kontekst(env, opcje, signal) {
@@ -21772,7 +21858,8 @@ var KOMUNIKATY = {
 function wynikBledu(e) {
   const stan = e instanceof Stan ? e.stan : "NIEOCZEKIWANY";
   const kod2 = e instanceof Stan && e.dane?.kod ? e.dane.kod : stan;
-  const tekst = KOMUNIKATY[stan] ?? `B\u0142\u0105d CogniFly (kod: ${kod2}).`;
+  const komunikat = stan === "BRAK_DOSTEPU_FIRMY" ? e.dane?.komunikat : void 0;
+  const tekst = komunikat ?? KOMUNIKATY[stan] ?? `B\u0142\u0105d CogniFly (kod: ${kod2}).`;
   return { content: [{ type: "text", text: tekst }], isError: true };
 }
 function odmowa(r) {

@@ -137,6 +137,16 @@ describe('moje_zadania', () => {
     expect(api.log.find((r) => r.url === '/skrzynka').headers['x-cognifly-firma']).toBe('firma1');
   });
 
+  it('403 BRAK_LICENCJI z API i nieaktywny dostęp: tekst powodu z Tożsamości', async () => {
+    zalogowany();
+    skrzynka();
+    trasy['/skrzynka'] = () => ({ status: 403, body: { kod: 'BRAK_LICENCJI' } });
+    trasy['/access?product=cognifly'] = () => ({ status: 200, body: { active: false, reason: 'NO_LICENCE' } });
+    const w = await wywolaj('moje_zadania', {}, { ...env, COGNIFLY_ADRES_TOZSAMOSCI: api.url });
+    expect(w.isError).toBe(true);
+    expect(tekst(w)).toBe('Brak dostępu do CogniFly: firma nie ma licencji na CogniFly.');
+  });
+
   it('nieznana osoba (brak /ja): nikt nie może blokować', async () => {
     zalogowany();
     skrzynka();
