@@ -13,8 +13,8 @@ export const ACCESS_EVERY_MS = 300_000;
 /** Reasons that end the session (login screen with the reason). */
 export const LOGOUT_REASONS: readonly string[] = ['TOKEN_REVOKED', 'ACCOUNT_DISABLED', 'NOT_MEMBER'];
 
-/** API codes of a missing or expired company licence (403). */
-const LICENCE_ERRORS: readonly string[] = ['BRAK_LICENCJI', 'LICENCJA_WYGASLA'];
+/** API codes of a missing or expired licence (403) → their reason. */
+const LICENCE_REASONS: Record<string, string> = { BRAK_LICENCJI: 'NO_LICENCE', LICENCJA_WYGASLA: 'LICENCE_EXPIRED' };
 
 /** Reason used when Identity sends none or an odd one. */
 const UNKNOWN_REASON = 'UNKNOWN';
@@ -89,6 +89,18 @@ export function accessMessage(reason: string): string {
  * Expects: anything thrown.
  * Output: true for `ApiError` `BRAK_LICENCJI` / `LICENCJA_WYGASLA`.
  */
-export function isLicenceError(e: unknown): boolean {
-  return e instanceof ApiError && LICENCE_ERRORS.includes(e.code);
+export function isLicenceError(e: unknown): e is ApiError {
+  return e instanceof ApiError && Object.hasOwn(LICENCE_REASONS, e.code);
+}
+
+/**
+ * Polish text of an API licence code.
+ *
+ * Call: `licenceMessage('BRAK_LICENCJI')`.
+ * Expects: `BRAK_LICENCJI` or `LICENCJA_WYGASLA`.
+ * Output: the text of `NO_LICENCE` / `LICENCE_EXPIRED`; another
+ * code gets the "odmowa dostępu (<code>)" text.
+ */
+export function licenceMessage(code: string): string {
+  return accessMessage(LICENCE_REASONS[code] ?? code);
 }

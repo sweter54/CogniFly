@@ -3,7 +3,7 @@
 // as ports, so the whole flow is unit-tested without Tauri.
 import { TASK_ID_PATTERN, THREAD_PATTERN, type Task, type UserSettableState } from '@cognifly/wspolne/api';
 import type { InboxView, Methods, Screen } from '../windows/protocol.js';
-import { accessMessage, ACCESS_EVERY_MS, checkAccess, isLicenceError, LOGOUT_REASONS, type Access } from './access.js';
+import { accessMessage, ACCESS_EVERY_MS, checkAccess, isLicenceError, licenceMessage, LOGOUT_REASONS, type Access } from './access.js';
 import { ApiClient, type Membership } from './api.js';
 import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, type PendingLogin } from './cognito.js';
 import { isSafeFolder, loadConfig, saveChoices, type AppConfig, type UserChoices } from './config.js';
@@ -145,10 +145,12 @@ export class Controller {
    */
   checkAccessIfDue(force = false): Promise<void> {
     if (!this.view.loggedIn || (!force && !this.accessDue())) return Promise.resolve();
-    this.accessCheck ??= this.runAccessCheck().finally(() => {
-      this.accessCheck = null;
+    if (this.accessCheck) return this.accessCheck;
+    const run: Promise<void> = this.runAccessCheck().finally(() => {
+      if (this.accessCheck === run) this.accessCheck = null; // a new session may run its own
     });
-    return this.accessCheck;
+    this.accessCheck = run;
+    return run;
   }
 
   /**
@@ -157,14 +159,15 @@ export class Controller {
    * Call: `await controller.logout()` from the tray menu.
    * Expects: nothing.
    * Output: none; view becomes logged out (no stop reason) and the
-   * daemon stops; the next login checks access again.
+   * daemon stops; the next login checks access again (a check still
+   * in flight is not shared with it).
    */
   async logout(): Promise<void> {
     await this.session.logout();
     clearSeen(this.ports.store);
     this.pending = null;
     this.companies = null;
-    this.accessCheckedAt = null;
+    this.forgetAccess();
     this.update({ loggedIn: false, offline: false, email: null, osoba: null, tasks: [], updatedAt: null, blocked: null });
     await this.stopFiles();
   }
@@ -326,21 +329,61 @@ export class Controller {
    *
    * Call: `await this.fetchInbox(epoch)` from `runPoll`.
    * Expects: the epoch the poll started with.
-   * Output: none (never throws); failures go to `pollFailed`.
+   * Output: none (never throws); a licence refusal is retried once
+   * (`withLicenceRetry`); failures go to `pollFailed`.
    */
   private async fetchInbox(epoch: number): Promise<void> {
     try {
-      if (!this.companies) await this.loadIdentity();
-      const tasks = await this.api().inbox();
+      const tasks = await this.withLicenceRetry(() => this.readInbox());
       if (!this.isCurrent(epoch)) return; // logged out meanwhile
       const fresh = await this.announce(tasks);
       this.ports.log?.(`poll ok: tasks=${tasks.length} waiting=${waitingTasks(tasks, this.view.osoba).length} new=${fresh}`);
       this.update({ offline: false, tasks, updatedAt: new Date(this.time()).toISOString() });
     } catch (e) {
-      await this.pollFailed(e);
+      await this.pollFailed(e, epoch);
     }
   }
 
+  /**
+   * Reads the inbox, loading who the user is first when needed.
+   *
+   * Call: `await this.readInbox()` from `fetchInbox`.
+   * Expects: a session.
+   * Output: the tasks.
+   * Throws: errors of `loadIdentity` and `ApiClient.inbox`.
+   */
+  private async readInbox(): Promise<Task[]> {
+    if (!this.companies) await this.loadIdentity();
+    return this.api().inbox();
+  }
+
+  /**
+   * Forgets access state of the ending session.
+   *
+   * Call: `this.forgetAccess()` on logout, login and revocation.
+   * Expects: nothing.
+   * Output: none; the next poll checks access and does not share
+   * a check started for the old session.
+   */
+  private forgetAccess(): void {
+    this.accessCheckedAt = null;
+    this.accessCheck = null;
+  }
+
+  /**
+   * Tells whether a `LoginRequiredError` really ends the session.
+   *
+   * Call: `await this.sessionEnded(epoch)` in catch blocks.
+   * Expects: the epoch read before the failed call.
+   * Output: true when the session is gone (revoked refresh) or the
+   * failure belongs to the live session; false for a stale failure
+   * of an earlier login while a new session exists.
+   */
+  private async sessionEnded(epoch: number): Promise<boolean> {
+    if (!this.view.loggedIn) return false;
+    if (this.session.epoch() === epoch) return true;
+    return !(await this.session.current().catch(() => null));
+  }
   /**
    * Tells whether an access check is due.
    *
@@ -370,8 +413,7 @@ export class Controller {
       access = await checkAccess(this.ports.fetch, this.config.identityUrl, await this.session.accessToken());
     } catch (e) {
       this.ports.log?.(`access check failed: ${errorCode(e)}`);
-      // A revoked refresh bumped the epoch already: end it like a poll.
-      if (e instanceof LoginRequiredError && this.view.loggedIn) await this.sessionRevoked();
+      if (e instanceof LoginRequiredError && (await this.sessionEnded(epoch))) await this.sessionRevoked();
       return;
     }
     if (!this.isCurrent(epoch)) return;
@@ -384,19 +426,45 @@ export class Controller {
    *
    * Call: `await this.applyAccess(access)` after a check.
    * Expects: a fresh answer for the live session.
-   * Output: none. Active clears `blocked`; a reason of
+   * Output: none. Active clears `blocked` (after refreshing the
+   * token, so the API sees the new licence claim); a reason of
    * `LOGOUT_REASONS` logs out and shows it on the login screen; any
    * other reason stops work with its Polish text in `blocked`.
    */
   private async applyAccess(access: Access): Promise<void> {
     if (access.active) {
-      if (this.view.blocked) this.update({ blocked: null });
+      if (this.view.blocked) await this.unblock();
       return;
     }
     this.ports.log?.(`access inactive: ${access.reason}`);
     const message = accessMessage(access.reason);
     if (LOGOUT_REASONS.includes(access.reason)) await this.logoutFor(message);
-    else this.update({ blocked: message });
+    else this.block(message);
+  }
+
+  /**
+   * Resumes work after access came back.
+   *
+   * Call: `await this.unblock()` from `applyAccess`.
+   * Expects: a blocked, logged-in view.
+   * Output: none; the token is refreshed first (a failure is only
+   * logged: the API call retries it), then `blocked` is cleared.
+   */
+  private async unblock(): Promise<void> {
+    await this.session.forceRefresh().catch((e: unknown) => this.ports.log?.(`refresh after unblock: ${errorCode(e)}`));
+    this.update({ blocked: null });
+  }
+
+  /**
+   * Stops work with a reason.
+   *
+   * Call: `this.block(message)`.
+   * Expects: the Polish reason.
+   * Output: none; `blocked` set and `offline` cleared (the reason
+   * replaces the connection note).
+   */
+  private block(message: string): void {
+    this.update({ blocked: message, offline: false });
   }
 
   /**
@@ -431,16 +499,39 @@ export class Controller {
    * Expects: an action that changes or opens a task.
    * Output: the action's result.
    * Throws: `AppError('BLOCKED')` while work is stopped (nothing is
-   * sent); the action's errors, after a forced access check when
-   * the API refused for lack of a licence (the banner then shows).
+   * sent); otherwise the errors of `withLicenceRetry`.
    */
   private async guarded<T>(op: () => Promise<T>): Promise<T> {
     if (this.isBlocked()) throw new AppError('BLOCKED');
+    return this.withLicenceRetry(op);
+  }
+
+  /**
+   * Runs an API call; a licence refusal gets one more chance.
+   *
+   * Call: `await this.withLicenceRetry(() => api.inbox())`.
+   * Expects: a call that may be repeated.
+   * Output: the call's result.
+   * Throws: the call's errors. On `BRAK_LICENCJI` /
+   * `LICENCJA_WYGASLA` access is checked first (it may stop work or
+   * log out: the refusal is rethrown); when Identity says active,
+   * the token claim is stale, so it is refreshed and the call
+   * retried once; a second refusal stops work with its text.
+   */
+  private async withLicenceRetry<T>(op: () => Promise<T>): Promise<T> {
     try {
       return await op();
     } catch (e) {
-      if (isLicenceError(e)) await this.checkAccessIfDue(true);
-      throw e;
+      if (!isLicenceError(e)) throw e;
+      await this.checkAccessIfDue(true);
+      if (!this.view.loggedIn || this.view.blocked) throw e;
+    }
+    await this.session.forceRefresh();
+    try {
+      return await op();
+    } catch (again) {
+      if (isLicenceError(again)) this.block(licenceMessage(again.code));
+      throw again;
     }
   }
 
@@ -956,16 +1047,18 @@ export class Controller {
    * Handles a failed poll.
    *
    * Call: from `fetchInbox`'s catch.
-   * Expects: the thrown value.
-   * Output: none. Login required → `sessionRevoked`; a licence
-   * refusal of the API → forced access check (it may stop work);
-   * anything else, or a check that does not stop work → `offline`,
-   * tasks kept.
+   * Expects: the thrown value and the epoch of the poll.
+   * Output: none. Login required → `sessionRevoked` when the
+   * session really ended; stopped work (a licence refusal already
+   * handled by `withLicenceRetry`) keeps its reason; anything else
+   * (network, server error) → `offline`, tasks kept.
    */
-  private async pollFailed(e: unknown): Promise<void> {
+  private async pollFailed(e: unknown, epoch: number): Promise<void> {
     this.ports.log?.(`poll failed: ${errorCode(e)}`);
-    if (e instanceof LoginRequiredError) return this.sessionRevoked();
-    if (isLicenceError(e)) await this.checkAccessIfDue(true);
+    if (e instanceof LoginRequiredError) {
+      if (await this.sessionEnded(epoch)) await this.sessionRevoked();
+      return;
+    }
     if (this.view.loggedIn && !this.view.blocked) this.update({ offline: true });
   }
 
@@ -979,7 +1072,7 @@ export class Controller {
    */
   private async sessionRevoked(): Promise<void> {
     clearSeen(this.ports.store);
-    this.accessCheckedAt = null;
+    this.forgetAccess();
     this.update({ loggedIn: false, offline: false, tasks: [], blocked: null });
     await this.stopFiles();
     await this.ports.showScreen('login');
@@ -1077,7 +1170,7 @@ export class Controller {
       throw e;
     }
     this.pending = null;
-    this.accessCheckedAt = null;
+    this.forgetAccess();
     this.update({ loggedIn: true, offline: false, email: pending.email, blocked: null });
     void this.poll();
     return { email: pending.email };
