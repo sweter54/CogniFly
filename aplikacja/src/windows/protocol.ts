@@ -28,6 +28,12 @@ export interface InboxView {
   workFolder: string;
   /** Heartwood state, last status and counts (files screen, tray). */
   files: FilesView;
+  /**
+   * Why work is stopped (Polish, from `accessMessage`), else `null`.
+   * Logged in: access is inactive, tasks are read-only (banner).
+   * Logged out: why the session was ended (login screen).
+   */
+  blocked: string | null;
 }
 
 /** Methods served by the background window: params → result. */

@@ -114,7 +114,11 @@ export function oneLine(text: string): string {
 }
 
 /** What the tray title reflects. */
-export interface TrayState { loggedIn: boolean; offline: boolean; waiting: number; conflicts: number; unsent: number }
+export interface TrayState {
+  loggedIn: boolean; offline: boolean; waiting: number; conflicts: number; unsent: number;
+  /** Why work is stopped (`InboxView.blocked`). */
+  blocked?: string | null;
+}
 
 /**
  * Text shown next to the menu-bar icon (D12).
@@ -139,14 +143,16 @@ export function trayTitle(state: TrayState): string {
  *
  * Call: `trayTooltip(state)` on every render.
  * Expects: the same state as `trayTitle`.
- * Output: `CogniFly: ` plus, joined by ` · `, the offline note and
- * the counts that apply, e.g. `CogniFly: 3 zadania czekają ·
- * 1 konflikt pliku · 2 pliki do wysłania`; "niezalogowano" when
- * logged out, "wszystko załatwione" when nothing is pending.
+ * Output: `CogniFly: ` plus, joined by ` · `, the reason work is
+ * stopped, the offline note and the counts that apply, e.g.
+ * `CogniFly: 3 zadania czekają · 1 konflikt pliku · 2 pliki do
+ * wysłania`; "niezalogowano" when logged out, "wszystko
+ * załatwione" when nothing is pending.
  */
 export function trayTooltip(state: TrayState): string {
   if (!state.loggedIn) return 'CogniFly: niezalogowano';
   const parts = [
+    state.blocked ?? '',
     state.offline ? 'brak połączenia z serwerem' : '',
     state.waiting > 0 ? waitingText(state.waiting) : '',
     state.conflicts > 0 ? `${state.conflicts} ${plural(state.conflicts, 'konflikt pliku', 'konflikty plików', 'konfliktów plików')}` : '',

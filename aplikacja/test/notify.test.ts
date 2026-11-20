@@ -123,6 +123,7 @@ describe('trayTooltip', () => {
     [{ ...base, waiting: 1, conflicts: 2, unsent: 1 }, 'CogniFly: 1 zadanie czeka · 2 konflikty plików · 1 plik do wysłania'],
     [{ ...base, waiting: 5, conflicts: 5, unsent: 12 }, 'CogniFly: 5 zadań czeka · 5 konfliktów plików · 12 plików do wysłania'],
     [{ ...base, offline: true, waiting: 22 }, 'CogniFly: brak połączenia z serwerem · 22 zadania czekają'],
+    [{ ...base, blocked: 'Brak dostępu do CogniFly: firma jest zawieszona.', waiting: 1 }, 'CogniFly: Brak dostępu do CogniFly: firma jest zawieszona. · 1 zadanie czeka'],
   ])('%j → %s', (state, text) => expect(trayTooltip(state)).toBe(text));
 });
 

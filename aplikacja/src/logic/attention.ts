@@ -42,14 +42,26 @@ export interface AttentionEntry {
  *
  * Call: `attentionQueue(view)` on every render.
  * Expects: a view.
- * Output: `[]` when logged out; else one connection item (server
- * or file server offline), then file conflicts, spaces with
- * unsent files, tasks waiting for the user, and the last
- * Heartwood error, each with its action.
+ * Output: `[]` when logged out; else the "no access" item (work
+ * stopped), one connection item (server or file server offline),
+ * then file conflicts, spaces with unsent files, tasks waiting
+ * for the user, and the last Heartwood error, each with its action.
  */
 export function attentionQueue(view: InboxView): AttentionItem[] {
   if (!view.loggedIn) return [];
-  return [...offlineItems(view), ...conflictItems(view), ...unsentItems(view), ...taskItems(view), ...errorItems(view)];
+  return [...blockedItems(view), ...offlineItems(view), ...conflictItems(view), ...unsentItems(view), ...taskItems(view), ...errorItems(view)];
+}
+
+/**
+ * The "no access" item.
+ *
+ * Call: `blockedItems(view)`.
+ * Expects: a logged-in view.
+ * Output: one refresh item with the reason (checks access again)
+ * when work is stopped, else none.
+ */
+function blockedItems(view: InboxView): AttentionItem[] {
+  return view.blocked ? [{ key: 'blocked', text: view.blocked, action: { kind: 'refresh' } }] : [];
 }
 
 /**

@@ -14,7 +14,7 @@ const running: HwInfo = { state: 'running', root: '/Users/a/Heartwood', restarts
 /** A logged-in view; `status` is a daemon `status` reply or `null`. */
 function view(over: Partial<InboxView> = {}, status: unknown = null, info: HwInfo = running): InboxView {
   return {
-    loggedIn: true, offline: false, email: 'a@b.pl', osoba: 'os_1', tasks: [], updatedAt: null, workFolder: '/w',
+    loggedIn: true, offline: false, email: 'a@b.pl', osoba: 'os_1', tasks: [], updatedAt: null, workFolder: '/w', blocked: null,
     files: filesView(info, status === null ? null : parseStatus(status)), ...over,
   };
 }
@@ -34,6 +34,14 @@ describe('attentionQueue', () => {
       `task:${task(1).id}`, 'hw-error',
     ]);
     expect(items[0]).toEqual({ key: 'offline', text: 'Brak połączenia z serwerem — kliknij, aby odświeżyć', action: { kind: 'refresh' } });
+  });
+
+  it('blocked_is_first_in_queue', () => {
+    const reason = 'Brak dostępu do CogniFly: licencja firmy na CogniFly wygasła.';
+    const items = attentionQueue(view({ blocked: reason, offline: true, tasks: [task(1)] }, STATUS_REPLY));
+    expect(items[0]).toEqual({ key: 'blocked', text: reason, action: { kind: 'refresh' } });
+    expect(keys(items)[1]).toBe('offline');
+    expect(attentionQueue(view({ loggedIn: false, blocked: reason }))).toEqual([]);
   });
 
   it('shows one offline item also when only the file server is offline', () => {
