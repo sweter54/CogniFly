@@ -178,8 +178,10 @@ export class StosCogniFly extends Stack {
     const eskalacja = wspolne('Eskalacja', 'eskalacja/obsluz.ts', {
       COGNIFLY_TABELA: NAZWA_TABELI, COGNIFLY_NADAWCA: nadawca,
     }, dlqEskalacji);
+    // Platforma Identity: licence checks of the API (`GET /access`) and reconciliation.
+    const adresTozsamosci = ssm(this, 'tozsamosc/api-url');
     const api = wspolne('Api', 'api/index.ts', {
-      COGNIFLY_TABELA: NAZWA_TABELI,
+      COGNIFLY_TABELA: NAZWA_TABELI, TOZSAMOSC_URL: adresTozsamosci,
       ...(heartwood ? { HEARTWOOD_INT_URL: heartwood.intUrl } : {}),
     });
     // Nasłuch dostarczeń: ocenia zaakceptowane PR (tylko odczyt GitHuba) i tworzy zadania „Dostarcz”.
@@ -238,7 +240,7 @@ export class StosCogniFly extends Stack {
 
     // --- Platforma: hub zdarzeń (wspólny) i Tożsamość ---
     const hub = EventBus.fromEventBusArn(this, 'Hub', ssm(this, 'hub/arn'));
-    const envTozsamosci = { COGNIFLY_TABELA: NAZWA_TABELI, TOZSAMOSC_URL: ssm(this, 'tozsamosc/api-url') };
+    const envTozsamosci = { COGNIFLY_TABELA: NAZWA_TABELI, TOZSAMOSC_URL: adresTozsamosci };
     const tozsamoscZdarzenia = wspolne('TozsamoscZdarzenia', 'tozsamosc/zdarzenia.ts', envTozsamosci);
     const uzgodnij = wspolne('TozsamoscUzgodnij', 'tozsamosc/uzgodnij.ts', envTozsamosci, undefined, Duration.minutes(5));
     for (const f of [tozsamoscZdarzenia, uzgodnij]) tabela.grantReadWriteData(f);

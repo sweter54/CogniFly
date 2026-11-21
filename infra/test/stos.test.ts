@@ -117,6 +117,13 @@ describe('stos CogniFly', () => {
     expect(env('Api')).toMatchObject({ COGNIFLY_TABELA: 'cognifly-test-dane' });
   });
 
+  test('api_checks_the_licence_with_platforma_identity', () => {
+    const [, f] = zasoby('AWS::Lambda::Function').find(([, r]) => r.Properties.FunctionName === 'cognifly-test-api')!;
+    expect(f.Properties.Environment.Variables).toMatchObject({
+      TOZSAMOSC_URL: { Ref: parametrSsm(json, 'tozsamosc/api-url') },
+    });
+  });
+
   test('grupa Scheduler + rola, która może tylko wywołać Lambdę eskalacji', () => {
     t.hasResourceProperties('AWS::Scheduler::ScheduleGroup', { Name: 'cognifly-test-eskalacje' });
     const [, rola] = zasoby('AWS::IAM::Role').find(([id]) => id.includes('SchedulerRola'))!;
