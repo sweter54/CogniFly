@@ -97,7 +97,8 @@ function setup(opts: { session?: string | null; inbox?: unknown[]; workFolder?: 
     if (url.startsWith(`${DEFAULT_CONFIG.identityUrl}/access`)) {
       await state.accessGate;
       if (state.access instanceof Error) throw state.access;
-      return json(200, state.access);
+      const org = new URL(url).searchParams.get('org');
+      return json(200, typeof state.access === 'function' ? state.access(org) : state.access);
     }
     if (url.endsWith('/ja')) return json(200, { firmy: state.firmy });
     if (url.endsWith('/osoby')) return json(200, { osoby: [{ osoba: 'ania' }, { osoba: 'michal' }] });
@@ -912,10 +913,32 @@ describe('Controller', () => {
       const { c, ports } = setup({ inbox: [task(1)] });
       await c.start();
       const calls = vi.mocked(ports.fetch).mock.calls;
-      expect(String(calls[0]![0])).toBe(`${DEFAULT_CONFIG.identityUrl}/access?product=cognifly`);
+      expect(String(calls[0]![0])).toBe(`${DEFAULT_CONFIG.identityUrl}/access?product=cognifly&org=${DEFAULT_CONFIG.company}`);
       expect((calls[0]![1].headers as Record<string, string>).Authorization).toBe('Bearer A');
       expect(paths(ports).slice(1)).toEqual(['/ja', '/skrzynka']);
       expect(c.current().blocked).toBeNull();
+    });
+
+    it('company_change_checks_access_for_the_new_company', async () => {
+      const { c, ports, state } = setup({ inbox: [] });
+      state.firmy = [{ firma: 'pilot', osoba: 'michal' }, { firma: 'acme', osoba: 'mr' }];
+      await c.start();
+      await c.handlers()['config.setCompany']!({ company: 'acme' });
+      await c.poll();
+      const orgs = vi.mocked(ports.fetch).mock.calls.map(([u]) => new URL(String(u)))
+        .filter((u) => u.pathname === '/access').map((u) => u.searchParams.get('org'));
+      expect(orgs).toEqual(['pilot', 'acme']);
+    });
+
+    it('stale_company_not_member_moves_to_the_persons_company', async () => {
+      const { c, ports, state } = setup({ inbox: [] });
+      state.firmy = [{ firma: 'acme', osoba: 'mr' }];
+      state.access = (org: string | null) => (org === 'acme' ? { active: true } : { active: false, reason: 'NOT_MEMBER' });
+      const v = await c.start();
+      expect(v).toMatchObject({ loggedIn: true, blocked: null, osoba: 'mr' });
+      const orgs = vi.mocked(ports.fetch).mock.calls.map(([u]) => new URL(String(u)))
+        .filter((u) => u.pathname === '/access').map((u) => u.searchParams.get('org'));
+      expect(orgs).toEqual(['pilot', 'acme']);
     });
 
     it('access_checked_every_five_minutes', async () => {

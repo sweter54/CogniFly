@@ -404,21 +404,47 @@ export class Controller {
    * Output: none (never throws). Uses the ACCESS token of the
    * session. A network error or odd answer is logged and changes
    * nothing (the next poll retries); a revoked session ends like
-   * in a poll; a result arriving after a logout is dropped.
+   * in a poll; a result arriving after a logout or a company change
+   * is dropped. `NOT_MEMBER` for a stored company the person left
+   * moves to their company and checks once more (`retry`).
    */
-  private async runAccessCheck(): Promise<void> {
+  private async runAccessCheck(retry = true): Promise<void> {
     const epoch = this.session.epoch();
+    const company = this.config.company;
     let access: Access;
     try {
-      access = await checkAccess(this.ports.fetch, this.config.identityUrl, await this.session.accessToken());
+      const token = await this.session.accessToken();
+      access = await checkAccess(this.ports.fetch, this.config.identityUrl, token, company);
     } catch (e) {
       this.ports.log?.(`access check failed: ${errorCode(e)}`);
       if (e instanceof LoginRequiredError && (await this.sessionEnded(epoch))) await this.sessionRevoked();
       return;
     }
-    if (!this.isCurrent(epoch)) return;
+    if (!this.isCurrent(epoch) || this.config.company !== company) return;
+    if (retry && (await this.leftStaleCompany(access))) return this.runAccessCheck(false);
     this.accessCheckedAt = this.time();
     await this.applyAccess(access);
+  }
+
+  /**
+   * Moves off a stored company the person does not belong to.
+   *
+   * Call: `await this.leftStaleCompany(access)` in `runAccessCheck`.
+   * Expects: an answer of Identity for the stored company.
+   * Output: true when the answer is `NOT_MEMBER` and `GET /ja` moved
+   * the stored company to one of the person's companies (so the check
+   * must be repeated); false otherwise, also when `/ja` fails.
+   */
+  private async leftStaleCompany(access: Access): Promise<boolean> {
+    if (access.active || access.reason !== 'NOT_MEMBER') return false;
+    const before = this.config.company;
+    try {
+      await this.loadIdentity();
+    } catch (e) {
+      this.ports.log?.(`companies after NOT_MEMBER: ${errorCode(e)}`);
+      return false;
+    }
+    return this.config.company !== before;
   }
 
   /**
@@ -1123,13 +1149,15 @@ export class Controller {
    * Expects: one of the companies from `GET /ja`.
    * Output: `{ ok: true }`; tasks and notification memory reset, the
    * old company's daemon stopped (its status cleared) and a poll for
-   * the new company starts (it starts the daemon again).
+   * the new company starts (it checks access for that company and
+   * starts the daemon again).
    * Throws: `AppError('BAD_COMPANY')` for any other value.
    */
   private async setCompany(company: string): Promise<{ ok: true }> {
     const member = this.companies?.find((m) => m.firma === company);
     if (!member) throw new AppError('BAD_COMPANY');
     this.applyChoices({ company });
+    this.forgetAccess();
     clearSeen(this.ports.store);
     this.update({ osoba: member.osoba, tasks: [] });
     await this.stopFiles();
