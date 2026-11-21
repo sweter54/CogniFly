@@ -599,7 +599,7 @@ describe('dostęp (Platforma Identity)', () => {
   it('dostep_wysyla_token_dostepu_i_produkt', async () => {
     expect((await cli(['skrzynka'], envT)).json).toEqual({ stan: 'OK', zadania: [] });
     expect(ident.log).toHaveLength(1);
-    expect(ident.log[0]).toMatchObject({ method: 'GET', url: '/access?product=cognifly' });
+    expect(ident.log[0]).toMatchObject({ method: 'GET', url: '/access?product=cognifly&org=firma1' });
     expect(ident.log[0].headers.authorization).toBe(`Bearer ${A1}`);
     expect(statSync(dostepPlik()).mode & 0o777).toBe(0o600);
     expect(JSON.parse(readFileSync(dostepPlik(), 'utf8'))).toMatchObject({ sub: 'sub-ani', aktywny: true });
@@ -626,6 +626,30 @@ describe('dostęp (Platforma Identity)', () => {
     await cli(['skrzynka'], envT);
     expect(ident.log).toHaveLength(3);
     expect(JSON.parse(readFileSync(dostepPlik(), 'utf8')).sub).toBe('sub-innej');
+  });
+
+  it('dostep_dla_firmy_z_opcji; pamięć osobno dla każdej firmy', async () => {
+    await cli(['skrzynka'], envT);
+    await cli(['skrzynka', '--firma', 'pilot-bearly'], envT);
+    await cli(['skrzynka', '--firma', 'pilot-bearly'], envT);
+    expect(ident.log.map((r) => r.url)).toEqual(['/access?product=cognifly&org=firma1', '/access?product=cognifly&org=pilot-bearly']);
+    await cli(['skrzynka'], envT);
+    expect(ident.log).toHaveLength(3);
+  });
+
+  it('bez_firmy_pyta_bez_org (jak dotąd)', async () => {
+    writeFileSync(konf, JSON.stringify({ adresApi: api.url, region: 'eu-central-1', klientCognito: 'KLIENT1', firmaDomyslna: '' }));
+    await cli(['skrzynka'], envT);
+    expect(ident.log[0].url).toBe('/access?product=cognifly');
+  });
+
+  it('org_required_i_machine_revoked -> polskie teksty, sesja zostaje', async () => {
+    for (const [reason, tekst] of [['ORG_REQUIRED', 'należysz do kilku firm — wybierz firmę (`--firma`) w konfiguracji wtyczki.'], ['MACHINE_REVOKED', 'dostęp tego urządzenia został cofnięty.']]) {
+      rmSync(dostepPlik(), { force: true });
+      identHandler = () => ({ status: 200, body: { active: false, reason } });
+      expect((await cli(['skrzynka'], envT)).json).toEqual({ stan: 'BRAK_DOSTEPU_FIRMY', powod: reason, komunikat: `Brak dostępu do CogniFly: ${tekst}` });
+      expect(existsSync(sesjaPlik())).toBe(true);
+    }
   });
 
   it('wolna_tozsamosc_nie_zabiera_czasu_api (podsumowanie nadal się drukuje)', async () => {

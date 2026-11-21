@@ -1,6 +1,7 @@
 // Dostęp do CogniFly według Platformy Identity (`GET /access?product=
-// cognifly`): zapytanie, pamięć wyniku w ~/.cognifly/dostep.json (600,
-// 5 min, per `sub`) i polskie teksty powodów. Bez zależności.
+// cognifly&org=<firma>`): zapytanie, pamięć wyniku w
+// ~/.cognifly/dostep.json (600, 5 min, per `sub` i firma) i polskie
+// teksty powodów. Bez zależności.
 import { Stan, czytaj, zapisz, usun } from './sesja.mjs';
 
 /** File with the last answer of Identity. */
@@ -29,7 +30,22 @@ const TEKSTY = {
   ORG_SUSPENDED: 'firma jest zawieszona.',
   NO_LICENCE: 'firma nie ma licencji na CogniFly.',
   LICENCE_EXPIRED: 'licencja firmy na CogniFly wygasła.',
+  ORG_REQUIRED: 'należysz do kilku firm — wybierz firmę (`--firma`) w konfiguracji wtyczki.',
+  MACHINE_REVOKED: 'dostęp tego urządzenia został cofnięty.',
 };
+
+/**
+ * Company a command works for.
+ *
+ * Call: `firmaPolecenia(ctx)`.
+ * Expects: a context from `kontekst()` (MCP contexts may lack
+ * `opcje`).
+ * Output: `--firma` of the command, else the configured company,
+ * else '' (no company: the API and Identity choose).
+ */
+export function firmaPolecenia(ctx) {
+  return ctx.opcje?.firma || ctx.konf?.firmaDomyslna || '';
+}
 
 /**
  * Polish text of a reason.
@@ -62,17 +78,20 @@ function subZTokenu(token) {
 const BUDZET_TOZSAMOSCI_MS = 500;
 
 /**
- * Stored answer for this account, if still valid.
+ * Stored answer for this account and company, if still valid.
  *
- * Call: `zPamieci(kat, sub)`.
- * Expects: the session directory and the account's `sub`.
- * Output: `{aktywny, powod?}` or null (none, stale, other account).
+ * Call: `zPamieci(kat, sub, firma)`.
+ * Expects: the session directory, the account's `sub` and the
+ * company ('' for none).
+ * Output: `{aktywny, powod?}` or null (none, stale, other account
+ * or company; files without `firma` count as another company).
  * Throws: `Stan('ODMOWA')` when the file is a symlink.
  */
-function zPamieci(kat, sub) {
+function zPamieci(kat, sub, firma) {
   const z = czytaj(kat, PLIK);
   const wiek = Date.now() - Number(z?.czas);
-  if (!sub || z?.sub !== sub || typeof z.aktywny !== 'boolean' || !(wiek >= 0 && wiek < WAZNOSC_MS)) return null;
+  if (!sub || z?.sub !== sub || z.firma !== firma) return null;
+  if (typeof z.aktywny !== 'boolean' || !(wiek >= 0 && wiek < WAZNOSC_MS)) return null;
   if (z.aktywny) return { aktywny: true };
   return { aktywny: false, powod: WZOR_POWODU.test(z.powod ?? '') ? z.powod : 'UNKNOWN' };
 }
@@ -90,32 +109,49 @@ export function zapomnijDostep(kat) {
 }
 
 /**
- * Asks Identity, at most once per 5 minutes per account.
+ * Address of `GET /access` for a company.
  *
- * Call: `await sprawdzDostep({ kat, konf, sesja, signal })`.
- * Expects: `konf.adresTozsamosci` (empty → no check) and a session
- * with a fresh ACCESS token (never the ID token).
+ * Call: `adresDostepu('https://id', 'pilot')`.
+ * Expects: the Identity base URL (no trailing `/`) and a company
+ * ('' for none).
+ * Output: `<adres>/access?product=cognifly[&org=<firma>]`; a person
+ * in several companies gets `ORG_REQUIRED` without `org`.
+ */
+function adresDostepu(adres, firma) {
+  const q = new URLSearchParams({ product: 'cognifly' });
+  if (firma) q.set('org', firma);
+  return `${adres}/access?${q}`;
+}
+
+/**
+ * Asks Identity, at most once per 5 minutes per account and company.
+ *
+ * Call: `await sprawdzDostep({ kat, konf, sesja, firma, signal })`.
+ * Expects: `konf.adresTozsamosci` (empty → no check), a session
+ * with a fresh ACCESS token (never the ID token) and the company of
+ * the command ('' for none).
  * Output: `{aktywny: true}` or `{aktywny: false, powod}`. A network
  * error, a status other than 200 or a body without a boolean
  * `active` gives `{aktywny: true}` and nothing is stored; 200
- * answers are stored for 5 minutes under the token's `sub`.
+ * answers are stored for 5 minutes under the token's `sub` and the
+ * company.
  */
-export async function sprawdzDostep({ kat, konf, sesja, signal }) {
+export async function sprawdzDostep({ kat, konf, sesja, firma = '', signal }) {
   const adres = String(konf?.adresTozsamosci ?? '').replace(/\/+$/, '');
   if (!adres) return { aktywny: true };
   const sub = subZTokenu(sesja.accessToken);
-  const pamiec = zPamieci(kat, sub);
+  const pamiec = zPamieci(kat, sub, firma);
   if (pamiec) return pamiec;
   let json;
   try {
-    const r = await fetch(`${adres}/access?product=cognifly`, { headers: { Authorization: `Bearer ${sesja.accessToken}` }, signal });
+    const r = await fetch(adresDostepu(adres, firma), { headers: { Authorization: `Bearer ${sesja.accessToken}` }, signal });
     if (r.status !== 200) return { aktywny: true };
     json = await r.json();
   } catch { return { aktywny: true }; }
   if (typeof json?.active !== 'boolean') return { aktywny: true };
   const wynik = json.active ? { aktywny: true }
     : { aktywny: false, powod: WZOR_POWODU.test(json.reason ?? '') ? json.reason : 'UNKNOWN' };
-  if (sub) zapisz(kat, PLIK, { sub, ...wynik, czas: Date.now() });
+  if (sub) zapisz(kat, PLIK, { sub, firma, ...wynik, czas: Date.now() });
   return wynik;
 }
 
@@ -139,7 +175,8 @@ export function odmowaDostepu(kat, powod) {
  * Lets work go on only with an active access.
  *
  * Call: `await wymagajDostepu(ctx, sesja)` before a work command.
- * Expects: a context from `kontekst()` and the current session.
+ * Expects: a context from `kontekst()` and the current session; the
+ * company is the command's (`firmaPolecenia`).
  * The Identity call has its own 500 ms budget: when it runs out the
  * access counts as active, leaving the rest of the signal to the API.
  * Output: none when access is active (or not checked).
@@ -147,6 +184,6 @@ export function odmowaDostepu(kat, powod) {
  */
 export async function wymagajDostepu(ctx, sesja) {
   const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(BUDZET_TOZSAMOSCI_MS)]);
-  const d = await sprawdzDostep({ kat: ctx.kat, konf: ctx.konf, sesja, signal });
+  const d = await sprawdzDostep({ kat: ctx.kat, konf: ctx.konf, sesja, firma: firmaPolecenia(ctx), signal });
   if (!d.aktywny) throw odmowaDostepu(ctx.kat, d.powod);
 }

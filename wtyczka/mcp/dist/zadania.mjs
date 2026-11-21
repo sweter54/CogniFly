@@ -21696,8 +21696,13 @@ var TEKSTY = {
   NOT_MEMBER: "nie nale\u017Cysz ju\u017C do firmy.",
   ORG_SUSPENDED: "firma jest zawieszona.",
   NO_LICENCE: "firma nie ma licencji na CogniFly.",
-  LICENCE_EXPIRED: "licencja firmy na CogniFly wygas\u0142a."
+  LICENCE_EXPIRED: "licencja firmy na CogniFly wygas\u0142a.",
+  ORG_REQUIRED: "nale\u017Cysz do kilku firm \u2014 wybierz firm\u0119 (`--firma`) w konfiguracji wtyczki.",
+  MACHINE_REVOKED: "dost\u0119p tego urz\u0105dzenia zosta\u0142 cofni\u0119ty."
 };
+function firmaPolecenia(ctx) {
+  return ctx.opcje?.firma || ctx.konf?.firmaDomyslna || "";
+}
 function komunikatDostepu(powod) {
   return PREFIKS + (Object.hasOwn(TEKSTY, powod) ? TEKSTY[powod] : `odmowa dost\u0119pu (${powod}).`);
 }
@@ -21710,25 +21715,31 @@ function subZTokenu(token) {
   }
 }
 var BUDZET_TOZSAMOSCI_MS = 500;
-function zPamieci(kat, sub) {
+function zPamieci(kat, sub, firma) {
   const z = czytaj(kat, PLIK);
   const wiek = Date.now() - Number(z?.czas);
-  if (!sub || z?.sub !== sub || typeof z.aktywny !== "boolean" || !(wiek >= 0 && wiek < WAZNOSC_MS)) return null;
+  if (!sub || z?.sub !== sub || z.firma !== firma) return null;
+  if (typeof z.aktywny !== "boolean" || !(wiek >= 0 && wiek < WAZNOSC_MS)) return null;
   if (z.aktywny) return { aktywny: true };
   return { aktywny: false, powod: WZOR_POWODU.test(z.powod ?? "") ? z.powod : "UNKNOWN" };
 }
 function zapomnijDostep(kat) {
   usun(kat, PLIK);
 }
-async function sprawdzDostep({ kat, konf, sesja, signal }) {
+function adresDostepu(adres, firma) {
+  const q = new URLSearchParams({ product: "cognifly" });
+  if (firma) q.set("org", firma);
+  return `${adres}/access?${q}`;
+}
+async function sprawdzDostep({ kat, konf, sesja, firma = "", signal }) {
   const adres = String(konf?.adresTozsamosci ?? "").replace(/\/+$/, "");
   if (!adres) return { aktywny: true };
   const sub = subZTokenu(sesja.accessToken);
-  const pamiec = zPamieci(kat, sub);
+  const pamiec = zPamieci(kat, sub, firma);
   if (pamiec) return pamiec;
   let json;
   try {
-    const r = await fetch(`${adres}/access?product=cognifly`, { headers: { Authorization: `Bearer ${sesja.accessToken}` }, signal });
+    const r = await fetch(adresDostepu(adres, firma), { headers: { Authorization: `Bearer ${sesja.accessToken}` }, signal });
     if (r.status !== 200) return { aktywny: true };
     json = await r.json();
   } catch {
@@ -21736,7 +21747,7 @@ async function sprawdzDostep({ kat, konf, sesja, signal }) {
   }
   if (typeof json?.active !== "boolean") return { aktywny: true };
   const wynik = json.active ? { aktywny: true } : { aktywny: false, powod: WZOR_POWODU.test(json.reason ?? "") ? json.reason : "UNKNOWN" };
-  if (sub) zapisz(kat, PLIK, { sub, ...wynik, czas: Date.now() });
+  if (sub) zapisz(kat, PLIK, { sub, firma, ...wynik, czas: Date.now() });
   return wynik;
 }
 function odmowaDostepu(kat, powod) {
@@ -21748,7 +21759,7 @@ function odmowaDostepu(kat, powod) {
 }
 async function wymagajDostepu(ctx, sesja) {
   const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(BUDZET_TOZSAMOSCI_MS)]);
-  const d = await sprawdzDostep({ kat: ctx.kat, konf: ctx.konf, sesja, signal });
+  const d = await sprawdzDostep({ kat: ctx.kat, konf: ctx.konf, sesja, firma: firmaPolecenia(ctx), signal });
   if (!d.aktywny) throw odmowaDostepu(ctx.kat, d.powod);
 }
 
@@ -21822,7 +21833,7 @@ async function poOdmowieLicencji(ctx, wyslij, sesja, r, odswiezono) {
 async function zSesja(ctx, metoda, sciezka, body) {
   let { sesja, odswiezono } = await sesjaAktualna(ctx);
   const url = ctx.konf.adresApi.replace(/\/+$/, "") + sciezka;
-  const firma = ctx.opcje.firma || ctx.konf.firmaDomyslna;
+  const firma = firmaPolecenia(ctx);
   const wyslij = (s) => wywolaj(url, metoda, s, firma, body, ctx.signal);
   let r = await wyslij(sesja);
   if (r.status === 401) {

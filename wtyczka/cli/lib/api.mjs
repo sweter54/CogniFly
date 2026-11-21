@@ -3,7 +3,7 @@ import { execFile } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Stan, katalog, czytaj, zapisz, usun, punktCognito, odswiez, zaloguj, kod, wyloguj } from './sesja.mjs';
-import { KODY_LICENCJI, odmowaDostepu, wymagajDostepu, zapomnijDostep } from './dostep.mjs';
+import { firmaPolecenia, KODY_LICENCJI, odmowaDostepu, wymagajDostepu, zapomnijDostep } from './dostep.mjs';
 
 const DOBA = 86_400_000;
 const STANY = ['w_trakcie', 'do_akceptacji', 'zrobione'];
@@ -183,7 +183,7 @@ async function poOdmowieLicencji(ctx, wyslij, sesja, r, odswiezono) {
 export async function zSesja(ctx, metoda, sciezka, body) {
   let { sesja, odswiezono } = await sesjaAktualna(ctx);
   const url = ctx.konf.adresApi.replace(/\/+$/, '') + sciezka;
-  const firma = ctx.opcje.firma || ctx.konf.firmaDomyslna;
+  const firma = firmaPolecenia(ctx);
   const wyslij = (s) => wywolaj(url, metoda, s, firma, body, ctx.signal);
   let r = await wyslij(sesja);
   if (r.status === 401) {
