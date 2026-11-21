@@ -8,29 +8,63 @@ Miejsca oznaczone **ZAPYTAJ MICHAŁA** to bramki: zatrzymaj się i czekaj na zgo
 
 ### API
 
-- Token dostępu niesie claim `lic_cognifly`. To znacznik czasu ISO 8601 z
-  przesunięciem: początek dnia po końcu licencji.
+Platforma w wersji 2 pozwala osobie należeć do kilku firm. Token takiej
+osoby (klient współdzielony `cognifly`) nie ma claimów `org` ani
+`lic_cognifly`. API sprawdza więc licencję na dwa sposoby.
+
+**Szybka ścieżka (claim).** Token niesie `lic_cognifly`, a nagłówek
+`X-Cognifly-Firma` jest pusty albo równy claimowi `org`:
+
+- `lic_cognifly` to znacznik czasu ISO 8601 z przesunięciem: początek dnia
+  po końcu licencji.
 - Licencja jest ważna, gdy teraz jest przed tym znacznikiem.
-- Brak claimu albo nieczytelny claim oznacza brak licencji.
-- API odpowiada 403 z kodem `BRAK_LICENCJI` albo `LICENCJA_WYGASLA`.
+- Nieczytelny claim oznacza brak licencji.
 - Nazwę claimu można zmienić zmienną `COGNIFLY_LICENCE_CLAIM`.
-- API sprawdza tylko claim. Claim jest aktualny najpóźniej po 60 minutach.
+- Claim jest aktualny najpóźniej po 60 minutach.
+
+**Platforma (brak claimu albo inna firma).** API pyta
+`GET <TOZSAMOSC_URL>/access?product=cognifly&org=<firma z nagłówka>` z
+tokenem osoby:
+
+- Wynik (zgoda i odmowa) jest w pamięci Lambdy 5 minut. Klucz to skrót
+  SHA-256 tokenu i firma; token nie jest przechowywany.
+- `GET /ja` (wybór firmy) przechodzi, gdy którakolwiek firma osoby ma dostęp.
+  Nieaktualna firma w konfiguracji klienta nie blokuje więc wyboru.
+- Błąd sieci, przekroczenie 1,5 s albo odpowiedź inna niż 200: żądanie
+  przechodzi (błąd sieci nigdy nie blokuje pracy), nic nie trafia do pamięci.
+- Bez `TOZSAMOSC_URL` albo bez tokenu liczy się tylko claim (jak dotąd).
+- Adres to parametr SSM `/platforma/<etap>/tozsamosc/api-url`; infra
+  przekazuje go Lambdzie API jako `TOZSAMOSC_URL`.
+
+Odmowa daje 403:
+
+| Przyczyna | Kod API |
+|---|---|
+| `NO_LICENCE` z Platformy, brak lub nieczytelny claim | `BRAK_LICENCJI` |
+| `LICENCE_EXPIRED` z Platformy, przeterminowany claim | `LICENCJA_WYGASLA` |
+| inny powód z Platformy | `BRAK_DOSTEPU` z polem `powod` (np. `ORG_SUSPENDED`) |
 
 ### Aplikacja
 
-Aplikacja pyta `GET /access?product=cognifly` w Tożsamości (token dostępu).
-Pyta:
+Aplikacja pyta `GET /access?product=cognifly&org=<firma>` w Tożsamości
+(token dostępu). Firma to `company` z konfiguracji aplikacji. Pyta:
 
 - przy starcie i po zalogowaniu,
 - co 5 minut (przy wstrzymaniu przy każdym odpytaniu),
-- zaraz po odmowie licencji z API.
+- zaraz po odmowie licencji z API,
+- po zmianie firmy w ustawieniach.
 
-Wynik jest ważny 5 minut.
+Wynik jest ważny 5 minut. Gdy Tożsamość odpowie `NOT_MEMBER` dla zapisanej
+firmy, aplikacja pobiera `GET /ja`. Jeśli osoba należy do innej firmy,
+aplikacja przechodzi na nią i pyta ponownie, bez wylogowania.
 
 ### Wtyczka
 
-- Przed 12 poleceniami pracy wtyczka sprawdza dostęp. Wynik trzyma 5 minut w
-  `~/.cognifly/dostep.json`.
+- Przed 12 poleceniami pracy wtyczka sprawdza dostęp:
+  `GET /access?product=cognifly&org=<firma>`. Firma to `--firma` polecenia
+  albo firma z konfiguracji (`konfiguruj --firma`); bez firmy wtyczka pyta
+  bez `org`. Wynik trzyma 5 minut w `~/.cognifly/dostep.json`, osobno dla
+  konta i firmy.
 - Przy odmowie zwraca stan `BRAK_DOSTEPU_FIRMY`.
 - Hook startu sesji Claude pokazuje powód zamiast podsumowania zadań.
 - Adres Tożsamości ustawia `konfiguruj --adres-tozsamosci <https>`. Bez niego
@@ -48,6 +82,8 @@ Każdy komunikat zaczyna się od „Brak dostępu do CogniFly: ”.
 | `ORG_SUSPENDED` | firma jest zawieszona. | wstrzymanie pracy |
 | `NO_LICENCE` | firma nie ma licencji na CogniFly. | wstrzymanie pracy |
 | `LICENCE_EXPIRED` | licencja firmy na CogniFly wygasła. | wstrzymanie pracy |
+| `ORG_REQUIRED` | aplikacja: należysz do kilku firm — wybierz firmę w ustawieniach CogniFly. Wtyczka: należysz do kilku firm — wybierz firmę (`--firma`) w konfiguracji wtyczki. | wstrzymanie pracy |
+| `MACHINE_REVOKED` | dostęp tego urządzenia został cofnięty. | wstrzymanie pracy |
 | inny | odmowa dostępu (`<kod>`). | wstrzymanie pracy |
 
 Wstrzymanie to: baner z powodem, pierwsza pozycja w kolejce „Do załatwienia”
@@ -61,7 +97,9 @@ ponowienie żądania.
 ## Wdrożenie
 
 Najpierw PR scalony do `main` (za zgodą Michała). Zestaw `<C>` jak w
-`docs/przepiecie-na-platforme.md`. Zmienia się tylko kod Lambdy API. Każdy
+`docs/przepiecie-na-platforme.md`. Zmienia się tylko Lambda API: kod i
+zmienna `TOZSAMOSC_URL` (z istniejącego parametru SSM
+`/platforma/test/tozsamosc/api-url`). Kolejność: API, aplikacja, wtyczka. Każdy
 blok poleceń uruchamiaj z katalogu głównego repo (podkatalogi są jawne:
 `(cd infra && ...)`).
 
@@ -81,10 +119,29 @@ print('org:', c.get('org'))
 PY
 ```
 
-Oczekiwane: `lic_cognifly` to przyszły znacznik ISO (pilot:
-`2028-01-01T00:00:00+01:00`). Gdy brakuje — **zatrzymaj się, nie wdrażaj**.
+Oczekiwane dla osoby w jednej firmie: `lic_cognifly` to przyszły znacznik
+ISO (pilot: `2028-01-01T00:00:00+01:00`), a `org` to jej firma. Dla osoby w
+kilku firmach oba są `None`; ten stan obsługuje kontrola przez Platformę.
+Gdy osoba jest w jednej firmie, a claimu brakuje — **zatrzymaj się, nie
+wdrażaj**.
 
-Podgląd zmian (tylko Lambda API):
+Sprawdź też, czy Platforma odpowiada dla firmy (drukuje tylko odpowiedź,
+nigdy token):
+
+```bash
+python3 - <<'PY'
+import json, os, urllib.request
+t = json.load(open(os.path.expanduser('~/.cognifly/sesja.json')))['accessToken']
+u = 'https://wrnzaptvv6.execute-api.eu-central-1.amazonaws.com/access?product=cognifly&org=pilot'
+r = urllib.request.Request(u, headers={'Authorization': 'Bearer ' + t})
+print(json.load(urllib.request.urlopen(r)))
+PY
+```
+
+Oczekiwane: `'active': True`. Gdy nie — **zatrzymaj się, nie wdrażaj**.
+
+Podgląd zmian (tylko Lambda API: kod, `TOZSAMOSC_URL` i parametr SSM
+szablonu):
 
 ```bash
 (cd infra && npx cdk diff cognifly-test <C>)
@@ -134,8 +191,10 @@ Zapisz konfigurację z adresem Tożsamości:
 node "$HOME/Library/Application Support/CogniFly/repo/wtyczka/cli/cognifly.mjs" konfiguruj --adres-api https://td5k44easl.execute-api.eu-central-1.amazonaws.com --klient 130crcifqe1l4uggfap3p7kiml --region eu-central-1 --firma pilot --adres-tozsamosci https://wrnzaptvv6.execute-api.eu-central-1.amazonaws.com
 ```
 
-Adres Tożsamości musi zaczynać się od `https://`. Na końcu uruchom nową sesję
-Claude (albo `/reload-plugins`).
+Adres Tożsamości musi zaczynać się od `https://`. `--firma` to firma, o
+której dostęp wtyczka pyta i dla której pracuje; osoba w kilku firmach musi
+ją podać. Na końcu uruchom nową sesję Claude (albo `/reload-plugins`).
+`claude plugin list` powinno pokazać `cognifly` w wersji 0.8.1.
 
 Narzędzia MCP wtyczki nie sprawdzają dostępu z góry; polegają na odmowie API.
 
@@ -152,7 +211,9 @@ node ~/Documents/Platforma/scripts/operator.mjs https://wrnzaptvv6.execute-api.e
 2. W ciągu 5 minut aplikacja jest wstrzymana z komunikatem „Brak dostępu do
    CogniFly: licencja firmy na CogniFly wygasła.”.
 3. Wtyczka zwraca stan `BRAK_DOSTEPU_FIRMY`, a hook startu sesji pokazuje powód.
-4. Po odświeżeniu tokenu API odpowiada 403 `LICENCJA_WYGASLA`.
+4. Po odświeżeniu tokenu API odpowiada 403 `LICENCJA_WYGASLA`. Osoba w
+   kilku firmach nie ma claimu: API odmawia, gdy wygaśnie zapamiętana zgoda
+   Platformy (≤ 5 minut).
 5. Przywróć licencję:
 
 ```bash
@@ -166,5 +227,9 @@ node ~/Documents/Platforma/scripts/operator.mjs https://wrnzaptvv6.execute-api.e
 
 - Token sprzed zmiany licencji: API przepuszcza do 60 minut, a odcina dopiero
   sprawdzenie `/access` w kliencie (≤ 5 minut).
-- Tożsamość niedostępna długo: klienci pracują dalej (sieć nie blokuje), a
-  ochronę daje claim w API.
+- Tożsamość niedostępna długo: klienci pracują dalej (sieć nie blokuje). Dla
+  osób w jednej firmie ochronę daje claim w API. Dla osób w kilku firmach API
+  przepuszcza żądania bez kontroli licencji, dopóki Platforma nie odpowie
+  (członkostwo w firmie API nadal sprawdza w swoim rejestrze).
+- Odmowa Platformy zostaje w pamięci Lambdy do 5 minut. Po przywróceniu
+  licencji API może jeszcze tyle odmawiać osobom w kilku firmach.
