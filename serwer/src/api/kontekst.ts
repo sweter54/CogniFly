@@ -129,15 +129,16 @@ function odmowaPlatformy(powod: string): HttpBlad {
 /**
  * Asks Platforma about one company, as an API error.
  *
- * Call: `await dostepDlaApi(adres, token, 'pilot')`.
- * Expects: the Identity URL, the person's token and a company.
+ * Call: `await dostepDlaApi(adres, token, sub, 'pilot')`.
+ * Expects: the Identity URL, the person's token, verified `sub` and
+ * a company.
  * Output: as `dostepFirmy` (null: Platforma down, nothing known).
  * Throws: 503 `TOZSAMOSC_NIEDOSTEPNA` for a misconfiguration
  * answer (`BladTozsamosci`); other errors pass through.
  */
-async function dostepDlaApi(adres: string, token: string, firma: string): Promise<Dostep | null> {
+async function dostepDlaApi(adres: string, token: string, sub: string, firma: string): Promise<Dostep | null> {
   try {
-    return await dostepFirmy(adres, token, firma);
+    return await dostepFirmy(adres, token, sub, firma);
   } catch (e) {
     if (e instanceof BladTozsamosci) throw new HttpBlad(503, 'TOZSAMOSC_NIEDOSTEPNA');
     throw e;
@@ -162,7 +163,7 @@ async function wymagajLicencjiZPlatformy(event: ZdarzenieApi, firmy: string[]): 
   if (adres === '' || token === '') return wymagajLicencjiZClaimu(event);
   let odmowa: string | null = null;
   for (const firma of firmy) {
-    const d = await dostepDlaApi(adres, token, firma);
+    const d = await dostepDlaApi(adres, token, subZTokenu(event), firma);
     if (d === null || d.aktywny) return;
     odmowa ??= d.powod;
   }

@@ -16,6 +16,11 @@ beforeAll(async () => {
 });
 afterAll(() => tabela.usun());
 
+/** Body that times out while being read (headers came on time). */
+const WOLNA_TRESC = Symbol('wolna treść');
+/** 200 with a body that is not JSON. */
+const ZLY_JSON = Symbol('zły JSON');
+
 /** Answers of Platforma `/access` per org; an Error fails like the network. */
 let odpowiedzi: Record<string, unknown>;
 const fetchMock = vi.fn(async (url: string) => {
@@ -23,6 +28,11 @@ const fetchMock = vi.fn(async (url: string) => {
   const o = odpowiedzi[org] ?? { active: true };
   if (o instanceof Error) throw o;
   if (typeof o === 'number') return new Response('{}', { status: o });
+  if (o === WOLNA_TRESC) {
+    const blad = Object.assign(new Error('body timeout'), { name: 'TimeoutError' });
+    return { status: 200, text: async () => { throw blad; }, json: async () => { throw blad; } } as unknown as Response;
+  }
+  if (o === ZLY_JSON) return new Response('nie json', { status: 200 });
   return new Response(JSON.stringify(o), { status: 200 });
 });
 
@@ -161,6 +171,62 @@ describe('licence without the claim (person in several companies)', () => {
     odpowiedzi.f2 = new TypeError('offline');
     expect((await call('GET /skrzynka', 'f2')).statusCode).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  test('stale_if_error_survives_a_token_refresh_of_the_same_person', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const t0 = Date.now();
+    odpowiedzi.f2 = { active: false, reason: 'NO_LICENCE' };
+    expect(kod(await call('GET /skrzynka', 'f2', {}, 'token-1'))).toEqual({ kod: 'BRAK_LICENCJI' });
+    vi.setSystemTime(t0 + 30 * 60_000);
+    odpowiedzi.f2 = new TypeError('offline');
+    const r = await call('GET /skrzynka', 'f2', {}, 'token-2');
+    expect(r.statusCode).toBe(403);
+    expect(kod(r)).toEqual({ kod: 'BRAK_LICENCJI' });
+  });
+
+  test('fallback_is_per_person_and_company', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    odpowiedzi.f2 = { active: false, reason: 'NO_LICENCE' };
+    await call('GET /skrzynka', 'f2', {}, 'token-1');
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    odpowiedzi.f2 = new TypeError('offline');
+    odpowiedzi.f1 = new TypeError('offline');
+    expect((await call('GET /skrzynka', 'f1', {}, 'token-2')).statusCode).toBe(200);
+  });
+
+  test('token_reasons_are_not_kept_as_fallback', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    for (const reason of ['TOKEN_REVOKED', 'ACCOUNT_DISABLED']) {
+      wyczyscPamiecDostepu();
+      odpowiedzi.f2 = { active: false, reason };
+      expect((await call('GET /skrzynka', 'f2', {}, 'token-1')).statusCode).toBe(403);
+      odpowiedzi.f2 = new TypeError('offline');
+      expect((await call('GET /skrzynka', 'f2', {}, 'token-2')).statusCode).toBe(200);
+    }
+  });
+
+  test('slow_body_counts_as_an_outage_and_uses_the_fallback', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const blad = vi.spyOn(console, 'error').mockImplementation(() => {});
+    odpowiedzi.f2 = WOLNA_TRESC;
+    expect((await call('GET /skrzynka', 'f2')).statusCode).toBe(200);
+    odpowiedzi.f2 = { active: false, reason: 'LICENCE_EXPIRED' };
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    await call('GET /skrzynka', 'f2');
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    odpowiedzi.f2 = WOLNA_TRESC;
+    expect(kod(await call('GET /skrzynka', 'f2'))).toEqual({ kod: 'LICENCJA_WYGASLA' });
+    expect(blad).not.toHaveBeenCalled();
+    blad.mockRestore();
+  });
+
+  test('unparsable_json_refuses_with_503', async () => {
+    const blad = vi.spyOn(console, 'error').mockImplementation(() => {});
+    odpowiedzi.f2 = ZLY_JSON;
+    expect(kod(await call('GET /skrzynka', 'f2'))).toEqual({ kod: 'TOZSAMOSC_NIEDOSTEPNA' });
+    expect(blad).toHaveBeenCalled();
+    blad.mockRestore();
   });
 
   test('stale_answer_is_not_used_for_a_4xx', async () => {

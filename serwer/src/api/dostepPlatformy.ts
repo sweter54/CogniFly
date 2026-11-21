@@ -21,6 +21,9 @@ const LIMIT_MS = 1_500;
 /** Shape of a reason code accepted from the network. */
 const WZOR_POWODU = /^[A-Z][A-Z0-9_]{0,63}$/;
 
+/** Start of the error logged for a misconfiguration answer (metric filter in infra). */
+export const ZLA_ODPOWIEDZ = 'dostep: zła odpowiedź /access';
+
 /** Statuses that mean "Platforma is down for now" (not a refusal). */
 const AWARIA = (status: number): boolean => status >= 500 || status === 429;
 
@@ -35,55 +38,86 @@ export class BladTozsamosci extends Error {
   }
 }
 
-/** Remembered answers by `sha256(token)|firma` with the answer time; tokens are never kept. */
-const pamiec = new Map<string, { dostep: Dostep; czas: number }>();
+/** Reasons about the company or licence that may stand in during an outage. */
+const POWODY_ZAPASU: readonly string[] = ['NO_LICENCE', 'LICENCE_EXPIRED', 'ORG_SUSPENDED', 'NOT_MEMBER'];
 
-/** Empties the memory of answers (tests). */
+/** Answers with their time, by key; never more than `PAMIEC_MAX`. */
+class Pamiec {
+  private readonly wpisy = new Map<string, { dostep: Dostep; czas: number }>();
+
+  /** Forgets everything (tests). */
+  wyczysc(): void {
+    this.wpisy.clear();
+  }
+
+  /**
+   * Answer younger than a limit.
+   *
+   * Call: `pamiec.odczytaj(klucz, now, WAZNOSC_MS)`.
+   * Expects: a key, the current time and the age limit (ms).
+   * Output: the answer, or null when none is young enough.
+   */
+  odczytaj(k: string, now: number, limit: number): Dostep | null {
+    const z = this.wpisy.get(k);
+    return z && now - z.czas < limit ? z.dostep : null;
+  }
+
+  /**
+   * Remembers an answer with its time.
+   *
+   * Call: `pamiec.zapisz(klucz, dostep, now)`.
+   * Expects: a key, an answer and the current time (ms).
+   * Output: none; when full, entries older than `ZAPAS_MS` go first,
+   * then the oldest ones.
+   */
+  zapisz(k: string, dostep: Dostep, now: number): void {
+    if (this.wpisy.size >= PAMIEC_MAX) {
+      for (const [x, e] of this.wpisy) if (now - e.czas >= ZAPAS_MS) this.wpisy.delete(x);
+      for (const x of this.wpisy.keys()) {
+        if (this.wpisy.size < PAMIEC_MAX) break;
+        this.wpisy.delete(x);
+      }
+    }
+    this.wpisy.delete(k);
+    this.wpisy.set(k, { dostep, czas: now });
+  }
+}
+
+/** Fresh answers by `sha256(token)|firma` (5 min); tokens are never kept. */
+const swieze = new Pamiec();
+
+/** Outage fallback by `sub|firma` (60 min): survives token refreshes. */
+const zapas = new Pamiec();
+
+/** Empties both memories (tests). */
 export function wyczyscPamiecDostepu(): void {
-  pamiec.clear();
+  swieze.wyczysc();
+  zapas.wyczysc();
 }
 
 /**
  * Key of one (token, company) pair.
  *
- * Call: `klucz(token, 'pilot')`.
+ * Call: `kluczTokenu(token, 'pilot')`.
  * Expects: the raw token and a company ('' for none).
  * Output: hex SHA-256 of the token, `|` and the company.
  */
-function klucz(token: string, firma: string): string {
+function kluczTokenu(token: string, firma: string): string {
   return `${createHash('sha256').update(token).digest('hex')}|${firma}`;
 }
 
 /**
- * Remembers an answer with its time.
+ * Tells whether an answer may serve as the outage fallback.
  *
- * Call: `zapamietaj(klucz, dostep, now)`.
- * Expects: a key, an answer and the current time (ms).
- * Output: none; when full, entries older than `ZAPAS_MS` go first,
- * then the oldest ones, so the map never exceeds `PAMIEC_MAX`.
+ * Call: `doZapasu(dostep)`.
+ * Expects: an answer of Platforma.
+ * Output: true for a consent and for company or licence reasons
+ * (`POWODY_ZAPASU`); false for reasons about the token or account
+ * (`TOKEN_REVOKED`, `ACCOUNT_DISABLED`, ...), which a new token of
+ * the same person may not share.
  */
-function zapamietaj(k: string, dostep: Dostep, now: number): void {
-  if (pamiec.size >= PAMIEC_MAX) {
-    for (const [x, e] of pamiec) if (now - e.czas >= ZAPAS_MS) pamiec.delete(x);
-    for (const x of pamiec.keys()) {
-      if (pamiec.size < PAMIEC_MAX) break;
-      pamiec.delete(x);
-    }
-  }
-  pamiec.delete(k);
-  pamiec.set(k, { dostep, czas: now });
-}
-
-/**
- * Remembered answer younger than a limit.
- *
- * Call: `zPamieci(klucz, now, WAZNOSC_MS)`.
- * Expects: a key, the current time and the age limit (ms).
- * Output: the answer, or null when none is young enough.
- */
-function zPamieci(k: string, now: number, limit: number): Dostep | null {
-  const z = pamiec.get(k);
-  return z && now - z.czas < limit ? z.dostep : null;
+function doZapasu(dostep: Dostep): boolean {
+  return dostep.aktywny || POWODY_ZAPASU.includes(dostep.powod);
 }
 
 /**
@@ -108,7 +142,8 @@ function odczytaj(json: unknown): Dostep {
  * Call: `await zapytaj(adres, token, 'pilot')`.
  * Expects: the Identity base URL, the person's token, a company.
  * Output: the answer, or null when Platforma is down (network
- * error, timeout, 5xx, 429; logged as a warning).
+ * error, timeout also while reading the body, 5xx, 429; logged as
+ * a warning).
  * Throws: `BladTozsamosci` for another non-200 status or an odd
  * body (logged as an error).
  */
@@ -116,12 +151,12 @@ async function zapytaj(adres: string, token: string, firma: string): Promise<Dos
   const q = new URLSearchParams({ product: 'cognifly' });
   if (firma) q.set('org', firma);
   let r: Response;
-  let json: unknown;
+  let tresc = '';
   try {
     r = await fetch(`${adres.replace(/\/+$/, '')}/access?${q}`, {
       headers: { authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(LIMIT_MS),
     });
-    json = r.status === 200 ? await r.json().catch(() => undefined) : undefined;
+    if (r.status === 200) tresc = await r.text();
   } catch (e) {
     console.warn('dostep: /access nieosiągalny', e instanceof Error ? e.name : typeof e);
     return null;
@@ -132,31 +167,52 @@ async function zapytaj(adres: string, token: string, firma: string): Promise<Dos
   }
   try {
     if (r.status !== 200) throw new BladTozsamosci(`status ${r.status}`);
-    return odczytaj(json);
+    return odczytaj(parsuj(tresc));
   } catch (e) {
-    console.error('dostep: zła odpowiedź /access (konfiguracja?)', e instanceof Error ? e.message : e);
+    console.error(`${ZLA_ODPOWIEDZ} (konfiguracja?)`, e instanceof Error ? e.message : e);
     throw e;
+  }
+}
+
+/**
+ * Parses the text of a 200 answer.
+ *
+ * Call: `parsuj(tresc)`.
+ * Expects: the body text.
+ * Output: the parsed JSON.
+ * Throws: `BladTozsamosci` when the text is not JSON.
+ */
+function parsuj(tresc: string): unknown {
+  try {
+    return JSON.parse(tresc);
+  } catch {
+    throw new BladTozsamosci('treść nie jest JSON');
   }
 }
 
 /**
  * Access of a person to CogniFly in a company.
  *
- * Call: `await dostepFirmy(process.env.TOZSAMOSC_URL, token, firma)`.
- * Expects: the Identity base URL, the person's ACCESS token and a
- * company ('' lets Platforma choose).
- * Output: an answer younger than 5 min from memory, else a fresh one
- * (remembered). When Platforma is down: the last answer up to
- * 60 min old (stale-if-error), else null (the caller lets the
- * request through).
+ * Call: `await dostepFirmy(adres, token, sub, firma)`.
+ * Expects: the Identity base URL, the person's ACCESS token, their
+ * verified `sub` and a company ('' lets Platforma choose).
+ * Output: an answer for this token younger than 5 min, else a fresh
+ * one (remembered per token; consents and company or licence
+ * refusals also per `sub|firma`). When Platforma is down: the last
+ * such answer of this person and company up to 60 min old
+ * (stale-if-error, also after a token refresh), else null (the
+ * caller lets the request through).
  * Throws: `BladTozsamosci` (see `zapytaj`).
  */
-export async function dostepFirmy(adres: string, token: string, firma: string): Promise<Dostep | null> {
+export async function dostepFirmy(adres: string, token: string, sub: string, firma: string): Promise<Dostep | null> {
   const now = Date.now();
-  const k = klucz(token, firma);
-  const swiezy = zPamieci(k, now, WAZNOSC_MS);
+  const kt = kluczTokenu(token, firma);
+  const ko = `${sub}|${firma}`;
+  const swiezy = swieze.odczytaj(kt, now, WAZNOSC_MS);
   if (swiezy) return swiezy;
   const dostep = await zapytaj(adres, token, firma);
-  if (dostep) zapamietaj(k, dostep, now);
-  return dostep ?? zPamieci(k, now, ZAPAS_MS);
+  if (!dostep) return zapas.odczytaj(ko, now, ZAPAS_MS);
+  swieze.zapisz(kt, dostep, now);
+  if (doZapasu(dostep)) zapas.zapisz(ko, dostep, now);
+  return dostep;
 }
