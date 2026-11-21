@@ -30,14 +30,21 @@ tokenem osoby:
   SHA-256 tokenu i firma; token nie jest przechowywany.
 - `GET /ja` (wybór firmy) przechodzi, gdy którakolwiek firma osoby ma dostęp.
   Nieaktualna firma w konfiguracji klienta nie blokuje więc wyboru.
-- Platforma chwilowo niedostępna (błąd sieci, przekroczenie 1,5 s, 5xx,
-  429): API używa ostatniej odpowiedzi Platformy dla tego tokenu i firmy,
-  także przeterminowanej, ale nie starszej niż 60 minut (tyle, co claim w
-  tokenie). Dopiero gdy takiej nie ma, żądanie przechodzi (błąd sieci nie
-  blokuje pracy).
-- Inny status 4xx albo nieczytelna treść oznacza błędną konfigurację (np.
-  zły `TOZSAMOSC_URL`): API odpowiada 503 `TOZSAMOSC_NIEDOSTEPNA` i zapisuje
-  błąd w logu (alarm błędów Lambdy go nie widzi, sprawdź logi).
+- Platforma chwilowo niedostępna (błąd sieci, przekroczenie 1,5 s także
+  przy czytaniu treści, 5xx, 429): API używa zapasu, czyli ostatniej
+  odpowiedzi Platformy dla tej osoby (`sub`) i firmy, także przeterminowanej,
+  ale nie starszej niż 60 minut (tyle, co claim w tokenie). Zapas przetrwa
+  odświeżenie tokenu. Trafiają do niego zgody i odmowy dotyczące firmy lub
+  licencji (`NO_LICENCE`, `LICENCE_EXPIRED`, `ORG_SUSPENDED`,
+  `NOT_MEMBER`), nie trafiają powody tokenu i konta (`TOKEN_REVOKED`,
+  `ACCOUNT_DISABLED`). Dopiero gdy zapasu nie ma, żądanie przechodzi (błąd
+  sieci nie blokuje pracy).
+- Inny status 4xx albo treść, która nie jest poprawnym JSON z polem
+  `active`, oznacza błędną konfigurację (np. zły `TOZSAMOSC_URL`): API
+  odpowiada 503 `TOZSAMOSC_NIEDOSTEPNA` i zapisuje w logu błąd ze znacznikiem
+  `DOSTEP_ZLA_ODPOWIEDZ`. Filtr metryk na logu Lambdy API liczy ten znacznik,
+  a alarm `cognifly-test-api-tozsamosc-zla-odpowiedz` (co najmniej 1 w 5
+  minut) wysyła e-mail przez temat alarmów.
 - Bez `TOZSAMOSC_URL` albo bez tokenu liczy się tylko claim (jak dotąd).
 - Adres to parametr SSM `/platforma/<etap>/tozsamosc/api-url`; infra
   przekazuje go Lambdzie API jako `TOZSAMOSC_URL`.
@@ -115,9 +122,10 @@ ponowienie żądania.
 ## Wdrożenie
 
 Najpierw PR scalony do `main` (za zgodą Michała). Zestaw `<C>` jak w
-`docs/przepiecie-na-platforme.md`. Zmienia się tylko Lambda API: kod i
-zmienna `TOZSAMOSC_URL` (z istniejącego parametru SSM
-`/platforma/test/tozsamosc/api-url`). Kolejność: API, aplikacja, wtyczka. Każdy
+`docs/przepiecie-na-platforme.md`. Zmienia się Lambda API (kod i
+zmienna `TOZSAMOSC_URL` z istniejącego parametru SSM
+`/platforma/test/tozsamosc/api-url`) i dochodzą filtr metryk oraz alarm na
+jej logu. Kolejność: API, aplikacja, wtyczka. Każdy
 blok poleceń uruchamiaj z katalogu głównego repo (podkatalogi są jawne:
 `(cd infra && ...)`).
 
@@ -158,8 +166,9 @@ PY
 
 Oczekiwane: `'active': True`. Gdy nie — **zatrzymaj się, nie wdrażaj**.
 
-Podgląd zmian (tylko Lambda API: kod, `TOZSAMOSC_URL` i parametr SSM
-szablonu):
+Podgląd zmian (Lambda API: kod, `TOZSAMOSC_URL` i parametr SSM szablonu;
+nowe `AWS::Logs::MetricFilter` i `AWS::CloudWatch::Alarm`
+`cognifly-test-api-tozsamosc-zla-odpowiedz`):
 
 ```bash
 (cd infra && npx cdk diff cognifly-test <C>)
@@ -251,5 +260,6 @@ node ~/Documents/Platforma/scripts/operator.mjs https://wrnzaptvv6.execute-api.e
   jej nie ma, np. po zimnym starcie Lambdy) przepuszcza żądania bez kontroli
   licencji (członkostwo w firmie API nadal sprawdza w swoim rejestrze).
 - Odmowa Platformy zostaje w pamięci Lambdy do 5 minut albo do odświeżenia
-  tokenu (klucz to skrót tokenu). Po przywróceniu licencji API może jeszcze
-  tyle odmawiać osobom w kilku firmach.
+  tokenu (klucz świeżej odpowiedzi to skrót tokenu). Po przywróceniu
+  licencji API może jeszcze tyle odmawiać osobom w kilku firmach. Gdy w tym
+  czasie Platforma jest niedostępna, odmowa z zapasu trzyma się do 60 minut.
