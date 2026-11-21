@@ -97,7 +97,8 @@ function setup(opts: { session?: string | null; inbox?: unknown[]; workFolder?: 
     if (url.startsWith(`${DEFAULT_CONFIG.identityUrl}/access`)) {
       await state.accessGate;
       if (state.access instanceof Error) throw state.access;
-      return json(200, state.access);
+      const org = new URL(url).searchParams.get('org');
+      return json(200, typeof state.access === 'function' ? state.access(org) : state.access);
     }
     if (url.endsWith('/ja')) return json(200, { firmy: state.firmy });
     if (url.endsWith('/osoby')) return json(200, { osoby: [{ osoba: 'ania' }, { osoba: 'michal' }] });
@@ -912,10 +913,94 @@ describe('Controller', () => {
       const { c, ports } = setup({ inbox: [task(1)] });
       await c.start();
       const calls = vi.mocked(ports.fetch).mock.calls;
-      expect(String(calls[0]![0])).toBe(`${DEFAULT_CONFIG.identityUrl}/access?product=cognifly`);
+      expect(String(calls[0]![0])).toBe(`${DEFAULT_CONFIG.identityUrl}/access?product=cognifly&org=${DEFAULT_CONFIG.company}`);
       expect((calls[0]![1].headers as Record<string, string>).Authorization).toBe('Bearer A');
       expect(paths(ports).slice(1)).toEqual(['/ja', '/skrzynka']);
       expect(c.current().blocked).toBeNull();
+    });
+
+    it('company_change_checks_access_for_the_new_company', async () => {
+      const { c, ports, state } = setup({ inbox: [] });
+      state.firmy = [{ firma: 'pilot', osoba: 'michal' }, { firma: 'acme', osoba: 'mr' }];
+      await c.start();
+      await c.handlers()['config.setCompany']!({ company: 'acme' });
+      await c.poll();
+      expect(accessOrgs(ports)).toEqual(['pilot', 'acme']);
+    });
+
+    /** Orgs asked in `GET /access`, in order. */
+    const accessOrgs = (ports: Ports) => vi.mocked(ports.fetch).mock.calls.map(([u]) => new URL(String(u)))
+      .filter((u) => u.pathname === '/access').map((u) => u.searchParams.get('org'));
+    const STALE_ACCESS = (ok: string) => (org: string | null) => (org === ok ? { active: true } : { active: false, reason: 'NOT_MEMBER' });
+
+    it('stale_company_not_member_moves_to_the_only_company_and_says_so', async () => {
+      const { c, ports, state } = setup({ inbox: [] });
+      ports.log = vi.fn();
+      state.firmy = [{ firma: 'acme', osoba: 'mr' }];
+      state.access = STALE_ACCESS('acme');
+      const v = await c.start();
+      expect(v).toMatchObject({ loggedIn: true, blocked: null, osoba: 'mr' });
+      expect(accessOrgs(ports)).toEqual(['pilot', 'acme']);
+      expect(ports.notify).toHaveBeenCalledWith('CogniFly — zmiana firmy', 'Nie należysz już do firmy pilot — przełączono na firmę acme.');
+      expect(ports.log).toHaveBeenCalledWith('company changed: pilot -> acme (not a member)');
+    });
+
+    it('stale_company_with_two_companies_blocks_until_the_person_chooses', async () => {
+      const { c, ports, state } = setup({ inbox: [task(1)] });
+      ports.log = vi.fn();
+      state.firmy = [{ firma: 'acme', osoba: 'mr' }, { firma: 'beta', osoba: 'mb' }];
+      state.access = STALE_ACCESS('beta');
+      const v = await c.start();
+      expect(v).toMatchObject({ loggedIn: true, blocked: 'Nie należysz już do firmy pilot — wybierz firmę w Ustawieniach.', tasks: [] });
+      expect(await ports.vault.read()).not.toBeNull();
+      expect(paths(ports).filter((p) => p.endsWith('/skrzynka'))).toHaveLength(0);
+      expect(ports.notify).not.toHaveBeenCalled();
+      expect(ports.log).toHaveBeenCalledWith('company pilot left; choice needed among 2');
+      expect(c.current().blocked).not.toBeNull();
+      await c.handlers()['config.setCompany']!({ company: 'beta' });
+      const after = await c.poll();
+      expect(after).toMatchObject({ blocked: null, tasks: [task(1)] });
+      expect(accessOrgs(ports).at(-1)).toBe('beta');
+    });
+
+    it('stale_company_seen_by_ja_after_a_failed_access_check_blocks_with_two_companies', async () => {
+      const { c, ports, state } = setup({ inbox: [task(1)] });
+      state.firmy = [{ firma: 'acme', osoba: 'mr' }, { firma: 'beta', osoba: 'mb' }];
+      state.access = new TypeError('offline');
+      const v = await c.start();
+      expect(v).toMatchObject({ blocked: 'Nie należysz już do firmy pilot — wybierz firmę w Ustawieniach.', tasks: [], offline: false });
+      expect(paths(ports).filter((p) => p.endsWith('/skrzynka'))).toHaveLength(0);
+    });
+
+    it('company_choice_stops_the_files_daemon_and_does_not_start_it_for_the_left_company', async () => {
+      const { c, ports, state } = setup({ workFolder: '/Users/m/repo', inbox: [task(1)] });
+      await c.start();
+      expect(ports.heartwood.start).toHaveBeenCalledTimes(1);
+      state.firmy = [{ firma: 'acme', osoba: 'mr' }, { firma: 'beta', osoba: 'mb' }];
+      state.access = STALE_ACCESS('beta');
+      state.now += ACCESS_EVERY_MS;
+      await c.poll();
+      expect(c.current().blocked).toBe('Nie należysz już do firmy pilot — wybierz firmę w Ustawieniach.');
+      expect(ports.heartwood.stop).toHaveBeenCalledTimes(1);
+      await c.poll();
+      expect(ports.heartwood.start).toHaveBeenCalledTimes(1);
+      expect(c.current().files.status).toBeNull();
+    });
+
+    it('automatic_company_change_cleans_up_like_a_manual_one', async () => {
+      const { c, ports, state } = setup({ workFolder: '/Users/m/repo', inbox: [task(1)] });
+      await c.start();
+      expect(c.current().tasks).toHaveLength(1);
+      state.firmy = [{ firma: 'acme', osoba: 'mr' }];
+      state.access = STALE_ACCESS('acme');
+      state.inbox = [task(2)];
+      state.now += ACCESS_EVERY_MS;
+      const v = await c.poll();
+      expect(ports.heartwood.stop).toHaveBeenCalledTimes(1);
+      expect(ports.heartwood.start).toHaveBeenLastCalledWith(DEFAULT_CONFIG.heartwoodUrl, DEFAULT_CONFIG.heartwoodWsUrl, DEFAULT_CONFIG.identityUrl, 'acme', '/Users/m/repo/Pliki');
+      expect(v).toMatchObject({ osoba: 'mr', tasks: [task(2)] });
+      // seen memory was cleared: the new company's tasks are counted, not announced
+      expect(vi.mocked(ports.notify).mock.calls.map(([t]) => t)).toEqual(['CogniFly — zmiana firmy']);
     });
 
     it('access_checked_every_five_minutes', async () => {

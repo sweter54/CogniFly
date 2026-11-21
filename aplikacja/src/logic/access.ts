@@ -1,11 +1,18 @@
 // Access to CogniFly as the Platforma Identity service sees it
-// (`GET /access?product=cognifly`): the request, the reasons that
+// (`GET /access?product=cognifly&org=<company>`): the request, the reasons that
 // end the session and the Polish texts shown to the user.
 import { ApiError, NetworkError } from './errors.js';
 import { requestJson, stringField, type FetchFn } from './http.js';
 
 /** Answer of Identity: active, or inactive with a reason code. */
 export type Access = { active: true } | { active: false; reason: string };
+
+/**
+ * Fit of the stored company with the person's companies: `member`
+ * (kept), `switched` (moved to their only company) or `choose`
+ * (several companies: work stops until they pick one).
+ */
+export type CompanyFit = 'member' | 'switched' | 'choose';
 
 /** How often (and how long a result is trusted), in ms. */
 export const ACCESS_EVERY_MS = 300_000;
@@ -33,20 +40,27 @@ const REASON_TEXTS: Record<string, string> = {
   ORG_SUSPENDED: 'firma jest zawieszona.',
   NO_LICENCE: 'firma nie ma licencji na CogniFly.',
   LICENCE_EXPIRED: 'licencja firmy na CogniFly wygasła.',
+  ORG_REQUIRED: 'należysz do kilku firm — wybierz firmę w ustawieniach CogniFly.',
+  MACHINE_REVOKED: 'dostęp tego urządzenia został cofnięty.',
 };
 
 /**
- * Asks Identity whether the user may use CogniFly.
+ * Asks Identity whether the user may use CogniFly in a company.
  *
- * Call: `await checkAccess(fetch, config.identityUrl, accessToken)`.
- * Expects: the Identity base URL (no trailing `/`) and the Cognito
- * ACCESS token (never the ID token).
+ * Call: `await checkAccess(fetch, config.identityUrl, token, company)`.
+ * Expects: the Identity base URL (no trailing `/`), the Cognito
+ * ACCESS token (never the ID token) and the company id. The company
+ * is always sent: a person in several companies gets `ORG_REQUIRED`
+ * without it.
  * Output: `{ active: true }` or `{ active: false, reason }`.
  * Throws: `NetworkError` on a connection failure, a status other
  * than 200 or a body without a boolean `active`.
  */
-export async function checkAccess(fetchFn: FetchFn, identityUrl: string, accessToken: string): Promise<Access> {
-  const r = await requestJson(fetchFn, `${identityUrl}/access?product=cognifly`, {
+export async function checkAccess(
+  fetchFn: FetchFn, identityUrl: string, accessToken: string, company: string,
+): Promise<Access> {
+  const query = new URLSearchParams({ product: 'cognifly', org: company });
+  const r = await requestJson(fetchFn, `${identityUrl}/access?${query}`, {
     method: 'GET', headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (r.status !== 200) throw new NetworkError();
@@ -103,4 +117,26 @@ export function isLicenceError(e: unknown): e is ApiError {
  */
 export function licenceMessage(code: string): string {
   return accessMessage(LICENCE_REASONS[code] ?? code);
+}
+
+/**
+ * Polish text of an automatic move to the person's only company.
+ *
+ * Call: `companySwitchedMessage('pilot', 'acme')`.
+ * Expects: the left company and the new one.
+ * Output: one sentence for the notification.
+ */
+export function companySwitchedMessage(left: string, now: string): string {
+  return `Nie należysz już do firmy ${left} — przełączono na firmę ${now}.`;
+}
+
+/**
+ * Polish text shown while the person must choose a company.
+ *
+ * Call: `companyChoiceMessage('pilot')`.
+ * Expects: the company the person left.
+ * Output: one sentence for the banner.
+ */
+export function companyChoiceMessage(left: string): string {
+  return `Nie należysz już do firmy ${left} — wybierz firmę w Ustawieniach.`;
 }

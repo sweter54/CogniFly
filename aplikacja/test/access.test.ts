@@ -6,10 +6,10 @@ import { header, scriptedFetch } from './helpers.js';
 const ID_URL = 'https://id.example.com';
 
 describe('checkAccess', () => {
-  it('sends_access_token_and_product', async () => {
+  it('sends_access_token_product_and_org', async () => {
     const f = scriptedFetch([{ status: 200, body: { active: true, sub: 'u', org: 'o', role: 'member', licenceUntil: 'x' } }]);
-    expect(await checkAccess(f.fetch, ID_URL, 'ACCESS')).toEqual({ active: true });
-    expect(f.calls[0]!.url).toBe(`${ID_URL}/access?product=cognifly`);
+    expect(await checkAccess(f.fetch, ID_URL, 'ACCESS', 'pilot-bearly')).toEqual({ active: true });
+    expect(f.calls[0]!.url).toBe(`${ID_URL}/access?product=cognifly&org=pilot-bearly`);
     expect(f.calls[0]!.init.method).toBe('GET');
     expect(header(f.calls[0]!, 'Authorization')).toBe('Bearer ACCESS');
   });
@@ -20,14 +20,20 @@ describe('checkAccess', () => {
       { status: 200, body: { active: false, reason: 'bad reason <b>' } },
       { status: 200, body: { active: false } },
     ]);
-    expect(await checkAccess(f.fetch, ID_URL, 'A')).toEqual({ active: false, reason: 'LICENCE_EXPIRED' });
-    expect(await checkAccess(f.fetch, ID_URL, 'A')).toEqual({ active: false, reason: 'UNKNOWN' });
-    expect(await checkAccess(f.fetch, ID_URL, 'A')).toEqual({ active: false, reason: 'UNKNOWN' });
+    expect(await checkAccess(f.fetch, ID_URL, 'A', 'pilot')).toEqual({ active: false, reason: 'LICENCE_EXPIRED' });
+    expect(await checkAccess(f.fetch, ID_URL, 'A', 'pilot')).toEqual({ active: false, reason: 'UNKNOWN' });
+    expect(await checkAccess(f.fetch, ID_URL, 'A', 'pilot')).toEqual({ active: false, reason: 'UNKNOWN' });
+  });
+
+  it('encodes_the_org_in_the_query', async () => {
+    const f = scriptedFetch([{ status: 200, body: { active: true } }]);
+    await checkAccess(f.fetch, ID_URL, 'A', 'a&b c');
+    expect(new URL(f.calls[0]!.url).searchParams.get('org')).toBe('a&b c');
   });
 
   it('non_200_is_network_error', async () => {
     const f = scriptedFetch([{ status: 401, body: {} }, { status: 500 }, { status: 200, body: { active: 'yes' } }, new TypeError('offline')]);
-    for (let i = 0; i < 4; i++) await expect(checkAccess(f.fetch, ID_URL, 'A')).rejects.toBeInstanceOf(NetworkError);
+    for (let i = 0; i < 4; i++) await expect(checkAccess(f.fetch, ID_URL, 'A', 'pilot')).rejects.toBeInstanceOf(NetworkError);
   });
 });
 
@@ -39,6 +45,8 @@ describe('accessMessage', () => {
     expect(accessMessage('ORG_SUSPENDED')).toBe('Brak dostępu do CogniFly: firma jest zawieszona.');
     expect(accessMessage('NO_LICENCE')).toBe('Brak dostępu do CogniFly: firma nie ma licencji na CogniFly.');
     expect(accessMessage('LICENCE_EXPIRED')).toBe('Brak dostępu do CogniFly: licencja firmy na CogniFly wygasła.');
+    expect(accessMessage('ORG_REQUIRED')).toBe('Brak dostępu do CogniFly: należysz do kilku firm — wybierz firmę w ustawieniach CogniFly.');
+    expect(accessMessage('MACHINE_REVOKED')).toBe('Brak dostępu do CogniFly: dostęp tego urządzenia został cofnięty.');
     expect(accessMessage('XYZ')).toBe('Brak dostępu do CogniFly: odmowa dostępu (XYZ).');
   });
 

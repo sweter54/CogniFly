@@ -117,6 +117,32 @@ describe('stos CogniFly', () => {
     expect(env('Api')).toMatchObject({ COGNIFLY_TABELA: 'cognifly-test-dane' });
   });
 
+  test('alarm_on_bad_identity_answers_in_the_api_log', () => {
+    const [, filtr] = zasoby('AWS::Logs::MetricFilter').find(([, r]) => JSON.stringify(r).includes('DOSTEP_ZLA_ODPOWIEDZ'))!;
+    expect(filtr.Properties.FilterPattern).toBe('"DOSTEP_ZLA_ODPOWIEDZ"');
+    expect(filtr.Properties.LogGroupName.Ref).toMatch(/^ApiLogi/);
+    const metryka = filtr.Properties.MetricTransformations[0];
+    expect(metryka).toMatchObject({ MetricValue: '1' });
+    t.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'cognifly-test-api-tozsamosc-zla-odpowiedz',
+      MetricName: metryka.MetricName,
+      Namespace: metryka.MetricNamespace,
+      Statistic: 'Sum',
+      Period: 300,
+      Threshold: 1,
+      ComparisonOperator: 'GreaterThanOrEqualToThreshold',
+      TreatMissingData: 'notBreaching',
+      AlarmActions: [{ Ref: Match.stringLikeRegexp('^Alarmy') }],
+    });
+  });
+
+  test('api_checks_the_licence_with_platforma_identity', () => {
+    const [, f] = zasoby('AWS::Lambda::Function').find(([, r]) => r.Properties.FunctionName === 'cognifly-test-api')!;
+    expect(f.Properties.Environment.Variables).toMatchObject({
+      TOZSAMOSC_URL: { Ref: parametrSsm(json, 'tozsamosc/api-url') },
+    });
+  });
+
   test('grupa Scheduler + rola, która może tylko wywołać Lambdę eskalacji', () => {
     t.hasResourceProperties('AWS::Scheduler::ScheduleGroup', { Name: 'cognifly-test-eskalacje' });
     const [, rola] = zasoby('AWS::IAM::Role').find(([id]) => id.includes('SchedulerRola'))!;
@@ -192,7 +218,7 @@ describe('stos CogniFly', () => {
   });
 
   test('alarmy błędów Lambd -> SNS -> e-mail', () => {
-    t.resourceCountIs('AWS::CloudWatch::Alarm', 10);
+    t.resourceCountIs('AWS::CloudWatch::Alarm', 11);
     for (const n of ['tozsamosczdarzenia-bledy', 'tozsamoscuzgodnij-bledy', 'tozsamosc-dlq']) {
       t.hasResourceProperties('AWS::CloudWatch::Alarm', { AlarmName: `cognifly-test-${n}` });
     }
@@ -470,7 +496,7 @@ describe('stos z kontekstem heartwood', () => {
     for (const n of ['heartwoodpraca-bledy', 'heartwoodzdarzenia-bledy', 'heartwood-dlq']) {
       t2.hasResourceProperties('AWS::CloudWatch::Alarm', { AlarmName: `cognifly-test-${n}` });
     }
-    t2.resourceCountIs('AWS::CloudWatch::Alarm', 13);
+    t2.resourceCountIs('AWS::CloudWatch::Alarm', 14);
   });
 
   test('heartwood_rule_is_on_the_hub', () => {

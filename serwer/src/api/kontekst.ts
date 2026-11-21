@@ -1,4 +1,5 @@
 import { tozsamosc } from '../dane/konfiguracja.js';
+import { BladTozsamosci, dostepFirmy, type Dostep } from './dostepPlatformy.js';
 
 /** Minimalny kształt zdarzenia API Gateway HTTP API (payload v2) — tylko to, czego używamy. */
 export interface ZdarzenieApi {
@@ -48,21 +49,146 @@ export function licenceState(claims: Record<string, unknown> | undefined, now: n
   return now < until ? 'OK' : 'LICENCJA_WYGASLA';
 }
 
-/** Throws 403 `BRAK_LICENCJI` / `LICENCJA_WYGASLA` unless the token is licensed. */
-function wymagajLicencji(event: ZdarzenieApi): void {
+/** Platforma reasons of a missing or expired licence → API codes. */
+const KODY_LICENCJI: Record<string, LicenceState> = { NO_LICENCE: 'BRAK_LICENCJI', LICENCE_EXPIRED: 'LICENCJA_WYGASLA' };
+
+/** Company named by the `X-Cognifly-Firma` header; '' when absent. */
+function naglowekFirmy(event: ZdarzenieApi): string {
+  return event.headers?.['x-cognifly-firma'] ?? '';
+}
+
+/** Bearer scheme of the `Authorization` header, in any letter case. */
+const BEARER = /^bearer\s+(\S+)\s*$/i;
+
+/** Raw bearer token of the request; '' when absent. */
+function tokenOsoby(event: ZdarzenieApi): string {
+  return BEARER.exec(event.headers?.authorization ?? '')?.[1] ?? '';
+}
+
+/**
+ * Checks the licence claim of the token (the fast path).
+ *
+ * Call: `wymagajLicencjiZClaimu(event)`.
+ * Expects: an API event.
+ * Output: none when the claim is valid.
+ * Throws: 403 `BRAK_LICENCJI` / `LICENCJA_WYGASLA` otherwise.
+ */
+function wymagajLicencjiZClaimu(event: ZdarzenieApi): void {
   const stan = licenceState(event.requestContext?.authorizer?.jwt?.claims, Date.now());
   if (stan !== 'OK') throw new HttpBlad(403, stan);
 }
 
 /**
- * Firmy osoby z tokenu (firma → osobaId). Najpierw sprawdza licencję z
- * claimu (przed odczytem rejestru); nieznana osoba → 403.
+ * Tells whether the token's claim decides the licence.
+ *
+ * Call: `claimRozstrzyga(event)`.
+ * Expects: an API event.
+ * Output: true when the token has the licence claim and either no
+ * company header or the header equals the token's `org` claim.
+ * Platforma v2 leaves the claim out for a person in several
+ * companies, so then Platforma is asked instead.
+ */
+function claimRozstrzyga(event: ZdarzenieApi): boolean {
+  const claims = event.requestContext?.authorizer?.jwt?.claims;
+  const raw = claims?.[licenceClaimName()];
+  if (typeof raw !== 'string' || raw === '') return false;
+  const firma = naglowekFirmy(event);
+  return firma === '' || claims?.org === firma;
+}
+
+/**
+ * Companies whose licence lets the request through.
+ *
+ * Call: `firmyDoSprawdzenia(event, firmy)`.
+ * Expects: an API event and the person's companies.
+ * Output: the header company when the person belongs to it; else
+ * all their companies in order (any licensed one lets `GET /ja`
+ * through, so a stale stored company can be replaced); `['']` for
+ * a person without companies (Platforma chooses).
+ */
+function firmyDoSprawdzenia(event: ZdarzenieApi, firmy: Record<string, string>): string[] {
+  const naglowek = naglowekFirmy(event);
+  if (naglowek !== '' && Object.hasOwn(firmy, naglowek)) return [naglowek];
+  const wszystkie = Object.keys(firmy).sort();
+  return wszystkie.length > 0 ? wszystkie : [''];
+}
+
+/**
+ * Error of a refusal by Platforma.
+ *
+ * Call: `throw odmowaPlatformy('NO_LICENCE')`.
+ * Expects: a reason code of `GET /access`.
+ * Output: 403 `BRAK_LICENCJI` / `LICENCJA_WYGASLA` for licence
+ * reasons; 403 `BRAK_DOSTEPU` with `powod` for the others.
+ */
+function odmowaPlatformy(powod: string): HttpBlad {
+  const kod = KODY_LICENCJI[powod];
+  return kod ? new HttpBlad(403, kod) : new HttpBlad(403, 'BRAK_DOSTEPU', { powod });
+}
+
+/**
+ * Asks Platforma about one company, as an API error.
+ *
+ * Call: `await dostepDlaApi(adres, token, sub, 'pilot')`.
+ * Expects: the Identity URL, the person's token, verified `sub` and
+ * a company.
+ * Output: as `dostepFirmy` (null: Platforma down, nothing known).
+ * Throws: 503 `TOZSAMOSC_NIEDOSTEPNA` for a misconfiguration
+ * answer (`BladTozsamosci`); other errors pass through.
+ */
+async function dostepDlaApi(adres: string, token: string, sub: string, firma: string): Promise<Dostep | null> {
+  try {
+    return await dostepFirmy(adres, token, sub, firma);
+  } catch (e) {
+    if (e instanceof BladTozsamosci) throw new HttpBlad(503, 'TOZSAMOSC_NIEDOSTEPNA');
+    throw e;
+  }
+}
+
+/**
+ * Checks the licence with Platforma (`GET /access`).
+ *
+ * Call: `await wymagajLicencjiZPlatformy(event, ['pilot'])`.
+ * Expects: an API event and the companies to try in order.
+ * Output: none when a company is active, or when Platforma is down
+ * and no answer of the last 60 min is known (a network error never
+ * blocks work); without `TOZSAMOSC_URL` or a bearer token only the
+ * claim counts.
+ * Throws: the first refusal (`odmowaPlatformy`) when all refuse;
+ * 503 `TOZSAMOSC_NIEDOSTEPNA` on a misconfiguration answer.
+ */
+async function wymagajLicencjiZPlatformy(event: ZdarzenieApi, firmy: string[]): Promise<void> {
+  const adres = process.env.TOZSAMOSC_URL ?? '';
+  const token = tokenOsoby(event);
+  if (adres === '' || token === '') return wymagajLicencjiZClaimu(event);
+  let odmowa: string | null = null;
+  for (const firma of firmy) {
+    const d = await dostepDlaApi(adres, token, subZTokenu(event), firma);
+    if (d === null || d.aktywny) return;
+    odmowa ??= d.powod;
+  }
+  throw odmowaPlatformy(odmowa ?? 'UNKNOWN');
+}
+
+/**
+ * The person's companies (company → person id), licence checked.
+ *
+ * Call: `await firmyZTokenu(event)`.
+ * Expects: an event verified by the JWT authorizer.
+ * Output: `{sub, firmy}`. The licence claim is checked before the
+ * registry read when it decides (`claimRozstrzyga`); otherwise
+ * Platforma is asked for the header company (or any company).
+ * Throws: 401 without `sub`; 403 for an unknown person or a
+ * missing licence (`BRAK_LICENCJI`, `LICENCJA_WYGASLA`,
+ * `BRAK_DOSTEPU` with `powod`).
  */
 export async function firmyZTokenu(event: ZdarzenieApi): Promise<{ sub: string; firmy: Record<string, string> }> {
   const sub = subZTokenu(event);
-  wymagajLicencji(event);
+  const zClaimu = claimRozstrzyga(event);
+  if (zClaimu) wymagajLicencjiZClaimu(event);
   const firmy = await tozsamosc(sub);
   if (!firmy) throw new HttpBlad(403, 'BRAK_DOSTEPU');
+  if (!zClaimu) await wymagajLicencjiZPlatformy(event, firmyDoSprawdzenia(event, firmy));
   return { sub, firmy };
 }
 
@@ -70,9 +196,9 @@ export async function kontekst(event: ZdarzenieApi): Promise<Kontekst> {
   const { sub, firmy } = await firmyZTokenu(event);
   const dostepne = Object.keys(firmy);
 
-  const naglowek = event.headers?.['x-cognifly-firma'];
+  const naglowek = naglowekFirmy(event);
   let firma: string;
-  if (naglowek !== undefined && naglowek !== '') {
+  if (naglowek !== '') {
     if (!Object.hasOwn(firmy, naglowek)) throw new HttpBlad(403, 'BRAK_DOSTEPU');
     firma = naglowek;
   } else if (dostepne.length === 1) {

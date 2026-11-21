@@ -3,7 +3,10 @@
 // as ports, so the whole flow is unit-tested without Tauri.
 import { TASK_ID_PATTERN, THREAD_PATTERN, type Task, type UserSettableState } from '@cognifly/wspolne/api';
 import type { InboxView, Methods, Screen } from '../windows/protocol.js';
-import { accessMessage, ACCESS_EVERY_MS, checkAccess, isLicenceError, licenceMessage, LOGOUT_REASONS, type Access } from './access.js';
+import {
+  accessMessage, ACCESS_EVERY_MS, checkAccess, companyChoiceMessage, companySwitchedMessage, isLicenceError, licenceMessage,
+  LOGOUT_REASONS, type Access, type CompanyFit,
+} from './access.js';
 import { ApiClient, type Membership } from './api.js';
 import { confirmEmailCode, refreshTokens, startEmailLogin, type CognitoContext, type PendingLogin } from './cognito.js';
 import { isSafeFolder, loadConfig, saveChoices, type AppConfig, type UserChoices } from './config.js';
@@ -350,10 +353,11 @@ export class Controller {
    * Call: `await this.readInbox()` from `fetchInbox`.
    * Expects: a session.
    * Output: the tasks.
-   * Throws: errors of `loadIdentity` and `ApiClient.inbox`.
+   * Throws: errors of `loadIdentity` and `ApiClient.inbox`;
+   * `AppError('BLOCKED')` when the person must choose a company.
    */
   private async readInbox(): Promise<Task[]> {
-    if (!this.companies) await this.loadIdentity();
+    if (!this.companies && (await this.loadIdentity()) === 'choose') throw new AppError('BLOCKED');
     return this.api().inbox();
   }
 
@@ -404,21 +408,47 @@ export class Controller {
    * Output: none (never throws). Uses the ACCESS token of the
    * session. A network error or odd answer is logged and changes
    * nothing (the next poll retries); a revoked session ends like
-   * in a poll; a result arriving after a logout is dropped.
+   * in a poll; a result arriving after a logout or a company change
+   * is dropped. `NOT_MEMBER` for a stored company the person left
+   * moves to their only company and checks once more (`retry`), or
+   * stops work until they choose one (see `fitCompany`).
    */
-  private async runAccessCheck(): Promise<void> {
+  private async runAccessCheck(retry = true): Promise<void> {
     const epoch = this.session.epoch();
+    const company = this.config.company;
     let access: Access;
     try {
-      access = await checkAccess(this.ports.fetch, this.config.identityUrl, await this.session.accessToken());
+      const token = await this.session.accessToken();
+      access = await checkAccess(this.ports.fetch, this.config.identityUrl, token, company);
     } catch (e) {
       this.ports.log?.(`access check failed: ${errorCode(e)}`);
       if (e instanceof LoginRequiredError && (await this.sessionEnded(epoch))) await this.sessionRevoked();
       return;
     }
-    if (!this.isCurrent(epoch)) return;
+    if (!this.isCurrent(epoch) || this.config.company !== company) return;
+    const fit = retry ? await this.companyAfterNotMember(access) : 'member';
+    if (fit === 'switched') return this.runAccessCheck(false);
     this.accessCheckedAt = this.time();
-    await this.applyAccess(access);
+    if (fit === 'member') await this.applyAccess(access);
+  }
+
+  /**
+   * Checks the stored company with `GET /ja` after `NOT_MEMBER`.
+   *
+   * Call: `await this.companyAfterNotMember(access)` in
+   * `runAccessCheck`.
+   * Expects: an answer of Identity for the stored company.
+   * Output: the fit of `fitCompany`; `member` for any other answer
+   * and when `/ja` fails (the answer is then applied as is).
+   */
+  private async companyAfterNotMember(access: Access): Promise<CompanyFit> {
+    if (access.active || access.reason !== 'NOT_MEMBER') return 'member';
+    try {
+      return await this.loadIdentity();
+    } catch (e) {
+      this.ports.log?.(`companies after NOT_MEMBER: ${errorCode(e)}`);
+      return 'member';
+    }
   }
 
   /**
@@ -552,11 +582,13 @@ export class Controller {
    * Call: `await this.syncFiles(epoch)` at the end of each poll.
    * Expects: the epoch the poll started with.
    * Output: none (never throws); nothing before the company is known
-   * (`GET /ja`) or the work folder is chosen; the daemon is
-   * (re)started when the company or the work folder changed.
+   * (`GET /ja`), while the stored company is not one of the
+   * person's companies, or before the work folder is chosen; the
+   * daemon is (re)started when the company or the folder changed.
    */
   private async syncFiles(epoch: number): Promise<void> {
-    if (!this.companies || !this.config.workFolder || !this.isCurrent(epoch)) return;
+    if (!this.companies?.some((m) => m.firma === this.config.company)) return;
+    if (!this.config.workFolder || !this.isCurrent(epoch)) return;
     if (this.filesOrg !== this.filesKey()) await this.startFiles(epoch);
     await this.refreshFiles(epoch);
   }
@@ -1102,18 +1134,64 @@ export class Controller {
    * Call: `await this.loadIdentity()` before the first inbox fetch of
    * a session (the inbox needs the company header).
    * Expects: a session.
-   * Output: none; `companies` and `view.osoba` are set. A stored
-   * company the person does not belong to is replaced by their first
-   * company, so a single-company user never has to choose.
+   * Output: the fit of the stored company (`fitCompany`);
+   * `companies` and `view.osoba` are set.
    * Throws: errors of `ApiClient.me` (handled like a failed poll).
    */
-  private async loadIdentity(): Promise<void> {
+  private async loadIdentity(): Promise<CompanyFit> {
     const list = await this.api().me();
     this.companies = list;
-    const keep = list.some((m) => m.firma === this.config.company);
-    const first = list[0];
-    if (!keep && first) this.applyChoices({ company: first.firma });
+    const fit = await this.fitCompany(list);
     this.update({ osoba: list.find((m) => m.firma === this.config.company)?.osoba ?? null });
+    return fit;
+  }
+
+  /**
+   * Settles a stored company the person does not belong to.
+   *
+   * Call: `await this.fitCompany(list)` in `loadIdentity`.
+   * Expects: the person's companies from `GET /ja`.
+   * Output: `member` when the stored company is on the list (or the
+   * list is empty); `switched` when the person has exactly one
+   * company: it becomes the stored one like a manual change, with a
+   * notification and a log line; `choose` when they have several:
+   * work stops (no logout) and the files daemon is stopped until
+   * they pick one in the settings.
+   */
+  private async fitCompany(list: readonly Membership[]): Promise<CompanyFit> {
+    const stale = this.config.company;
+    if (list.length === 0 || list.some((m) => m.firma === stale)) return 'member';
+    const only = list.length === 1 ? list[0] : undefined;
+    if (!only) {
+      this.ports.log?.(`company ${stale} left; choice needed among ${list.length}`);
+      this.update({ tasks: [] });
+      this.block(companyChoiceMessage(stale));
+      await this.stopFiles();
+      return 'choose';
+    }
+    await this.switchCompany(only);
+    this.ports.log?.(`company changed: ${stale} -> ${only.firma} (not a member)`);
+    await this.ports.notify('CogniFly — zmiana firmy', companySwitchedMessage(stale, only.firma))
+      .catch((e: unknown) => this.ports.log?.(`notify failed: ${String(e)}`));
+    return 'switched';
+  }
+
+  /**
+   * Makes another company of the person the current one.
+   *
+   * Call: `await this.switchCompany(member)` from `setCompany` and
+   * `fitCompany`.
+   * Expects: one of the person's companies.
+   * Output: none; the company stored, access check and notification
+   * memory forgotten, tasks cleared, the old company's daemon stopped
+   * (the next poll checks access and starts it for the new one).
+   */
+  private async switchCompany(member: Membership): Promise<void> {
+    this.applyChoices({ company: member.firma });
+    this.forgetAccess();
+    clearSeen(this.ports.store);
+    this.update({ osoba: member.osoba, tasks: [] });
+    await this.stopFiles();
   }
 
   /**
@@ -1123,16 +1201,14 @@ export class Controller {
    * Expects: one of the companies from `GET /ja`.
    * Output: `{ ok: true }`; tasks and notification memory reset, the
    * old company's daemon stopped (its status cleared) and a poll for
-   * the new company starts (it starts the daemon again).
+   * the new company starts (it checks access for that company and
+   * starts the daemon again).
    * Throws: `AppError('BAD_COMPANY')` for any other value.
    */
   private async setCompany(company: string): Promise<{ ok: true }> {
     const member = this.companies?.find((m) => m.firma === company);
     if (!member) throw new AppError('BAD_COMPANY');
-    this.applyChoices({ company });
-    clearSeen(this.ports.store);
-    this.update({ osoba: member.osoba, tasks: [] });
-    await this.stopFiles();
+    await this.switchCompany(member);
     void this.poll();
     return { ok: true };
   }
