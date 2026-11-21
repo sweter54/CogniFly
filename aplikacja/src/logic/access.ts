@@ -7,6 +7,13 @@ import { requestJson, stringField, type FetchFn } from './http.js';
 /** Answer of Identity: active, or inactive with a reason code. */
 export type Access = { active: true } | { active: false; reason: string };
 
+/**
+ * Fit of the stored company with the person's companies: `member`
+ * (kept), `switched` (moved to their only company) or `choose`
+ * (several companies: work stops until they pick one).
+ */
+export type CompanyFit = 'member' | 'switched' | 'choose';
+
 /** How often (and how long a result is trusted), in ms. */
 export const ACCESS_EVERY_MS = 300_000;
 
@@ -110,4 +117,26 @@ export function isLicenceError(e: unknown): e is ApiError {
  */
 export function licenceMessage(code: string): string {
   return accessMessage(LICENCE_REASONS[code] ?? code);
+}
+
+/**
+ * Polish text of an automatic move to the person's only company.
+ *
+ * Call: `companySwitchedMessage('pilot', 'acme')`.
+ * Expects: the left company and the new one.
+ * Output: one sentence for the notification.
+ */
+export function companySwitchedMessage(left: string, now: string): string {
+  return `Nie należysz już do firmy ${left} — przełączono na firmę ${now}.`;
+}
+
+/**
+ * Polish text shown while the person must choose a company.
+ *
+ * Call: `companyChoiceMessage('pilot')`.
+ * Expects: the company the person left.
+ * Output: one sentence for the banner.
+ */
+export function companyChoiceMessage(left: string): string {
+  return `Nie należysz już do firmy ${left} — wybierz firmę w Ustawieniach.`;
 }
