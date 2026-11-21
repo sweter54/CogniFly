@@ -30,8 +30,14 @@ tokenem osoby:
   SHA-256 tokenu i firma; token nie jest przechowywany.
 - `GET /ja` (wybór firmy) przechodzi, gdy którakolwiek firma osoby ma dostęp.
   Nieaktualna firma w konfiguracji klienta nie blokuje więc wyboru.
-- Błąd sieci, przekroczenie 1,5 s albo odpowiedź inna niż 200: żądanie
-  przechodzi (błąd sieci nigdy nie blokuje pracy), nic nie trafia do pamięci.
+- Platforma chwilowo niedostępna (błąd sieci, przekroczenie 1,5 s, 5xx,
+  429): API używa ostatniej odpowiedzi Platformy dla tego tokenu i firmy,
+  także przeterminowanej, ale nie starszej niż 60 minut (tyle, co claim w
+  tokenie). Dopiero gdy takiej nie ma, żądanie przechodzi (błąd sieci nie
+  blokuje pracy).
+- Inny status 4xx albo nieczytelna treść oznacza błędną konfigurację (np.
+  zły `TOZSAMOSC_URL`): API odpowiada 503 `TOZSAMOSC_NIEDOSTEPNA` i zapisuje
+  błąd w logu (alarm błędów Lambdy go nie widzi, sprawdź logi).
 - Bez `TOZSAMOSC_URL` albo bez tokenu liczy się tylko claim (jak dotąd).
 - Adres to parametr SSM `/platforma/<etap>/tozsamosc/api-url`; infra
   przekazuje go Lambdzie API jako `TOZSAMOSC_URL`.
@@ -44,6 +50,9 @@ Odmowa daje 403:
 | `LICENCE_EXPIRED` z Platformy, przeterminowany claim | `LICENCJA_WYGASLA` |
 | inny powód z Platformy | `BRAK_DOSTEPU` z polem `powod` (np. `ORG_SUSPENDED`) |
 
+Błędna odpowiedź Platformy (4xx poza 429, zła treść) daje 503
+`TOZSAMOSC_NIEDOSTEPNA`.
+
 ### Aplikacja
 
 Aplikacja pyta `GET /access?product=cognifly&org=<firma>` w Tożsamości
@@ -55,8 +64,17 @@ Aplikacja pyta `GET /access?product=cognifly&org=<firma>` w Tożsamości
 - po zmianie firmy w ustawieniach.
 
 Wynik jest ważny 5 minut. Gdy Tożsamość odpowie `NOT_MEMBER` dla zapisanej
-firmy, aplikacja pobiera `GET /ja`. Jeśli osoba należy do innej firmy,
-aplikacja przechodzi na nią i pyta ponownie, bez wylogowania.
+firmy (albo `GET /ja` jej nie zawiera), aplikacja pobiera `GET /ja`:
+
+- osoba ma dokładnie jedną firmę: aplikacja przechodzi na nią (jak ręczna
+  zmiana: czyści zadania i pamięć powiadomień, restartuje pliki), pokazuje
+  powiadomienie „Nie należysz już do firmy X — przełączono na firmę Y.”,
+  zapisuje zmianę w logu i pyta ponownie;
+- osoba ma kilka firm: praca jest wstrzymana bez wylogowania z banerem
+  „Nie należysz już do firmy X — wybierz firmę w Ustawieniach.”; wybór
+  firmy wznawia pracę;
+- `GET /ja` się nie udał albo nadal zawiera firmę: obowiązuje `NOT_MEMBER`
+  (wylogowanie).
 
 ### Wtyczka
 
@@ -229,7 +247,9 @@ node ~/Documents/Platforma/scripts/operator.mjs https://wrnzaptvv6.execute-api.e
   sprawdzenie `/access` w kliencie (≤ 5 minut).
 - Tożsamość niedostępna długo: klienci pracują dalej (sieć nie blokuje). Dla
   osób w jednej firmie ochronę daje claim w API. Dla osób w kilku firmach API
-  przepuszcza żądania bez kontroli licencji, dopóki Platforma nie odpowie
-  (członkostwo w firmie API nadal sprawdza w swoim rejestrze).
-- Odmowa Platformy zostaje w pamięci Lambdy do 5 minut. Po przywróceniu
-  licencji API może jeszcze tyle odmawiać osobom w kilku firmach.
+  przez 60 minut trzyma się ostatniej odpowiedzi Platformy, potem (albo gdy
+  jej nie ma, np. po zimnym starcie Lambdy) przepuszcza żądania bez kontroli
+  licencji (członkostwo w firmie API nadal sprawdza w swoim rejestrze).
+- Odmowa Platformy zostaje w pamięci Lambdy do 5 minut albo do odświeżenia
+  tokenu (klucz to skrót tokenu). Po przywróceniu licencji API może jeszcze
+  tyle odmawiać osobom w kilku firmach.
