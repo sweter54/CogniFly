@@ -582,11 +582,13 @@ export class Controller {
    * Call: `await this.syncFiles(epoch)` at the end of each poll.
    * Expects: the epoch the poll started with.
    * Output: none (never throws); nothing before the company is known
-   * (`GET /ja`) or the work folder is chosen; the daemon is
-   * (re)started when the company or the work folder changed.
+   * (`GET /ja`), while the stored company is not one of the
+   * person's companies, or before the work folder is chosen; the
+   * daemon is (re)started when the company or the folder changed.
    */
   private async syncFiles(epoch: number): Promise<void> {
-    if (!this.companies || !this.config.workFolder || !this.isCurrent(epoch)) return;
+    if (!this.companies?.some((m) => m.firma === this.config.company)) return;
+    if (!this.config.workFolder || !this.isCurrent(epoch)) return;
     if (this.filesOrg !== this.filesKey()) await this.startFiles(epoch);
     await this.refreshFiles(epoch);
   }
@@ -1153,7 +1155,8 @@ export class Controller {
    * list is empty); `switched` when the person has exactly one
    * company: it becomes the stored one like a manual change, with a
    * notification and a log line; `choose` when they have several:
-   * work stops (no logout) until they pick one in the settings.
+   * work stops (no logout) and the files daemon is stopped until
+   * they pick one in the settings.
    */
   private async fitCompany(list: readonly Membership[]): Promise<CompanyFit> {
     const stale = this.config.company;
@@ -1163,6 +1166,7 @@ export class Controller {
       this.ports.log?.(`company ${stale} left; choice needed among ${list.length}`);
       this.update({ tasks: [] });
       this.block(companyChoiceMessage(stale));
+      await this.stopFiles();
       return 'choose';
     }
     await this.switchCompany(only);

@@ -972,6 +972,21 @@ describe('Controller', () => {
       expect(paths(ports).filter((p) => p.endsWith('/skrzynka'))).toHaveLength(0);
     });
 
+    it('company_choice_stops_the_files_daemon_and_does_not_start_it_for_the_left_company', async () => {
+      const { c, ports, state } = setup({ workFolder: '/Users/m/repo', inbox: [task(1)] });
+      await c.start();
+      expect(ports.heartwood.start).toHaveBeenCalledTimes(1);
+      state.firmy = [{ firma: 'acme', osoba: 'mr' }, { firma: 'beta', osoba: 'mb' }];
+      state.access = STALE_ACCESS('beta');
+      state.now += ACCESS_EVERY_MS;
+      await c.poll();
+      expect(c.current().blocked).toBe('Nie należysz już do firmy pilot — wybierz firmę w Ustawieniach.');
+      expect(ports.heartwood.stop).toHaveBeenCalledTimes(1);
+      await c.poll();
+      expect(ports.heartwood.start).toHaveBeenCalledTimes(1);
+      expect(c.current().files.status).toBeNull();
+    });
+
     it('automatic_company_change_cleans_up_like_a_manual_one', async () => {
       const { c, ports, state } = setup({ workFolder: '/Users/m/repo', inbox: [task(1)] });
       await c.start();
