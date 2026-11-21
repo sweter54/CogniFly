@@ -1,5 +1,5 @@
 import { tozsamosc } from '../dane/konfiguracja.js';
-import { dostepFirmy } from './dostepPlatformy.js';
+import { BladTozsamosci, dostepFirmy, type Dostep } from './dostepPlatformy.js';
 
 /** Minimalny kształt zdarzenia API Gateway HTTP API (payload v2) — tylko to, czego używamy. */
 export interface ZdarzenieApi {
@@ -57,10 +57,12 @@ function naglowekFirmy(event: ZdarzenieApi): string {
   return event.headers?.['x-cognifly-firma'] ?? '';
 }
 
+/** Bearer scheme of the `Authorization` header, in any letter case. */
+const BEARER = /^bearer\s+(\S+)\s*$/i;
+
 /** Raw bearer token of the request; '' when absent. */
 function tokenOsoby(event: ZdarzenieApi): string {
-  const h = event.headers?.authorization ?? '';
-  return h.startsWith('Bearer ') ? h.slice('Bearer '.length).trim() : '';
+  return BEARER.exec(event.headers?.authorization ?? '')?.[1] ?? '';
 }
 
 /**
@@ -125,14 +127,34 @@ function odmowaPlatformy(powod: string): HttpBlad {
 }
 
 /**
- * Checks the licence with Platforma (`GET /access`, cached 5 min).
+ * Asks Platforma about one company, as an API error.
+ *
+ * Call: `await dostepDlaApi(adres, token, 'pilot')`.
+ * Expects: the Identity URL, the person's token and a company.
+ * Output: as `dostepFirmy` (null: Platforma down, nothing known).
+ * Throws: 503 `TOZSAMOSC_NIEDOSTEPNA` for a misconfiguration
+ * answer (`BladTozsamosci`); other errors pass through.
+ */
+async function dostepDlaApi(adres: string, token: string, firma: string): Promise<Dostep | null> {
+  try {
+    return await dostepFirmy(adres, token, firma);
+  } catch (e) {
+    if (e instanceof BladTozsamosci) throw new HttpBlad(503, 'TOZSAMOSC_NIEDOSTEPNA');
+    throw e;
+  }
+}
+
+/**
+ * Checks the licence with Platforma (`GET /access`).
  *
  * Call: `await wymagajLicencjiZPlatformy(event, ['pilot'])`.
  * Expects: an API event and the companies to try in order.
- * Output: none when a company is active, or when Platforma does not
- * answer (a network error never blocks work); without
- * `TOZSAMOSC_URL` or a bearer token only the claim counts.
- * Throws: the first refusal (`odmowaPlatformy`) when all refuse.
+ * Output: none when a company is active, or when Platforma is down
+ * and no answer of the last 60 min is known (a network error never
+ * blocks work); without `TOZSAMOSC_URL` or a bearer token only the
+ * claim counts.
+ * Throws: the first refusal (`odmowaPlatformy`) when all refuse;
+ * 503 `TOZSAMOSC_NIEDOSTEPNA` on a misconfiguration answer.
  */
 async function wymagajLicencjiZPlatformy(event: ZdarzenieApi, firmy: string[]): Promise<void> {
   const adres = process.env.TOZSAMOSC_URL ?? '';
@@ -140,7 +162,7 @@ async function wymagajLicencjiZPlatformy(event: ZdarzenieApi, firmy: string[]): 
   if (adres === '' || token === '') return wymagajLicencjiZClaimu(event);
   let odmowa: string | null = null;
   for (const firma of firmy) {
-    const d = await dostepFirmy(adres, token, firma);
+    const d = await dostepDlaApi(adres, token, firma);
     if (d === null || d.aktywny) return;
     odmowa ??= d.powod;
   }

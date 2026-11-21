@@ -109,12 +109,79 @@ describe('licence without the claim (person in several companies)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  test('network_error_or_odd_answer_lets_the_request_through_uncached', async () => {
-    for (const o of [new TypeError('offline'), 500, 401, { active: 'tak' }]) {
-      odpowiedzi.f2 = o;
+  test('network_error_without_a_remembered_answer_lets_the_request_through_uncached', async () => {
+    odpowiedzi.f2 = new TypeError('offline');
+    expect((await call('GET /skrzynka', 'f2')).statusCode).toBe(200);
+    expect((await call('GET /skrzynka', 'f2')).statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  test('5xx_and_429_without_a_remembered_answer_let_the_request_through', async () => {
+    for (const status of [500, 503, 429]) {
+      odpowiedzi.f2 = status;
       expect((await call('GET /skrzynka', 'f2')).statusCode).toBe(200);
     }
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  test('4xx_answer_refuses_with_503_tozsamosc_niedostepna', async () => {
+    const blad = vi.spyOn(console, 'error').mockImplementation(() => {});
+    for (const status of [400, 401, 403, 404]) {
+      odpowiedzi.f2 = status;
+      const r = await call('GET /skrzynka', 'f2');
+      expect(r.statusCode).toBe(503);
+      expect(kod(r)).toEqual({ kod: 'TOZSAMOSC_NIEDOSTEPNA' });
+    }
+    expect(blad).toHaveBeenCalled();
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    blad.mockRestore();
+  });
+
+  test('malformed_body_refuses_with_503_tozsamosc_niedostepna', async () => {
+    const blad = vi.spyOn(console, 'error').mockImplementation(() => {});
+    odpowiedzi.f2 = { active: 'tak' };
+    const r = await call('GET /skrzynka', 'f2');
+    expect(r.statusCode).toBe(503);
+    expect(kod(r)).toEqual({ kod: 'TOZSAMOSC_NIEDOSTEPNA' });
+    expect(blad).toHaveBeenCalled();
+    blad.mockRestore();
+  });
+
+  test('stale_if_error_uses_the_last_answer_up_to_60_minutes', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const t0 = Date.now();
+    odpowiedzi.f2 = { active: false, reason: 'NO_LICENCE' };
+    expect(kod(await call('GET /skrzynka', 'f2'))).toEqual({ kod: 'BRAK_LICENCJI' });
+    for (const [po, awaria] of [[6, new TypeError('offline')], [30, 502], [59, 429]] as const) {
+      vi.setSystemTime(t0 + po * 60_000);
+      odpowiedzi.f2 = awaria;
+      expect(kod(await call('GET /skrzynka', 'f2'))).toEqual({ kod: 'BRAK_LICENCJI' });
+    }
+    vi.setSystemTime(t0 + 60 * 60_000);
+    odpowiedzi.f2 = new TypeError('offline');
+    expect((await call('GET /skrzynka', 'f2')).statusCode).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  test('stale_answer_is_not_used_for_a_4xx', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const blad = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await call('GET /skrzynka', 'f2');
+    vi.setSystemTime(Date.now() + 6 * 60_000);
+    odpowiedzi.f2 = 401;
+    expect((await call('GET /skrzynka', 'f2')).statusCode).toBe(503);
+    blad.mockRestore();
+  });
+
+  test('bearer_scheme_is_case_insensitive', async () => {
+    const r = await handler({
+      routeKey: 'GET /skrzynka', headers: { authorization: `bearer  ${TOKEN}`, 'x-cognifly-firma': 'f2' },
+      queryStringParameters: {}, pathParameters: {}, body: null,
+      requestContext: { authorizer: { jwt: { claims: { sub: 'sub-michal' } } } },
+    });
+    expect(r.statusCode).toBe(200);
+    const [, init] = fetchMock.mock.calls[0]! as unknown as [string, RequestInit];
+    expect((init.headers as Record<string, string>).authorization).toBe(`Bearer ${TOKEN}`);
   });
 
   test('ja_with_a_stale_header_passes_when_any_company_is_licensed', async () => {
