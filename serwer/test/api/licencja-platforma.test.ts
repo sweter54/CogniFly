@@ -225,7 +225,8 @@ describe('licence without the claim (person in several companies)', () => {
     const blad = vi.spyOn(console, 'error').mockImplementation(() => {});
     odpowiedzi.f2 = ZLY_JSON;
     expect(kod(await call('GET /skrzynka', 'f2'))).toEqual({ kod: 'TOZSAMOSC_NIEDOSTEPNA' });
-    expect(blad).toHaveBeenCalled();
+    // infra/lib/stos.ts alarms on this marker
+    expect(String(blad.mock.calls[0]![0])).toMatch(/^DOSTEP_ZLA_ODPOWIEDZ /);
     blad.mockRestore();
   });
 

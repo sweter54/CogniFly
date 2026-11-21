@@ -21,8 +21,11 @@ const LIMIT_MS = 1_500;
 /** Shape of a reason code accepted from the network. */
 const WZOR_POWODU = /^[A-Z][A-Z0-9_]{0,63}$/;
 
-/** Start of the error logged for a misconfiguration answer (metric filter in infra). */
-export const ZLA_ODPOWIEDZ = 'dostep: zła odpowiedź /access';
+/**
+ * ASCII marker of the error logged for a misconfiguration answer;
+ * the metric filter of the API alarm in `infra/lib/stos.ts` matches it.
+ */
+export const ZLA_ODPOWIEDZ = 'DOSTEP_ZLA_ODPOWIEDZ';
 
 /** Statuses that mean "Platforma is down for now" (not a refusal). */
 const AWARIA = (status: number): boolean => status >= 500 || status === 429;
@@ -169,7 +172,7 @@ async function zapytaj(adres: string, token: string, firma: string): Promise<Dos
     if (r.status !== 200) throw new BladTozsamosci(`status ${r.status}`);
     return odczytaj(parsuj(tresc));
   } catch (e) {
-    console.error(`${ZLA_ODPOWIEDZ} (konfiguracja?)`, e instanceof Error ? e.message : e);
+    console.error(`${ZLA_ODPOWIEDZ} zła odpowiedź /access (konfiguracja?)`, e instanceof Error ? e.message : e);
     throw e;
   }
 }

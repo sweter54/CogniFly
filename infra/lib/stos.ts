@@ -14,7 +14,7 @@ import { Effect, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws
 import { Architecture, Runtime, StartingPosition } from 'aws-cdk-lib/aws-lambda';
 import { DynamoEventSource, SqsDlq } from 'aws-cdk-lib/aws-lambda-event-sources';
 import { NodejsFunction, OutputFormat } from 'aws-cdk-lib/aws-lambda-nodejs';
-import { LogGroup, RetentionDays } from 'aws-cdk-lib/aws-logs';
+import { FilterPattern, LogGroup, MetricFilter, RetentionDays } from 'aws-cdk-lib/aws-logs';
 import { Topic } from 'aws-cdk-lib/aws-sns';
 import { EmailSubscription } from 'aws-cdk-lib/aws-sns-subscriptions';
 import { Queue } from 'aws-cdk-lib/aws-sqs';
@@ -421,6 +421,25 @@ export class StosCogniFly extends Stack {
         treatMissingData: TreatMissingData.NOT_BREACHING,
       }).addAlarmAction(new SnsAction(alarmy));
     }
+
+    // Platforma Identity answered the API's licence check in a way that
+    // points at a misconfiguration (handled 503, so the error alarm above
+    // does not see it). Marker: ZLA_ODPOWIEDZ in serwer/src/api/dostepPlatformy.ts.
+    const zlaOdpowiedz = new MetricFilter(this, 'FiltrTozsamoscZlaOdpowiedz', {
+      logGroup: api.logGroup,
+      filterPattern: FilterPattern.literal('"DOSTEP_ZLA_ODPOWIEDZ"'),
+      metricNamespace: 'CogniFly',
+      metricName: `${PREFIKS}-tozsamosc-zla-odpowiedz`,
+      metricValue: '1',
+    });
+    new Alarm(this, 'AlarmTozsamoscZlaOdpowiedz', {
+      alarmName: `${PREFIKS}-api-tozsamosc-zla-odpowiedz`,
+      metric: zlaOdpowiedz.metric({ period: Duration.minutes(5), statistic: 'Sum' }),
+      threshold: 1,
+      evaluationPeriods: 1,
+      comparisonOperator: ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+      treatMissingData: TreatMissingData.NOT_BREACHING,
+    }).addAlarmAction(new SnsAction(alarmy));
 
     for (const [nazwa, q] of Object.entries({ Przetwarzanie: dlq, Eskalacja: dlqEskalacji, Tozsamosc: dlqTozsamosci, ...kolejkiHeartwood })) {
       new Alarm(this, `AlarmDlq${nazwa}`, {
