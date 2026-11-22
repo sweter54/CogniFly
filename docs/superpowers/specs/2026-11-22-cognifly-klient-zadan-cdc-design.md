@@ -9,8 +9,10 @@ Decyzje Michała (2026-11-22):
 - CogniFly ani Heartwood nie mają logiki „zdarzenie → zadanie / powiadomienie”; CogniFly jest producentem zdarzeń
   i interfejsem (aplikacja, CLI, skille, hak startu sesji, MCP);
 - CogniFly nie ogranicza się do repozytoriów git: skrzynka pokazuje każde zadanie z CDC, które czeka na osobę;
-- Heartwood nie zna zadań CDC: zna tylko identyfikator pracy `cdc:<id>` i zapisuje, które pliki zmieniono w ramach
-  pracy; „pliki zadania” składa interfejs przy odczycie.
+- Heartwood nie zna zadań CDC. Pilnuje tylko plików i tego, kto je blokuje. Do zadania można dopisać, które pliki
+  firmy obejmuje (żadne albo m z n) — odwołania pracy `cdc:<id>` w Heartwood (`PUT/DELETE /work/{id}/refs`). Pliki
+  może blokować kilka osób. CogniFly pokazuje pliki zadania, które z nich są zablokowane i przez kogo. Po skończeniu
+  zadania osoba sama decyduje poleceniami Heartwood, czy zwolnić blokady.
 
 ## 0. Inwentaryzacja: co CogniFly dziś trzyma i robi sam
 
@@ -27,7 +29,7 @@ Jedna tabela DynamoDB `cognifly-test-dane`. Los: **CDC** (przechodzi), **zostaje
 | Historia zdarzeń wejścia (`HIST`, 90 dni, `GET /zdarzenia`) | `historia.ts` | **zostaje** (dziennik konektora) |
 | Prośba o code review (`POST /recenzje`) | `api/recenzje.ts` | sprawdzenie PR **zostaje**; zadanie tworzy CDC (`POST /orgs/{org}/tasks` tokenem osoby, `externalKey`) |
 | Łańcuchy dostarczeń (obserwacja PR, ocena GraphQL, zamiatanie) | `dostarczenia/*`, `DOST`, `REJESTR#DOSTARCZENIA` | **zostaje** w konektorze GitHub; „Dostarcz PR” tworzy CDC (`POST` jako maszyna, `externalKey`) |
-| Stan pracy Heartwood (strumień → `PUT /int/.../work`, piszący według stanu) | `heartwood/praca.ts`, `strumien.ts` | **znika** (rozdz. 5, pkt 4) |
+| Stan pracy Heartwood (strumień → `PUT /int/.../work`, piszący według stanu) | `heartwood/praca.ts`, `strumien.ts` | **znika**: nikt nie ustawia piszącego według stanu zadania |
 | Zadania z Heartwood (`lock.release_requested` itd.) | `heartwood/zdarzenia.ts` | **CDC** (reguły na `source=heartwood`); w CogniFly **znika** |
 | Pliki zadania (`GET /zadania/{id}/pliki`, MCP `pliki_zadania` itd.) | `api/pliki.ts`, `wtyczka/mcp` | **zostaje**: zadanie z CDC + pliki pracy `cdc:<id>` z Heartwood |
 | Wątek Claude przy zadaniu, login GitHub → osoba | `WATEK#`, `KONF/GITHUB#` | **zostaje** |
@@ -84,8 +86,10 @@ zmieniają stan w CDC; tabela CogniFly nie ma rekordów `ZAD`/`SKR` pisanych po 
   `title` i `type` przy nowym wpisie; otwarcie zadania oznacza wpis jako przeczytany. Uwaga z kontraktu: odpytywanie
   utrzymuje bazę CDC na teście wybudzoną, dopóki aplikacja jest otwarta (koszt, świadomie przyjęty).
 - **Hak startu sesji i skill** czytają to samo przez fasadę (`/podsumowanie`). Polecenia wtyczki bez zmian.
-- **Pliki zadania**: `GET /zadania/{id}/pliki` = zadanie z CDC + `GET /int/orgs/{org}/work/cdc:<id>/files` z Heartwood.
-  Skill i aplikacja przy pracy nad zadaniem blokują i wysyłają z `--work cdc:<id>`.
+- **Pliki zadania**: `GET /zadania/{id}/pliki` = zadanie z CDC + odwołania i pliki pracy `cdc:<id>` z Heartwood, z tym,
+  kto który plik blokuje (może kilka osób). Dopisanie i usunięcie pliku z zadania: odwołania pracy w Heartwood.
+  Blokady i ich zwolnienie po zakończeniu zadania to zwykłe polecenia Heartwood osoby (`lock`, `send`, `release`);
+  CogniFly ich nie zakłada ani nie zwalnia sam.
 - **Usunięte z CogniFly:** `kolejka.ts`, `reguly/`, `eskalacja/`, `przetwarzanie/`, `powiadomienia/`, `heartwood/praca.ts`,
   `heartwood/strumien.ts`, `heartwood/zdarzenia.ts`, szyna `cognifly-test` (po okresie archiwum), strumień DynamoDB.
 - **Migracja pilota** (jedna kolejność w całym dokumencie):
@@ -108,8 +112,8 @@ zmieniają stan w CDC; tabela CogniFly nie ma rekordów `ZAD`/`SKR` pisanych po 
 1. Zapis w CogniFly albo zadanie z webhooka w czasie migracji (dwa źródła).
 2. Eskalacje zadań `nowe` z harmonogramem CogniFly: podwójne albo żadne.
 3. Podwójne albo brakujące powiadomienia przy przepięciu.
-4. Heartwood: stare prace `cognifly:<id>` zostają otwarte z piszącym; nowa praca `cdc:<id>` nie ma piszącego i nikt
-   go nie ustawia — znika dzisiejsza ochrona „w plikach zadania pisze tylko właściciel”.
+4. Heartwood: stare prace `cognifly:<id>` zostają otwarte z piszącym ustawionym przez CogniFly, więc ich pliki są
+   zablokowane po migracji.
 5. Widoczność: CDC pokazuje zadanie także członkom przestrzeni i adminom; skrzynka pokaże więcej niż dziś.
 6. Różnice przejść: w CDC `do_akceptacji` tylko z `w_trakcie` (w CogniFly też z `wziete`), `anulowane` jest nowe,
    wykonawca nie-osoba kończy na `do_akceptacji`; aplikacja pokazuje przycisk, który CDC odrzuci.
@@ -125,9 +129,8 @@ zmieniają stan w CDC; tabela CogniFly nie ma rekordów `ZAD`/`SKR` pisanych po 
 1. Kroki 1–2 i 7 migracji: flaga `przerwa`, zdarzenia czekają w archiwum szyny, odtwarza je skrypt.
 2. Krok 3 przed importem; termin eskalacji przenosi import, budzik prowadzi CDC.
 3. Krok 6: kolejność z kontraktu (najpierw CDC, potem wyłączenie CogniFly) — świadomie chwilowy dubel.
-4. Skrypt migracji zamyka `cognifly:<id>`. Ochrona „pisze tylko właściciel zadania” **znika** zgodnie z decyzją
-   Michała, że Heartwood nie zna zadań: zostają zwykłe blokady osób, a zmiany są przypisane do zadania przez
-   `--work cdc:<id>`. **Do potwierdzenia przez Michała.**
+4. Skrypt migracji zamyka `cognifly:<id>` i przepisuje jej odwołania plików na `cdc:<id>`. Dalej obowiązuje model
+   Michała: Heartwood pilnuje plików i blokad, a o zwolnieniu blokad po zadaniu decyduje osoba.
 5. Fasada zawęża `/skrzynka` do zadań, w których osoba jest właścicielem, kandydatem, akceptującym albo nadawcą
    odrzuconego (`mine=1` daje dokładnie to). Szersza widoczność zostaje w MCP CDC.
 6. Fasada przekazuje odmowę CDC jako dzisiejszy błąd przejścia (409 z komunikatem CDC). Nowa wersja aplikacji pokazuje
