@@ -67,7 +67,8 @@ zmieniają stan w CDC; tabela CogniFly nie ma rekordów `ZAD`/`SKR` pisanych po 
 
   | Trasa CogniFly | CDC |
   |---|---|
-  | `GET /skrzynka`, `GET /podsumowanie` | `GET /orgs/{org}/tasks?mine=1` + skrzynka powiadomień |
+  | `GET /skrzynka`, `GET /podsumowanie` | `GET /orgs/{org}/tasks?mine=1` + `GET /orgs/{org}/notifications?unread=1` (kontrakt W11) |
+  | (nowa) oznaczenie powiadomień jako przeczytane | `POST /orgs/{org}/notifications/read {ids}` |
   | `GET /zadania/{id}` | `GET /orgs/{org}/tasks/{id}` (z historią) |
   | `POST …/biore`, `…/stan`, `…/akceptuj`, `…/do-poprawy`, `…/odrzuc`, `…/usun` | przejścia stanu z kontraktu (W1–W2) |
   | `POST …/przekaz` | `POST …/tasks/{id}/pass` (login GitHub → `sub` po `GITHUB#`) |
@@ -78,8 +79,10 @@ zmieniają stan w CDC; tabela CogniFly nie ma rekordów `ZAD`/`SKR` pisanych po 
   robi z tego reguła CDC. Dostarczenia zostają w konektorze: gdy PR jest gotowy, konektor tworzy „Dostarcz PR”
   wywołaniem `POST /orgs/{org}/tasks` jako maszyna (kandydaci: autor i recenzent, `externalKey` z repo, PR i sha) —
   reguła tego nie zrobi, bo kandydaci zależą od PR.
-- **Aplikacja.** Ikona w pasku menu pokazuje liczbę: nieprzeczytane powiadomienia i zadania `nowe`/`eskalowane`
-  czekające na osobę. Odświeżanie co 60 s, jak dziś. Powiadomienie systemowe przy nowym wpisie, jak dziś.
+- **Aplikacja.** Ikona w pasku menu pokazuje liczbę `unread` z CDC (pełna liczba nieprzeczytanych powiadomień; nowe
+  zadanie dla osoby to też powiadomienie `task.created`). Odświeżanie co 60 s, jak dziś. Powiadomienie systemowe z
+  `title` i `type` przy nowym wpisie; otwarcie zadania oznacza wpis jako przeczytany. Uwaga z kontraktu: odpytywanie
+  utrzymuje bazę CDC na teście wybudzoną, dopóki aplikacja jest otwarta (koszt, świadomie przyjęty).
 - **Hak startu sesji i skill** czytają to samo przez fasadę (`/podsumowanie`). Polecenia wtyczki bez zmian.
 - **Pliki zadania**: `GET /zadania/{id}/pliki` = zadanie z CDC + `GET /int/orgs/{org}/work/cdc:<id>/files` z Heartwood.
   Skill i aplikacja przy pracy nad zadaniem blokują i wysyłają z `--work cdc:<id>`.
@@ -144,8 +147,6 @@ zadań z CDC, przeniesienie konektora GitHub do osobnego komponentu (na razie ko
 ## 6. Zależności i kolejność
 
 1. CDC: API zadań, silnik reguł i skrzynka powiadomień na teście (sesja CDC, migracja 004).
-2. Potwierdzenie z sesją CDC: trasa REST skrzynki powiadomień dla aplikacji (lista nieprzeczytanych, oznaczanie
-   przeczytanych) — w kontrakcie nazwana tylko narzędziem MCP `powiadomienia_lista`.
-3. CogniFly: fasada, konektor na szynie Platformy, licznik „C”, przyciski według stanów CDC, skrypt migracji — PR do
+2. CogniFly: fasada, konektor na szynie Platformy, licznik „C”, przyciski według stanów CDC, skrypt migracji — PR do
    `sweter54/CogniFly`, nowa wersja aplikacji i wtyczki.
-4. Migracja pilota w oknie; wdrożenia AWS tylko po „tak” Michała.
+3. Migracja pilota w oknie; wdrożenia AWS tylko po „tak” Michała.
