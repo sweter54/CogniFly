@@ -30,7 +30,7 @@ Jedna tabela DynamoDB `cognifly-test-dane`. Los każdej pozycji: **CDC** (przech
 | Wątek Claude Desktop przy zadaniu | `FIRMA#f#WATEK#osoba`, `POST /watek` | **zostaje** (stan na maszynie osoby) |
 | Login GitHub → osoba | `KONF/GITHUB#` | **zostaje** |
 | Rejestr osób, profil, licencja | `KONF/OSOBA#`, `OSOBA#sub/PROFIL` | **zostaje** (kopia z Tożsamości; poza zakresem) |
-| Stan pracy w Heartwood (`cognifly:<zad>`, strumień DynamoDB → `PUT /int/.../work`) | `heartwood/praca.ts`, `strumien.ts` | **CDC** (praca `cdc:<id>` wg specu CDC rozdz. 15); strumień CogniFly **znika** |
+| Stan pracy w Heartwood (`cognifly:<zad>`, strumień DynamoDB → `PUT /int/.../work`) | `heartwood/praca.ts`, `strumien.ts` | **zostaje** w CogniFly jako adapter: wyzwalacz zmienia się ze strumienia DynamoDB na zdarzenia `task.state_changed` z huba, praca `cdc:<id>`; strumień **znika** |
 | Zadania z Heartwood (`pliki.blokada.prosba`, konflikt, limit) | `heartwood/zdarzenia.ts` | **CDC** (reguły na zdarzeniach `heartwood`); powiadomienia **zostają** |
 | Pliki zadania (`GET /zadania/{id}/pliki`, MCP `pliki_zadania` itd.) | `api/pliki.ts`, `wtyczka/mcp` | **zostaje** (odczyt z Heartwood, id pracy `cdc:<id>`) |
 
@@ -58,7 +58,7 @@ przejściu.
 - R3. CDC zapewnia (kontrakt, do potwierdzenia z sesją CDC): stany i przejścia jak dziś w CogniFly (w tym
   odejście kandydata, przekaż z nowym nadawcą, akceptujący domyślnie = nadawca), eskalację czasową z `eskalujDo`,
   silnik reguł zdarzenie → zadanie, idempotentne tworzenie zadania po kluczu zewnętrznym, zdarzenia na hubie przy
-  zmianach zadań, sterowanie pracą Heartwood, import zadań z zachowaniem id, stanu, historii i terminu eskalacji,
+  zmianach zadań, import zadań z zachowaniem id, stanu, historii i terminu eskalacji,
   oraz w REST listę „zadania dla mnie” (właściciel, kandydat, akceptujący, odrzucone moich zleceń) — dziś w REST CDC
   jest tylko `owner=me`.
 - R4. Powiadomienia e-mail/Discord i powiadomienia aplikacji wynikają ze zdarzeń CDC.
@@ -75,10 +75,13 @@ przejściu.
 - **Prowadzone CR i dostarczenia.** CogniFly sprawdza GitHuba jak dziś i tworzy zadanie w CDC z kluczem zewnętrznym
   = dzisiejszy klucz zdarzenia. Prośbę o CR tworzy tokenem osoby zgłaszającej (ona jest nadawcą); zadanie „Dostarcz PR”
   tworzy jako maszyna, bo nikt go nie zleca. Obserwacja PR zapisuje id zadania CDC.
+- **Praca w Heartwood.** CDC nie woła Heartwooda (stanowisko sesji CDC, 2026-11-22: zdarzenia to podpowiedzi, stan
+  prawdy w API właściciela). Adapter CogniFly (`heartwood/praca.ts`) dostaje `task.state_changed` z huba, czyta
+  zadanie z CDC jako maszyna i ustawia pracę `cdc:<id>` według dzisiejszej tabeli stan → piszący.
 - **Powiadomienia.** Lambda CogniFly słucha zdarzeń CDC na hubie (`task.created`, `task.escalated`,
   `task.state_changed` …) i wysyła e-mail/Discord według `KONTAKT#`. Aplikacja dalej odpytuje `/skrzynka` co 60 s.
 - **Usunięte z CogniFly:** zapisy `ZAD`/`SKR`, `kolejka.ts`, silnik reguł i `REGULA#`/`ROLA#`, harmonogramy eskalacji
-  i Lambda `Eskalacja`, strumień DynamoDB i Lambda `HeartwoodPraca`, konsument zdarzeń Heartwood tworzący zadania.
+  i Lambda `Eskalacja`, strumień DynamoDB, konsument zdarzeń Heartwood tworzący zadania.
 - **Migracja pilota.** Źródłem są rekordy `ZAD` (zdarzenie zadania dociągane po `zdarzenieId`, jak dziś
   `zdarzenieZadania`); reguły i role → konfiguracja reguł CDC. Jedna kolejność, obowiązująca w całym dokumencie:
   1. Wdrożenie CogniFly z flagą `ZADANIA_W_CDC=przerwa|cdc|stare` (SSM). Nowy kod i stary kod w jednym wydaniu.
@@ -87,8 +90,8 @@ przejściu.
      oknie nikt nie zmienia zadań, więc nie ma czego synchronizować.
   3. Usunięcie grupy harmonogramów `cognifly-test-eskalacje`.
   4. Import do CDC: id, stan, uczestnicy, historia, `eskalujDo`, termin eskalacji (`utworzono + eskalacjaMin` dla
-     zadań `nowe`); od tej chwili zegar eskalacji prowadzi CDC. Import zamyka pracę `cognifly:<id>`, a CDC otwiera
-     `cdc:<id>` z tym samym piszącym.
+     zadań `nowe`); od tej chwili zegar eskalacji prowadzi CDC. Skrypt migracji zamyka pracę `cognifly:<id>` i otwiera
+     `cdc:<id>` z tym samym piszącym (ten sam kod co adapter).
   5. Flaga `cdc`: fasada, konsument zdarzeń CDC (powiadomienia), webhook → hub. Stara ścieżka powiadomień z reguł
      jest wyłączona tą samą flagą.
   6. Skrypt odtwarza z archiwum szyny zdarzenia z okna `przerwa` na hub (CDC tworzy zadania idempotentnie).
@@ -123,8 +126,8 @@ przejściu.
 2. Kroki 3–4 migracji: harmonogramy CogniFly usunięte przed importem, termin eskalacji przenosi import, liczy i
    wykonuje CDC.
 3. Krok 5 migracji: obie ścieżki powiadomień przełącza jedna flaga.
-4. Kroki 2 i 4 migracji: strumień wyłączony w oknie, import zamyka `cognifly:<id>`, CDC otwiera `cdc:<id>`.
-   Zgłosić sesji CDC jako wymaganie importu.
+4. Kroki 2 i 4 migracji: strumień wyłączony w oknie, skrypt migracji zamyka `cognifly:<id>` i otwiera `cdc:<id>`;
+   potem pracę prowadzi tylko adapter na zdarzeniach CDC, więc nie ma dwóch sterujących.
 5. Widoczność w aplikacji zostaje dzisiejsza (uczestnik: właściciel, kandydat, nadawca, akceptujący) — to decyzja
    produktu CogniFly, nie łatanie CDC: CDC i tak sprawdza dostęp po swojej stronie, fasada tylko zawęża listę.
    Szersza widoczność jest w MCP CDC.
@@ -150,7 +153,8 @@ kontaktów powiadomień (`KONTAKT#`) do CDC — osobny krok, gdy CDC przejmie ko
 ## 6. Zależności i kolejność
 
 1. Kontrakt cyklu życia od sesji CDC (R3), zaakceptowany przez Michała.
-2. CDC: reguły na hubie, import, praca Heartwood `cdc:<id>`, zdarzenia zadań na hubie.
+2. CDC: reguły na hubie, import (id `zad_<12|24 hex>`), zdarzenia zadań na hubie. Reguły przenoszone 1:1 z
+   `reguly/silnik.ts` — zmiany reguł w CogniFly zamrożone do przejścia.
 3. CogniFly: fasada + konsument powiadomień + wejście GitHub na hub (PR do `sweter54/CogniFly`, nowa wersja aplikacji
    i wtyczki — kształt API bez zmian, więc nowe wersje głównie dla komunikatów `PRZERWA`/`BRAK_LICENCJI`).
 4. Migracja pilota w oknie, potem usunięcie martwego kodu i zasobów (Lambdy `Eskalacja`, `HeartwoodPraca`, grupa
