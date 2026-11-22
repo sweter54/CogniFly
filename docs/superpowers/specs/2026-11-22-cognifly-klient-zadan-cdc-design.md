@@ -77,7 +77,10 @@ przejściu.
   tworzy jako maszyna, bo nikt go nie zleca. Obserwacja PR zapisuje id zadania CDC.
 - **Praca w Heartwood.** CDC nie woła Heartwooda (stanowisko sesji CDC, 2026-11-22: zdarzenia to podpowiedzi, stan
   prawdy w API właściciela). Adapter CogniFly (`heartwood/praca.ts`) dostaje `task.state_changed` z huba, czyta
-  zadanie z CDC jako maszyna i ustawia pracę `cdc:<id>` według dzisiejszej tabeli stan → piszący.
+  zadanie z CDC jako maszyna i ustawia pracę `cdc:<id>` według dzisiejszej tabeli stan → piszący. Zdarzenie CDC:
+  `source=cdc`, `detail-type=task.state_changed`, `detail = {org, task, from, to, by, owner?, acceptor?}`; odczyt
+  `GET /orgs/{org}/tasks/{id}` (`ownerSub`, `acceptorSub`). Gdy `ownerSub` to `agent:…` albo `machine:…`, adapter
+  nie ustawia piszącego.
 - **Powiadomienia.** Lambda CogniFly słucha zdarzeń CDC na hubie (`task.created`, `task.escalated`,
   `task.state_changed` …) i wysyła e-mail/Discord według `KONTAKT#`. Aplikacja dalej odpytuje `/skrzynka` co 60 s.
 - **Usunięte z CogniFly:** zapisy `ZAD`/`SKR`, `kolejka.ts`, silnik reguł i `REGULA#`/`ROLA#`, harmonogramy eskalacji
