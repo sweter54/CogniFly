@@ -1,6 +1,6 @@
 # CogniFly jako producent zdarzeń i interfejs zadań CDC (projekt)
 
-Data: 2026-11-22. Status: projekt do akceptacji Michała. Opiera się na zaakceptowanym kontrakcie zadań CDC
+Data: 2026-11-22. Status: zaakceptowany przez Michała (2026-11-22). Opiera się na zaakceptowanym kontrakcie zadań CDC
 (sweter54/CDC, PR #5, `docs/superpowers/specs/2026-11-22-cdc-zadania-kontrakt-design.md`, dalej „kontrakt”).
 Implementacja po akceptacji tego projektu i po wdrożeniu API zadań CDC na test.
 
